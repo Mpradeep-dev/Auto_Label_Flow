@@ -1,0 +1,38 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    @apply antialiased;
+  }
+  body {
+    @apply bg-paper text-ink font-sans;
+  }
+  ::selection {
+    @apply bg-accent text-paper;
+  }
+}
+
+@layer utilities {
+  /* Editorial-register texture: 24px grid lines at low opacity. Muted
+     surfaces only — never on .plate (image well) or accent fills. See
+     DESIGN.md "Pattern-based texture". */
+  .swiss-grid-pattern {
+    background-image:
+      linear-gradient(to right, rgba(0, 0, 0, 0.06) 1px, transparent 1px),
+      linear-gradient(to bottom, rgba(0, 0, 0, 0.06) 1px, transparent 1px);
+    background-size: 24px 24px;
+  }
+
+  .swiss-dots {
+    background-image: radial-gradient(rgba(0, 0, 0, 0.08) 1px, transparent 1px);
+    background-size: 16px 16px;
+  }
+
+  /* Instrument-register numeric fields (coordinates, confidence) line up
+     on a fixed-width digit grid so a column of values reads as a column. */
+  .tabular {
+    font-variant-numeric: tabular-nums;
+  }
+}

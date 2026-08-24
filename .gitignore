@@ -1,0 +1,32 @@
+# Python
+backend/venv/
+**/__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Env
+.env
+backend/.env
+
+# Node
+frontend/node_modules/
+frontend/dist/
+
+# Storage / artifacts (large binaries, machine-specific)
+storage/local/
+artifacts/models/pt/*.pt
+artifacts/training_runs/
+
+# Editor / OS
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/settings.local.json
+
+# Browser-automation test artifacts (screenshots/console logs from
+# interactive verification during development, not project source)
+.playwright-mcp/

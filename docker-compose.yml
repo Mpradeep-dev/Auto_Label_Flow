@@ -1,0 +1,128 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: annotate
+      POSTGRES_PASSWORD: annotate
+      POSTGRES_DB: annotate
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U annotate"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    # Optional: picks up Kaggle credentials / other local overrides if
+    # backend/.env exists, but `docker compose up` must work without it —
+    # every value the containers actually need has a default below or in
+    # Settings (see backend/app/core/config.py).
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://annotate:annotate@postgres:5432/annotate
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_BACKEND: minio
+      MINIO_ENDPOINT: minio:9000
+      # Presigned URLs go to the browser on the host, which can't resolve
+      # the "minio" service name — sign them against the published port.
+      MINIO_PUBLIC_ENDPOINT: localhost:9000
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./artifacts:/app/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    command: >
+      sh -c "alembic upgrade head &&
+             uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  worker:
+    build:
+      context: ./backend
+    # Optional: picks up Kaggle credentials / other local overrides if
+    # backend/.env exists, but `docker compose up` must work without it —
+    # every value the containers actually need has a default below or in
+    # Settings (see backend/app/core/config.py).
+    env_file:
+      - path: ./backend/.env
+        required: false
+    environment:
+      DATABASE_URL: postgresql+psycopg://annotate:annotate@postgres:5432/annotate
+      REDIS_URL: redis://redis:6379/0
+      STORAGE_BACKEND: minio
+      MINIO_ENDPOINT: minio:9000
+    volumes:
+      - ./artifacts:/app/artifacts
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    # Two logical queues share one compose service for local dev (see PLAN
+    # "Jobs: Celery + Redis, two queues") — -Q gpu,default with -c 1 means
+    # this single worker processes both, still serializing GPU work with
+    # itself since there's only one process. A production deploy would run
+    # `-Q gpu -c 1` and `-Q default -c 4` as two separate services/replicas.
+    command: celery -A app.workers.celery_app worker -Q gpu,default -c 1 --loglevel=info
+
+  frontend:
+    build:
+      context: ./frontend
+    ports:
+      - "5173:5173"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+    depends_on:
+      backend:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  minio_data:

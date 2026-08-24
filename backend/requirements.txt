@@ -1,0 +1,48 @@
+# Core web framework
+fastapi==0.118.0
+uvicorn[standard]==0.37.0
+pydantic==2.11.7
+pydantic-settings==2.6.1
+
+# Database
+sqlalchemy==2.0.36
+alembic==1.14.0
+psycopg[binary]==3.2.3
+
+# Background jobs
+celery==5.4.0
+redis==5.2.1
+
+# CV / ML
+# torch / torchvision are intentionally NOT listed here — see Dockerfile.
+# Plain `pip install torch` on Windows resolves to a CPU-only wheel
+# (confirmed the hard way: it silently installed torch 2.13.0+cpu and
+# inference/training fell back to CPU without erroring). Install them
+# FIRST, separately, from the CUDA index before this file:
+#     pip install --index-url https://download.pytorch.org/whl/cu130 torch torchvision
+# which yields torch 2.13.0+cu130 / torchvision 0.28.0+cu130, confirmed
+# working against the RTX 5060 (cuda_available=True, real device name).
+# Listing them here too would let `pip install -r requirements.txt` alone
+# silently re-resolve to the CPU wheel and overwrite that install.
+ultralytics==8.4.102
+opencv-python-headless==5.0.0.93
+numpy==2.4.6
+
+# Storage
+minio==7.2.12
+boto3==1.35.71
+
+# Utilities
+python-multipart==0.0.17
+python-dotenv==1.0.1
+Pillow==11.0.0
+PyYAML==6.0.3
+
+# Kaggle (optional at runtime; import is guarded)
+kaggle==1.6.17
+
+# Dev / test
+pytest==8.3.3
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+httpx==0.28.0

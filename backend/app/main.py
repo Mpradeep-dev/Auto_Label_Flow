@@ -1,0 +1,27 @@
+from __future__ import annotations
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
+
+from app.api.v1.router import api_router
+from app.core.config import settings
+
+app = FastAPI(title=settings.APP_NAME, debug=settings.DEBUG)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.CORS_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(api_router, prefix="/api/v1")
+
+# Local-storage dev convenience: serves whatever the local ObjectStorage
+# backend wrote under LOCAL_STORAGE_DIR at /media/<key>, matching
+# LocalFileStorage.get_url(). No-op in prod (STORAGE_BACKEND=minio serves
+# via presigned URLs instead), but always mounted so dev/test never needs a
+# config toggle to see uploaded media.
+app.mount("/media", StaticFiles(directory=str(settings.LOCAL_STORAGE_DIR)), name="media")

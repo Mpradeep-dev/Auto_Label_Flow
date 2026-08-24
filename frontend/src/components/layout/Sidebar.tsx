@@ -1,0 +1,89 @@
+import { NavLink, useParams } from "react-router-dom";
+import { useState } from "react";
+
+// Every sidebar entry the spec calls for. Entries that need a project
+// context are disabled until one is selected; entries not yet built land
+// on a placeholder page rather than a dead link, so navigation is always
+// coherent even mid-build (see PLAN build order).
+const NAV_ITEMS = [
+  { label: "Pipeline", path: "" },
+  { label: "Dataset", path: "/datasets" },
+  { label: "Images", path: "/images" },
+  { label: "Videos", path: "/videos" },
+  { label: "Auto Annotation", path: "/auto-annotation" },
+  { label: "Review Queue", path: "/review" },
+  { label: "Models", path: "/models" },
+  { label: "Training Runs", path: "/training" },
+  { label: "Export", path: "/export" },
+  { label: "Settings", path: "/settings" },
+] as const;
+
+export function Sidebar({
+  collapsed,
+  onToggle,
+}: {
+  collapsed: boolean;
+  onToggle: () => void;
+}) {
+  const { projectId } = useParams<{ projectId?: string }>();
+
+  return (
+    <nav
+      className={`flex h-full flex-col border-r-4 border-ink bg-paper transition-[width] duration-150 ease-out ${
+        collapsed ? "w-14" : "w-56"
+      }`}
+      aria-label="Primary"
+    >
+      <button
+        onClick={onToggle}
+        className="flex h-12 shrink-0 items-center justify-center border-b-4 border-ink text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-paper"
+        aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
+      >
+        {collapsed ? "»" : "« Collapse"}
+      </button>
+
+      <NavLink
+        to="/projects"
+        className={({ isActive }) =>
+          `flex h-12 shrink-0 items-center border-b-2 border-ink px-4 text-xs font-bold uppercase tracking-widest ${
+            isActive ? "bg-ink text-paper" : "hover:bg-muted"
+          }`
+        }
+      >
+        {collapsed ? "P" : "Projects"}
+      </NavLink>
+
+      <ul className="flex-1 overflow-y-auto">
+        {NAV_ITEMS.map((item) => {
+          const to = projectId ? `/projects/${projectId}${item.path}` : "/projects";
+          const disabled = !projectId;
+          return (
+            <li key={item.label} className="border-b border-ink/20">
+              <NavLink
+                to={to}
+                end={item.path === ""}
+                aria-disabled={disabled}
+                className={({ isActive }) =>
+                  `flex h-11 items-center px-4 text-xs font-semibold uppercase tracking-widest transition-colors duration-150 ${
+                    disabled
+                      ? "cursor-not-allowed text-ink/30"
+                      : isActive
+                        ? "bg-ink text-paper"
+                        : "hover:bg-muted"
+                  }`
+                }
+              >
+                {collapsed ? item.label.slice(0, 1) : item.label}
+              </NavLink>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
+  );
+}
+
+export function useSidebarCollapsed(): [boolean, () => void] {
+  const [collapsed, setCollapsed] = useState(false);
+  return [collapsed, () => setCollapsed((c) => !c)];
+}
