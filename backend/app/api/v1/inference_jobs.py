@@ -44,6 +44,19 @@ def create_inference_job(payload: InferenceJobCreate, db: Session = Depends(get_
     return job
 
 
+@router.get("", response_model=list[InferenceJobRead])
+def list_inference_jobs(project_id: uuid.UUID, db: Session = Depends(get_db)) -> list[InferenceJob]:
+    """Full run history for a project — unlike /latest (scoped to one
+    dataset, and only useful for reattaching to a still-live job), this
+    backs a persistent history view so a job that finished (or failed)
+    while the user was on another page doesn't just disappear."""
+    return list(
+        db.scalars(
+            select(InferenceJob).where(InferenceJob.project_id == project_id).order_by(InferenceJob.created_at.desc())
+        )
+    )
+
+
 @router.get("/latest", response_model=InferenceJobRead | None)
 def get_latest_inference_job(dataset_id: uuid.UUID, db: Session = Depends(get_db)) -> InferenceJob | None:
     """Lets the Auto Annotation page reattach to a job it kicked off

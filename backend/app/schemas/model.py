@@ -17,6 +17,23 @@ class ModelRegisterRequest(BaseModel):
     framework: str = "ultralytics"
 
 
+class ModelDownloadRequest(BaseModel):
+    """Alternative to ModelRegisterRequest: fetches the weights file from a
+    URL into ARTIFACTS_DIR itself instead of requiring it already be there —
+    lets the frontend register a model by pasting a link rather than the
+    user manually copying the file onto the host running the backend."""
+
+    name: str = Field(min_length=1, max_length=200)
+    url: str = Field(min_length=1, description="Direct download link to a .pt weights file")
+    kind: ModelKind
+    version: str = "v1"
+    framework: str = "ultralytics"
+
+
+class ModelUpdateRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+
+
 class ModelRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

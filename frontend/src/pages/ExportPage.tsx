@@ -1,11 +1,19 @@
 import { useEffect, useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
 import { SectionLabel } from "@/components/layout/SectionLabel";
 import { RoboflowJobProgress } from "@/components/integrations/RoboflowJobProgress";
 import { RoboflowProjectSelect } from "@/components/integrations/RoboflowProjectSelect";
 import type { DatasetVersion, RoboflowJob } from "@/types";
+
+// The workflow is linear (annotate a dataset → version it → train), so the
+// dataset picker should come back where the user left it rather than empty
+// every visit — same localStorage pattern AutoAnnotationPage already uses
+// for its own dataset/model selection.
+function lastDatasetStorageKey(projectId: string): string {
+  return `export-last-dataset:${projectId}`;
+}
 
 const STATUS_STYLE: Record<string, string> = {
   DRAFT: "bg-muted text-ink/70",
@@ -119,6 +127,8 @@ function FormatExportButton({
 
 function VersionRow({
   version,
+  projectId,
+  datasetId,
   onExport,
   onExportCoco,
   onExportCvat,
@@ -126,6 +136,8 @@ function VersionRow({
   cvatPending,
 }: {
   version: DatasetVersion;
+  projectId: string;
+  datasetId: string;
   onExport: (id: string) => void;
   onExportCoco: (id: string) => void;
   onExportCvat: (id: string) => void;
@@ -164,6 +176,14 @@ function VersionRow({
             Download .zip
           </a>
         )}
+        {version.status === "EXPORTED" && (
+          <Link
+            to={`/projects/${projectId}/training?datasetId=${datasetId}&versionId=${version.id}`}
+            className="inline-block border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-ink hover:border-ink"
+          >
+            Train with this version →
+          </Link>
+        )}
         {/* COCO and CVAT-XML are the two formats CVAT's own UI imports
             directly — exporting either here is the bridge into CVAT
             without a live API integration (Task > Upload annotations,
@@ -192,11 +212,27 @@ function VersionRow({
 
 export function ExportPage() {
   const { projectId } = useParams<{ projectId: string }>();
-  const [datasetId, setDatasetId] = useState("");
+  const [datasetId, setDatasetId] = useState(() => {
+    if (!projectId) return "";
+    try {
+      return localStorage.getItem(lastDatasetStorageKey(projectId)) ?? "";
+    } catch {
+      return "";
+    }
+  });
   const [trainRatio, setTrainRatio] = useState(0.8);
   const [valRatio, setValRatio] = useState(0.1);
   const [testRatio, setTestRatio] = useState(0.1);
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (!projectId || !datasetId) return;
+    try {
+      localStorage.setItem(lastDatasetStorageKey(projectId), datasetId);
+    } catch {
+      /* private-browsing / storage disabled — just won't remember it next time */
+    }
+  }, [projectId, datasetId]);
 
   const datasetsQuery = useQuery({
     queryKey: ["datasets", projectId],
@@ -292,6 +328,8 @@ export function ExportPage() {
               <VersionRow
                 key={v.id}
                 version={v}
+                projectId={projectId}
+                datasetId={datasetId}
                 onExport={(id) => exportMutation.mutate(id)}
                 onExportCoco={(id) => exportCocoMutation.mutate(id)}
                 onExportCvat={(id) => exportCvatMutation.mutate(id)}

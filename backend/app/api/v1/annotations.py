@@ -160,6 +160,7 @@ def auto_annotate_image(
     return annotation_service.bulk_create_from_predictions(
         db,
         image_id=image_id,
+        project_id=image.project_id,
         predictions=[
             {
                 "class_id": d.class_id,

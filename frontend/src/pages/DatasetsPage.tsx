@@ -3,18 +3,69 @@ import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
 import { SectionLabel } from "@/components/layout/SectionLabel";
+import { EmptyState } from "@/components/layout/EmptyState";
+import { Skeleton } from "@/components/layout/Skeleton";
+import { RoboflowImportSection } from "@/components/integrations/RoboflowImportSection";
 import type { Dataset } from "@/types";
 
+function DeleteDatasetPanel({ dataset, onCancel }: { dataset: Dataset; onCancel: () => void }) {
+  const queryClient = useQueryClient();
+
+  const deleteMutation = useMutation({
+    mutationFn: () => api.deleteDataset(dataset.id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["datasets", dataset.project_id] });
+    },
+  });
+
+  return (
+    <div className="p-8">
+      <p className="text-xs font-bold uppercase tracking-widest text-accent">Delete this dataset?</p>
+      <p className="mt-2 text-xs text-ink/60">
+        Permanently deletes <span className="font-bold text-ink">{dataset.name}</span> and every image,
+        video, and annotation inside it.
+      </p>
+      <div className="mt-3 flex gap-2">
+        <button
+          onClick={() => deleteMutation.mutate()}
+          disabled={deleteMutation.isPending}
+          className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-ink hover:border-ink disabled:opacity-40"
+        >
+          {deleteMutation.isPending ? "Deleting…" : "Delete permanently"}
+        </button>
+        <button
+          onClick={onCancel}
+          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-muted"
+        >
+          Cancel
+        </button>
+      </div>
+      {deleteMutation.isError && (
+        <p className="mt-2 text-xs text-accent">{(deleteMutation.error as Error).message}</p>
+      )}
+    </div>
+  );
+}
+
 function DatasetCard({ dataset }: { dataset: Dataset }) {
+  const [confirming, setConfirming] = useState(false);
   const statsQuery = useQuery({
     queryKey: ["dataset-stats", dataset.id],
     queryFn: () => api.getDatasetStats(dataset.id),
   });
   const stats = statsQuery.data;
 
+  if (confirming) {
+    return (
+      <div className="border-b-2 border-r-2 border-ink">
+        <DeleteDatasetPanel dataset={dataset} onCancel={() => setConfirming(false)} />
+      </div>
+    );
+  }
+
   return (
-    <div className="group border-b-2 border-r-2 border-ink p-8 transition-colors duration-150 hover:bg-ink hover:text-paper">
-      <Link to={`/projects/${dataset.project_id}/datasets/${dataset.id}/images`} className="block">
+    <div className="group relative border-b-2 border-r-2 border-ink p-8 transition-colors duration-150 hover:bg-ink hover:text-paper">
+      <Link to={`/projects/${dataset.project_id}/datasets/${dataset.id}/images`} className="block pr-16">
         <p className="text-2xl font-bold uppercase tracking-tight">{dataset.name}</p>
         <p className="mt-2 tabular text-xs uppercase tracking-widest text-ink/50 group-hover:text-paper/60">
           {stats ? `${stats.total_images} images · ${stats.total_videos} videos` : "…"}
@@ -26,6 +77,12 @@ function DatasetCard({ dataset }: { dataset: Dataset }) {
       >
         View statistics →
       </Link>
+      <button
+        onClick={() => setConfirming(true)}
+        className="absolute right-4 top-4 border border-ink/30 px-2 py-1 text-[10px] font-bold uppercase tracking-widest opacity-0 hover:border-accent hover:text-accent group-hover:opacity-100 group-hover:border-paper/40 group-hover:text-paper group-hover:hover:border-accent group-hover:hover:text-accent"
+      >
+        Delete
+      </button>
     </div>
   );
 }
@@ -36,6 +93,7 @@ function FileImportSection({ projectId }: { projectId: string }) {
   const [format, setFormat] = useState<"coco" | "cvat">("coco");
   const [datasetName, setDatasetName] = useState("");
   const [file, setFile] = useState<File | null>(null);
+  const [dragActive, setDragActive] = useState(false);
 
   const importMutation = useMutation({
     mutationFn: () => {
@@ -52,8 +110,13 @@ function FileImportSection({ projectId }: { projectId: string }) {
     },
   });
 
+  function pickFile(picked: File | null) {
+    if (picked && !picked.name.toLowerCase().endsWith(".zip")) return;
+    setFile(picked);
+  }
+
   return (
-    <div className="mb-12 max-w-xl border-2 border-ink p-6">
+    <div className="max-w-xl flex-1 border-2 border-ink p-6">
       <p className="mb-1 text-sm font-bold uppercase tracking-tight">Import from a file</p>
       <p className="mb-4 text-xs text-ink/50">
         COCO or CVAT-XML — the two formats CVAT's own UI exports. Round-trips with CVAT: export a task
@@ -69,13 +132,46 @@ function FileImportSection({ projectId }: { projectId: string }) {
             </label>
           ))}
         </div>
+
         <input
           ref={fileInputRef}
           type="file"
           accept=".zip"
-          onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-          className="w-full border-2 border-ink bg-paper px-3 py-2 text-xs outline-none focus:border-accent"
+          onChange={(e) => pickFile(e.target.files?.[0] ?? null)}
+          className="hidden"
         />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          onDragOver={(e) => {
+            e.preventDefault();
+            setDragActive(true);
+          }}
+          onDragLeave={() => setDragActive(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setDragActive(false);
+            pickFile(e.dataTransfer.files?.[0] ?? null);
+          }}
+          className={`flex w-full flex-col items-center justify-center gap-1 border-2 border-dashed px-4 py-8 text-center transition-colors duration-150 ${
+            dragActive ? "border-accent bg-muted" : "border-ink/40 hover:border-ink hover:bg-muted"
+          }`}
+        >
+          {file ? (
+            <>
+              <span className="text-sm font-bold">{file.name}</span>
+              <span className="text-[10px] uppercase tracking-widest text-ink/50">
+                Click or drop to replace
+              </span>
+            </>
+          ) : (
+            <>
+              <span className="text-sm font-bold uppercase tracking-wide">Drop a .zip file here</span>
+              <span className="text-[10px] uppercase tracking-widest text-ink/50">or click to browse</span>
+            </>
+          )}
+        </button>
+
         <input
           value={datasetName}
           onChange={(e) => setDatasetName(e.target.value)}
@@ -101,6 +197,8 @@ export function DatasetsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [name, setName] = useState("");
   const queryClient = useQueryClient();
+  const nameInputRef = useRef<HTMLInputElement>(null);
+  const roboflowRef = useRef<HTMLDivElement>(null);
 
   const datasetsQuery = useQuery({
     queryKey: ["datasets", projectId],
@@ -124,17 +222,6 @@ export function DatasetsPage() {
       <h1 className="mb-4 border-b-4 border-ink pb-8 text-5xl font-black uppercase tracking-tightest sm:text-7xl">
         Datasets
       </h1>
-      <p className="mb-12 max-w-2xl text-sm text-ink/60">
-        Looking to pull data in from Roboflow?{" "}
-        <Link
-          to={`/projects/${projectId}/settings`}
-          className="font-semibold underline decoration-1 underline-offset-2 hover:text-accent"
-        >
-          That's on Project Settings →
-        </Link>{" "}
-        — a Roboflow project is a source for this whole project, not any one dataset.
-      </p>
-
       <form
         onSubmit={(e) => {
           e.preventDefault();
@@ -143,6 +230,7 @@ export function DatasetsPage() {
         className="mb-12 flex max-w-xl border-2 border-ink"
       >
         <input
+          ref={nameInputRef}
           value={name}
           onChange={(e) => setName(e.target.value)}
           placeholder="NEW DATASET NAME"
@@ -157,14 +245,42 @@ export function DatasetsPage() {
         </button>
       </form>
 
-      <FileImportSection projectId={projectId} />
+      <div className="mb-12 flex flex-wrap gap-8">
+        <FileImportSection projectId={projectId} />
+        <div ref={roboflowRef}>
+          <RoboflowImportSection projectId={projectId} />
+        </div>
+      </div>
 
       <div className="grid max-w-5xl grid-cols-1 gap-0 border-t-2 border-ink sm:grid-cols-2">
+        {datasetsQuery.isLoading &&
+          Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="border-b-2 border-r-2 border-ink p-8">
+              <Skeleton className="h-7 w-2/3" />
+              <Skeleton className="mt-3 h-3 w-1/3" />
+            </div>
+          ))}
         {(datasetsQuery.data ?? []).map((dataset) => (
           <DatasetCard key={dataset.id} dataset={dataset} />
         ))}
         {datasetsQuery.data?.length === 0 && (
-          <p className="col-span-2 py-8 text-sm text-ink/50">No datasets yet — create one above.</p>
+          <EmptyState
+            title="No datasets yet"
+            description="Create your first dataset from scratch, or import one from Roboflow — either way, you'll land here ready to upload images."
+          >
+            <button
+              onClick={() => nameInputRef.current?.focus()}
+              className="border-2 border-ink bg-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent"
+            >
+              Create a dataset
+            </button>
+            <button
+              onClick={() => roboflowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })}
+              className="border-2 border-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest hover:bg-muted"
+            >
+              Import from Roboflow
+            </button>
+          </EmptyState>
         )}
       </div>
     </div>

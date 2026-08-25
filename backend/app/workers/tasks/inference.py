@@ -71,6 +71,7 @@ def run_inference_batch(self, job_id: str) -> None:
                 created = annotation_service.bulk_create_from_predictions(
                     db,
                     image_id=image.id,
+                    project_id=image.project_id,
                     predictions=[
                         {
                             "class_id": d.class_id,

@@ -16,7 +16,14 @@ interface Props {
   imageHeight: number;
   classEntries: ClassEntry[];
   onCommitMove: (id: string, patch: Pick<Annotation, "x1" | "y1" | "x2" | "y2">) => void;
-  onCreateBox: (box: Pick<Annotation, "x1" | "y1" | "x2" | "y2">) => void;
+  /** Fires once a drag finishes into a real box — this only hands the
+   * geometry up. Class choice happens afterward (see `pendingBox`), so
+   * this is not itself a "create annotation" call. */
+  onBoxDrawn: (box: Pick<Annotation, "x1" | "y1" | "x2" | "y2">) => void;
+  /** A just-drawn box awaiting a class pick — rendered as a placeholder
+   * until the caller either classifies it (it becomes a real annotation)
+   * or cancels it (it disappears). Normalized 0..1, same as Annotation. */
+  pendingBox: Pick<Annotation, "x1" | "y1" | "x2" | "y2"> | null;
   controlsRef: React.MutableRefObject<CanvasControls | null>;
   /** Unresolved flags, keyed by annotation id. Red is reserved exclusively
    * for this signal (DESIGN.md "Box colour language") — never a class
@@ -45,7 +52,8 @@ export function AnnotationCanvas({
   imageHeight,
   classEntries,
   onCommitMove,
-  onCreateBox,
+  onBoxDrawn,
+  pendingBox,
   controlsRef,
   flagsByAnnotationId = {},
 }: Props) {
@@ -137,29 +145,47 @@ export function AnnotationCanvas({
   }
 
   // --- Wheel zoom, centred on the cursor ---
-  function handleWheel(e: React.WheelEvent) {
-    e.preventDefault();
+  //
+  // Deliberately a native addEventListener, not a JSX onWheel prop. React
+  // registers onWheel as a passive listener, so e.preventDefault() inside it
+  // is a silent no-op (browsers block preventDefault from passive listeners
+  // and React logs a warning) — the browser's own ctrl+wheel/pinch page-zoom
+  // still fires underneath, which is what made the whole page (sidebar,
+  // breadcrumbs, everything, not just this canvas) visibly zoom alongside
+  // the canvas's own transform. `{ passive: false }` here is what actually
+  // lets preventDefault suppress that.
+  useEffect(() => {
     const wrapper = wrapperRef.current;
     if (!wrapper) return;
-    const rect = wrapper.getBoundingClientRect();
-    const cx = e.clientX - rect.left;
-    const cy = e.clientY - rect.top;
-    const { scale: s, tx, ty } = transformRef.current;
-    const factor = e.deltaY < 0 ? 1.1 : 0.9;
-    const newScale = Math.min(8, Math.max(0.05, s * factor));
-    const imgX = (cx - tx) / s;
-    const imgY = (cy - ty) / s;
-    transformRef.current = { scale: newScale, tx: cx - imgX * newScale, ty: cy - imgY * newScale };
-    applyTransform();
-    setScale(newScale);
-  }
+
+    function handleWheel(e: WheelEvent) {
+      e.preventDefault();
+      const rect = wrapper!.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const { scale: s, tx, ty } = transformRef.current;
+      const factor = e.deltaY < 0 ? 1.1 : 0.9;
+      const newScale = Math.min(8, Math.max(0.05, s * factor));
+      const imgX = (cx - tx) / s;
+      const imgY = (cy - ty) / s;
+      transformRef.current = { scale: newScale, tx: cx - imgX * newScale, ty: cy - imgY * newScale };
+      applyTransform();
+      setScale(newScale);
+    }
+
+    wrapper.addEventListener("wheel", handleWheel, { passive: false });
+    return () => wrapper.removeEventListener("wheel", handleWheel);
+  }, []);
 
   // --- Pan (background drag in select mode) ---
   const panState = useRef<{ startX: number; startY: number; startTx: number; startTy: number } | null>(null);
 
   function handleBackgroundPointerDown(e: React.PointerEvent) {
     if (mode === "draw") {
-      startDraw(e);
+      // One unclassified box at a time — starting another here would
+      // silently overwrite `pendingBox` and drop the first one, since
+      // nothing has persisted it yet.
+      if (!pendingBox) startDraw(e);
       return;
     }
     selectAnnotation(null);
@@ -228,7 +254,7 @@ export function AnnotationCanvas({
     setMode("select");
     const MIN_PX = 4;
     if (x2 - x1 < MIN_PX || y2 - y1 < MIN_PX) return; // treat as an accidental click, not a box
-    onCreateBox({
+    onBoxDrawn({
       x1: x1 / imageWidth,
       y1: y1 / imageHeight,
       x2: x2 / imageWidth,
@@ -361,11 +387,7 @@ export function AnnotationCanvas({
   }
 
   return (
-    <div
-      ref={wrapperRef}
-      className="relative h-full w-full overflow-hidden bg-plate"
-      onWheel={handleWheel}
-    >
+    <div ref={wrapperRef} className="relative h-full w-full overflow-hidden bg-plate">
       <div
         ref={stageRef}
         className="absolute left-0 top-0 origin-top-left"
@@ -504,6 +526,46 @@ export function AnnotationCanvas({
               vectorEffect="non-scaling-stroke"
             />
           )}
+          {/* Just-drawn, not-yet-classified box — held here instead of in
+              `annotations` because nothing exists server-side until a class
+              is picked in the right panel. Amber marks "needs a decision",
+              distinct from both the live white draft rect above and every
+              class colour a real box can have. */}
+          {pendingBox &&
+            (() => {
+              const x = pendingBox.x1 * imageWidth;
+              const y = pendingBox.y1 * imageHeight;
+              const w = (pendingBox.x2 - pendingBox.x1) * imageWidth;
+              const h = (pendingBox.y2 - pendingBox.y1) * imageHeight;
+              return (
+                <g pointerEvents="none">
+                  <rect
+                    x={x}
+                    y={y}
+                    width={w}
+                    height={h}
+                    fill="rgba(255,176,0,0.12)"
+                    stroke="#FFB000"
+                    strokeWidth={2}
+                    strokeDasharray="5 3"
+                    vectorEffect="non-scaling-stroke"
+                  />
+                  <g transform={`translate(${x}, ${y - 16 / scale})`}>
+                    <rect x={0} y={0} width={90 / scale} height={14 / scale} fill="#FFB000" />
+                    <text
+                      x={4 / scale}
+                      y={11 / scale}
+                      fontSize={10 / scale}
+                      fontWeight={700}
+                      fill="#000"
+                      style={{ fontFamily: "Inter, sans-serif", textTransform: "uppercase" }}
+                    >
+                      Pick a class →
+                    </text>
+                  </g>
+                </g>
+              );
+            })()}
         </svg>
       </div>
     </div>

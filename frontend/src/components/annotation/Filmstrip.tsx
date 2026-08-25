@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import type { AnnotationImage } from "@/types";
 
 interface Props {
@@ -16,11 +17,22 @@ const STATUS_RING: Record<string, string> = {
  * them jump directly. Matters most for video-frame datasets, where "the
  * next 20 frames" is a meaningful unit of context a flat gallery loses. */
 export function Filmstrip({ images, currentId, onSelect }: Props) {
+  const currentRef = useRef<HTMLButtonElement>(null);
+
+  // Prev/Next/approve-and-advance move `currentId` without touching this
+  // strip's own scroll position — without this, the highlighted thumbnail
+  // walks off either edge after a few steps and the reviewer loses track
+  // of where they are in the sequence.
+  useEffect(() => {
+    currentRef.current?.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" });
+  }, [currentId]);
+
   return (
     <div className="flex h-16 shrink-0 items-center gap-1.5 overflow-x-auto border-t-2 border-ink bg-paper px-2">
       {images.map((img) => (
         <button
           key={img.id}
+          ref={img.id === currentId ? currentRef : undefined}
           onClick={() => onSelect(img.id)}
           className={`h-12 w-16 shrink-0 overflow-hidden bg-plate ${
             img.id === currentId ? "ring-2 ring-accent" : STATUS_RING[img.review_status]

@@ -77,6 +77,18 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+    # Without this the container gets zero GPU access even on a host with a
+    # working driver — torch.cuda.is_available() (surfaced on the Training
+    # Runs page) reports false and the /training-providers "gpu" block comes
+    # back empty, which is what a host GPU that Docker just isn't handing
+    # through to the container looks like from here.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     command: >
       sh -c "alembic upgrade head &&
              uvicorn app.main:app --host 0.0.0.0 --port 8000"
@@ -112,6 +124,17 @@ services:
         condition: service_healthy
       minio:
         condition: service_healthy
+    # This is the service that actually runs LOCAL training jobs — needs the
+    # same GPU passthrough as backend, or every "LOCAL (RTX)" run silently
+    # falls back to CPU regardless of what backend's /training-providers
+    # reports.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     # Two logical queues share one compose service for local dev (see PLAN
     # "Jobs: Celery + Redis, two queues") — -Q gpu,default with -c 1 means
     # this single worker processes both, still serializing GPU work with
