@@ -175,3 +175,24 @@ def test_review_queue_filters_by_flag_type(client: TestClient, project_with_pose
     resp2 = client.get(f"/api/v1/review/queue?project_id={project['id']}&flag_type=TEMPORAL_ANOMALY")
     items2 = resp2.json()["items"]
     assert not any(item["image_id"] == image["id"] for item in items2)
+
+
+def test_review_queue_splits_pending_from_approved(client: TestClient, project_with_pose_and_image) -> None:
+    """The review workflow is split into two buckets by `review_status` —
+    an image approved by a human must disappear from the PENDING bucket
+    and show up in APPROVED, never both and never neither."""
+    project, image = project_with_pose_and_image
+
+    pending = client.get(f"/api/v1/review/queue?project_id={project['id']}&review_status=PENDING").json()
+    assert any(item["image_id"] == image["id"] for item in pending["items"])
+    approved = client.get(f"/api/v1/review/queue?project_id={project['id']}&review_status=APPROVED").json()
+    assert not any(item["image_id"] == image["id"] for item in approved["items"])
+
+    resp = client.post(f"/api/v1/images/{image['id']}/approve")
+    assert resp.status_code == 200
+
+    pending_after = client.get(f"/api/v1/review/queue?project_id={project['id']}&review_status=PENDING").json()
+    assert not any(item["image_id"] == image["id"] for item in pending_after["items"])
+    approved_after = client.get(f"/api/v1/review/queue?project_id={project['id']}&review_status=APPROVED").json()
+    assert any(item["image_id"] == image["id"] for item in approved_after["items"])
+    assert next(i for i in approved_after["items"] if i["image_id"] == image["id"])["review_status"] == "APPROVED"

@@ -52,6 +52,14 @@ class DatasetVersion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     total_annotations: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
     export_storage_key: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    # Same YOLO zip this version always had, plus two more formats a version
+    # can independently be exported to — each is generated on demand and
+    # cached here so a re-download doesn't regenerate it. COCO/CVAT-XML are
+    # the formats CVAT itself imports/exports, so this is also the bridge
+    # into/out of CVAT without a live API integration (see
+    # `services/dataset/export_coco.py` / `export_cvat.py`).
+    coco_export_storage_key: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    cvat_export_storage_key: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     error: Mapped[str | None] = mapped_column(String(2000), nullable=True)
 
 

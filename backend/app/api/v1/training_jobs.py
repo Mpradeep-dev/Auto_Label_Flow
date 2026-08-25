@@ -63,6 +63,7 @@ def create_training_job(payload: TrainingJobCreate, db: Session = Depends(get_db
         image_size=payload.image_size,
         learning_rate=payload.learning_rate,
         device=payload.device,
+        extra_args=payload.extra_args,
     )
     db.add(job)
     db.commit()

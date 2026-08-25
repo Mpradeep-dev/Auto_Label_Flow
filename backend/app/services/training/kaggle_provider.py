@@ -44,8 +44,20 @@ model.train(
     imgsz={image_size},
     batch={batch_size},
     lr0={learning_rate},
+{extra_args_lines}
 )
 """
+
+# The typed fields above always win — any of these names appearing in
+# `job.extra_args` too is dropped rather than emitted, since a duplicate
+# keyword argument in the generated script would be a Python SyntaxError
+# on Kaggle's side, not a silent override.
+_TYPED_TRAIN_KWARGS = {"data", "epochs", "imgsz", "batch", "lr0"}
+
+
+def _render_extra_args(extra_args: dict) -> str:
+    filtered = {k: v for k, v in (extra_args or {}).items() if k not in _TYPED_TRAIN_KWARGS}
+    return "\n".join(f"    {key}={value!r}," for key, value in filtered.items())
 
 
 class KaggleTrainingProvider(TrainingProvider):
@@ -111,6 +123,7 @@ class KaggleTrainingProvider(TrainingProvider):
                 image_size=job.image_size,
                 batch_size=job.batch_size,
                 learning_rate=job.learning_rate or 0.01,
+                extra_args_lines=_render_extra_args(job.extra_args),
             )
             (kernel_dir / "train.py").write_text(script, encoding="utf-8")
 

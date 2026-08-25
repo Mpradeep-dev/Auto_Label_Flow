@@ -21,6 +21,12 @@ export function AnnotatePage() {
   const queryClient = useQueryClient();
   const controlsRef = useRef<CanvasControls | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
+  // Every annotation edit (create/move/resize/reclass/delete) already
+  // persists immediately via its own mutation — Save has nothing left to
+  // do but refresh from the server, so without this flash it silently
+  // succeeds at doing effectively nothing, which reads as "the button is
+  // broken" rather than "there was nothing to save."
+  const [justSaved, setJustSaved] = useState(false);
 
   const setAnnotations = useAnnotationStore((s) => s.setAnnotations);
   const annotations = useAnnotationStore((s) => s.annotations);
@@ -39,6 +45,17 @@ export function AnnotatePage() {
     enabled: !!projectId,
   });
   const classEntries = projectQuery.data?.class_config ?? [];
+
+  // `drawClassId` defaults to 0 in the store, which only accidentally means
+  // something once real classes exist (see createMutation below) — once
+  // they load, snap it to an actual class so a fresh page load can never
+  // silently draw as "unknown" just because nobody picked a class yet.
+  useEffect(() => {
+    if (classEntries.length > 0 && !classEntries.some((c) => c.id === drawClassId)) {
+      setDrawClassId(classEntries[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [classEntries]);
 
   const imagesQuery = useQuery({
     queryKey: ["images", datasetId],
@@ -94,17 +111,34 @@ export function AnnotatePage() {
 
   const createMutation = useMutation({
     mutationFn: (box: Pick<Annotation, "x1" | "y1" | "x2" | "y2">) => {
-      const cls = classEntries.find((c) => c.id === drawClassId) ?? classEntries[0];
+      // No silent "unknown" fallback — the auto-select effect above keeps
+      // `drawClassId` pointed at a real class the moment one exists, so
+      // this only actually throws in the edge case of a project with zero
+      // classes (no detector registered yet) where someone drew anyway.
+      const cls = classEntries.find((c) => c.id === drawClassId);
+      if (!cls) throw new Error("No class selected — pick or add one in the right panel before drawing.");
       return api.createAnnotation({
         image_id: imageId!,
-        class_id: cls?.id ?? 0,
-        class_name: cls?.name ?? "unknown",
+        class_id: cls.id,
+        class_name: cls.name,
         ...box,
       });
     },
     onSuccess: (ann) => {
       upsertAnnotation(ann);
       selectAnnotation(ann.id);
+    },
+  });
+
+  const addClassMutation = useMutation({
+    mutationFn: (name: string) => {
+      const nextId = classEntries.length > 0 ? Math.max(...classEntries.map((c) => c.id)) + 1 : 0;
+      return api.updateProject(projectId!, { class_config: [...classEntries, { id: nextId, name }] });
+    },
+    onSuccess: (project) => {
+      queryClient.setQueryData(["project", projectId], project);
+      const created = project.class_config[project.class_config.length - 1];
+      if (created) setDrawClassId(created.id);
     },
   });
 
@@ -131,11 +165,23 @@ export function AnnotatePage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["images", datasetId] });
       queryClient.invalidateQueries({ queryKey: ["annotations", imageId] });
+      // The Review Queue's PENDING/APPROVED tabs cache for 30s (default
+      // staleTime) — without this, approving here and switching straight
+      // back to that page can still show the image sitting in PENDING.
+      queryClient.invalidateQueries({ queryKey: ["review-queue"] });
+      // Reviewing is a loop — approve, see the next one, approve, ... —
+      // so advance automatically instead of leaving the reviewer parked on
+      // an image that's now done. Stays put if this was the last one
+      // (`goTo` no-ops on an undefined id).
+      goTo(nextImage?.id);
     },
   });
   const rejectMutation = useMutation({
     mutationFn: () => api.rejectImage(imageId!),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["images", datasetId] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["images", datasetId] });
+      queryClient.invalidateQueries({ queryKey: ["review-queue"] });
+    },
   });
 
   const resolveFlagMutation = useMutation({
@@ -146,6 +192,12 @@ export function AnnotatePage() {
 
   const selected = useMemo(() => annotations.find((a) => a.id === selectedId) ?? null, [annotations, selectedId]);
 
+  function handleSave() {
+    queryClient.invalidateQueries({ queryKey: ["annotations", imageId] });
+    setJustSaved(true);
+    setTimeout(() => setJustSaved(false), 1200);
+  }
+
   useKeyboardShortcuts(
     {
       add: () => setMode(mode === "draw" ? "select" : "draw"),
@@ -154,7 +206,7 @@ export function AnnotatePage() {
       prev: () => goTo(prevImage?.id),
       next: () => goTo(nextImage?.id),
       approve: () => approveMutation.mutate(),
-      save: () => queryClient.invalidateQueries({ queryKey: ["annotations", imageId] }),
+      save: handleSave,
       zoom: () => controlsRef.current?.zoomIn(),
       fit: () => controlsRef.current?.fit(),
       setClassByIndex: (index) => {
@@ -188,6 +240,11 @@ export function AnnotatePage() {
             flagsByAnnotationId={flagsByAnnotationId}
           />
           {showShortcuts && <ShortcutHelp onClose={() => setShowShortcuts(false)} />}
+          {createMutation.isError && (
+            <p className="absolute left-4 top-4 border-2 border-accent bg-paper px-3 py-2 text-xs font-bold text-accent">
+              {(createMutation.error as Error).message}
+            </p>
+          )}
         </div>
         <RightPanel
           annotation={selected}
@@ -200,6 +257,10 @@ export function AnnotatePage() {
           onDelete={() => selected && deleteMutation.mutate(selected.id)}
           onDuplicate={() => selected && duplicateMutation.mutate(selected.id)}
           onResolveFlag={(flagId, resolution) => resolveFlagMutation.mutate({ flagId, resolution })}
+          drawClassId={drawClassId}
+          onSelectDrawClass={setDrawClassId}
+          onAddClass={(name) => addClassMutation.mutate(name)}
+          addingClass={addClassMutation.isPending}
         />
       </div>
       <Filmstrip images={images} currentId={imageId} onSelect={goTo} />
@@ -207,11 +268,17 @@ export function AnnotatePage() {
         position={`${currentIndex + 1} / ${images.length}`}
         hasSelection={!!selected}
         drawing={mode === "draw"}
+        reviewStatus={currentImage.review_status}
+        approving={approveMutation.isPending}
+        rejecting={rejectMutation.isPending}
+        approveError={approveMutation.isError ? (approveMutation.error as Error).message || "Approve failed" : null}
+        rejectError={rejectMutation.isError ? (rejectMutation.error as Error).message || "Reject failed" : null}
         onPrev={() => goTo(prevImage?.id)}
         onNext={() => goTo(nextImage?.id)}
         onApprove={() => approveMutation.mutate()}
         onReject={() => rejectMutation.mutate()}
-        onSave={() => queryClient.invalidateQueries({ queryKey: ["annotations", imageId] })}
+        onSave={handleSave}
+        justSaved={justSaved}
         onDeleteSelected={() => selected && deleteMutation.mutate(selected.id)}
         onAdd={() => setMode(mode === "draw" ? "select" : "draw")}
         onZoomIn={() => controlsRef.current?.zoomIn()}

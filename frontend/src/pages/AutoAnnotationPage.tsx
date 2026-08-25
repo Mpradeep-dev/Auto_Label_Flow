@@ -3,7 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
 import { SectionLabel } from "@/components/layout/SectionLabel";
-import type { JobProgressEvent } from "@/types";
+import type { InferenceJob, JobProgressEvent } from "@/types";
 
 /**
  * Dispatches a real background job (Celery, `gpu` queue) and follows its
@@ -11,16 +11,46 @@ import type { JobProgressEvent } from "@/types";
  * WebSockets because the flow is one-directional and reconnects itself".
  * The browser tab is free to navigate away; the job keeps running.
  */
+// Unlike the Roboflow reattach (scoped by the project id already in the
+// URL), this page's dataset/model choice is plain form state with nothing
+// to restore it from on a fresh mount — persisting the last selection is
+// what makes "navigate away, come back" actually reattach on its own
+// instead of requiring you to re-pick the same dataset first.
+function selectionStorageKey(projectId: string): string {
+  return `auto-annotate-selection:${projectId}`;
+}
+
 export function AutoAnnotationPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const queryClient = useQueryClient();
   const eventSourceRef = useRef<EventSource | null>(null);
 
-  const [datasetId, setDatasetId] = useState("");
-  const [modelId, setModelId] = useState("");
+  const [datasetId, setDatasetId] = useState(() => {
+    if (!projectId) return "";
+    try {
+      return JSON.parse(localStorage.getItem(selectionStorageKey(projectId)) ?? "{}").datasetId ?? "";
+    } catch {
+      return "";
+    }
+  });
+  const [modelId, setModelId] = useState(() => {
+    if (!projectId) return "";
+    try {
+      return JSON.parse(localStorage.getItem(selectionStorageKey(projectId)) ?? "{}").modelId ?? "";
+    } catch {
+      return "";
+    }
+  });
   const [conf, setConf] = useState(0.2);
   const [jobId, setJobId] = useState<string | null>(null);
   const [progress, setProgress] = useState<JobProgressEvent | null>(null);
+  // Distinct from `running` (SSE-reported job status): covers the gap
+  // between clicking the button and the job actually starting to report
+  // progress — without it, a slow or failing `createInferenceJob` call
+  // left the button looking completely inert (no spinner, no error, just
+  // nothing) for however long that took.
+  const [submitting, setSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   const datasetsQuery = useQuery({
     queryKey: ["datasets", projectId],
@@ -37,14 +67,39 @@ export function AutoAnnotationPage() {
     return () => eventSourceRef.current?.close();
   }, []);
 
-  async function run() {
-    if (!datasetId || !modelId) return;
-    setProgress(null);
-    const job = await api.createInferenceJob({ dataset_id: datasetId, model_id: modelId, conf });
-    setJobId(job.id);
+  useEffect(() => {
+    if (!projectId) return;
+    try {
+      localStorage.setItem(selectionStorageKey(projectId), JSON.stringify({ datasetId, modelId }));
+    } catch {
+      /* private-browsing or storage-disabled — losing the remembered selection is harmless */
+    }
+  }, [projectId, datasetId, modelId]);
 
+  // Reattaches to a job this page kicked off before a navigation away or a
+  // reload wiped `progress`/`jobId` above — otherwise a still-running batch
+  // just disappears from the UI even though it keeps going server-side.
+  // Only fires once a dataset is (re-)selected, same limitation the
+  // Roboflow reattach doesn't have (its scope comes from the URL; this
+  // page's dataset choice is local form state with nothing to restore it
+  // from on a fresh mount).
+  const latestJobQuery = useQuery({
+    queryKey: ["latest-inference-job", datasetId],
+    queryFn: () => api.getLatestInferenceJob(datasetId),
+    enabled: !!datasetId,
+  });
+  useEffect(() => {
+    const latest = latestJobQuery.data;
+    if (latest && (latest.status === "RUNNING" || latest.status === "QUEUED") && jobId !== latest.id) {
+      setJobId(latest.id);
+      followJob(latest.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestJobQuery.data]);
+
+  function followJob(id: string) {
     eventSourceRef.current?.close();
-    const source = new EventSource(`/api/v1/inference/jobs/${job.id}/stream`);
+    const source = new EventSource(`/api/v1/inference/jobs/${id}/stream`);
     eventSourceRef.current = source;
     source.onmessage = (e) => {
       const data: JobProgressEvent = JSON.parse(e.data);
@@ -55,7 +110,33 @@ export function AutoAnnotationPage() {
         queryClient.invalidateQueries({ queryKey: ["dataset-stats", datasetId] });
       }
     };
-    source.onerror = () => source.close();
+    source.onerror = () => {
+      source.close();
+      // Only surface this as an error if the job never got anywhere —
+      // once terminal progress has already rendered, a stream drop after
+      // the fact isn't something the user needs to see as a failure.
+      setProgress((current) =>
+        current && current.status !== "RUNNING"
+          ? current
+          : { current: 0, total: 0, predictions: 0, fps: 0, eta_s: null, status: "FAILED", error: "Lost connection to the progress stream." },
+      );
+    };
+  }
+
+  async function run() {
+    if (!datasetId || !modelId) return;
+    setProgress(null);
+    setSubmitError(null);
+    setSubmitting(true);
+    try {
+      const job: InferenceJob = await api.createInferenceJob({ dataset_id: datasetId, model_id: modelId, conf });
+      setJobId(job.id);
+      followJob(job.id);
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : "Failed to start auto-annotation.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   if (!projectId) return null;
@@ -133,11 +214,16 @@ export function AutoAnnotationPage() {
 
         <button
           onClick={run}
-          disabled={!datasetId || !modelId || running}
+          disabled={!datasetId || !modelId || submitting || running}
           className="w-full border-2 border-ink bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
         >
-          {running ? `Processing… ${progress?.current} / ${progress?.total}` : "Run auto-annotation"}
+          {submitting
+            ? "Starting…"
+            : running
+              ? `Processing… ${progress?.current} / ${progress?.total}`
+              : "Run auto-annotation"}
         </button>
+        {submitError && <p className="text-xs text-accent">{submitError}</p>}
 
         {progress && (
           <div>

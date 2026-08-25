@@ -17,15 +17,13 @@ import uuid
 from pathlib import Path
 
 import yaml
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.security import safe_storage_key
 from app.models.annotation import AnnotationEvent
 from app.models.dataset import Dataset
-from app.models.dataset_version import DatasetVersion, DatasetVersionAnnotationPin, DatasetVersionImage
-from app.models.image import Image
-from app.models.project import Project
+from app.models.dataset_version import DatasetVersion
+from app.services.dataset.version_data import VersionDataError, load_version_data, out_image_filename
 from app.services.storage.factory import get_storage
 
 
@@ -48,34 +46,10 @@ def write_yolo_dataset(db: Session, *, version_id: uuid.UUID, root: Path) -> Pat
     """Materializes images/{train,val,test}, labels/{train,val,test}, and
     data.yaml under `root`. Returns the data.yaml path. Raises ExportError
     if the version or its project's class_config is missing."""
-    version = db.get(DatasetVersion, version_id)
-    if version is None:
-        raise ExportError(f"No dataset version with id {version_id}")
-
-    dataset = db.get(Dataset, version.dataset_id)
-    project = db.get(Project, dataset.project_id)
-    class_names = {entry["id"]: entry["name"] for entry in project.class_config}
-    if not class_names:
-        raise ExportError("Project has no class_config — register a model and set the project's classes first")
-
-    version_images = list(
-        db.scalars(select(DatasetVersionImage).where(DatasetVersionImage.dataset_version_id == version_id))
-    )
-    pins = list(
-        db.scalars(
-            select(DatasetVersionAnnotationPin).where(DatasetVersionAnnotationPin.dataset_version_id == version_id)
-        )
-    )
-    event_ids = [pin.pinned_event_id for pin in pins]
-    events_by_id = {
-        e.id: e
-        for e in (db.scalars(select(AnnotationEvent).where(AnnotationEvent.id.in_(event_ids))) if event_ids else [])
-    }
-    pins_by_image: dict[uuid.UUID, list[AnnotationEvent]] = {}
-    for pin in pins:
-        event = events_by_id.get(pin.pinned_event_id)
-        if event is not None:
-            pins_by_image.setdefault(pin.image_id, []).append(event)
+    try:
+        data = load_version_data(db, version_id=version_id)
+    except VersionDataError as exc:
+        raise ExportError(str(exc)) from exc
 
     storage = get_storage()
 
@@ -83,34 +57,26 @@ def write_yolo_dataset(db: Session, *, version_id: uuid.UUID, root: Path) -> Pat
         (root / "images" / split).mkdir(parents=True, exist_ok=True)
         (root / "labels" / split).mkdir(parents=True, exist_ok=True)
 
-    skipped: list[str] = []
-    for vi in version_images:
-        image = db.get(Image, vi.image_id)
-        if image is None:
-            skipped.append(str(vi.image_id))  # image deleted after being pinned — export what remains
-            continue
+    for vi in data.images:
+        out_name = out_image_filename(vi.image)
+        dest_image_path = root / "images" / vi.split / out_name
+        dest_image_path.write_bytes(storage.read_bytes(vi.image.storage_key))
 
-        split = vi.split.value
-        ext = Path(image.original_filename).suffix or ".jpg"
-        out_name = f"{image.id}{ext}"
-        dest_image_path = root / "images" / split / out_name
-        dest_image_path.write_bytes(storage.read_bytes(image.storage_key))
-
-        label_lines = [_yolo_line(e) for e in pins_by_image.get(image.id, [])]
-        (root / "labels" / split / f"{image.id}.txt").write_text("\n".join(label_lines), encoding="utf-8")
+        label_lines = [_yolo_line(e) for e in vi.events]
+        (root / "labels" / vi.split / f"{vi.image.id}.txt").write_text("\n".join(label_lines), encoding="utf-8")
 
     data_yaml = {
         "path": str(root),
         "train": "images/train",
         "val": "images/val",
         "test": "images/test",
-        "nc": len(class_names),
-        "names": [class_names[i] for i in sorted(class_names)],
+        "nc": len(data.class_names),
+        "names": [data.class_names[i] for i in sorted(data.class_names)],
     }
     data_yaml_path = root / "data.yaml"
     data_yaml_path.write_text(yaml.safe_dump(data_yaml, sort_keys=False), encoding="utf-8")
-    if skipped:
-        (root / "SKIPPED_IMAGES.txt").write_text("\n".join(skipped), encoding="utf-8")
+    if data.skipped_image_ids:
+        (root / "SKIPPED_IMAGES.txt").write_text("\n".join(data.skipped_image_ids), encoding="utf-8")
 
     return data_yaml_path
 

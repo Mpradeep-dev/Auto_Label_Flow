@@ -26,7 +26,13 @@ redis==5.2.1
 # silently re-resolve to the CPU wheel and overwrite that install.
 ultralytics==8.4.102
 opencv-python-headless==5.0.0.93
-numpy==2.4.6
+# Pinned below 2.4: roboflow==1.4.1 (below) requires numpy<2.4, which
+# conflicts with a plain numpy==2.4.x pin (confirmed via `pip install -r
+# requirements.txt` failing dependency resolution outright — unlike
+# installing roboflow alone into an existing venv, which silently
+# downgrades numpy without complaint). 2.3.5 still satisfies opencv's
+# numpy>=2 and ultralytics' numpy>=1.23.0.
+numpy==2.3.5
 
 # Storage
 minio==7.2.12
@@ -40,6 +46,10 @@ PyYAML==6.0.3
 
 # Kaggle (optional at runtime; import is guarded)
 kaggle==1.6.17
+
+# Roboflow (optional at runtime; import is guarded — see
+# services/integrations/roboflow_connect.py)
+roboflow==1.4.1
 
 # Dev / test
 pytest==8.3.3

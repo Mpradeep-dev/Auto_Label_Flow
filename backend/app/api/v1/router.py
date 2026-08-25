@@ -9,6 +9,7 @@ from app.api.v1 import (
     health,
     images,
     inference_jobs,
+    integrations,
     models,
     projects,
     quality,
@@ -28,3 +29,4 @@ api_router.include_router(inference_jobs.router)
 api_router.include_router(dataset_versions.router)
 api_router.include_router(training_jobs.router)
 api_router.include_router(quality.router)
+api_router.include_router(integrations.router)

@@ -109,6 +109,27 @@ def test_get_job_by_id(real_client: TestClient, dataset_with_images) -> None:
     assert fetched["status"] == "COMPLETED"
 
 
+def test_latest_inference_job_returns_newest_for_dataset(real_client: TestClient, dataset_with_images) -> None:
+    """Backs the "reattach to a still-running job after navigating away or
+    reloading" behavior on the Auto Annotation page."""
+    _, dataset_id, model_id = dataset_with_images
+    first = real_client.post("/api/v1/inference/jobs", json={"dataset_id": dataset_id, "model_id": model_id}).json()
+    second = real_client.post("/api/v1/inference/jobs", json={"dataset_id": dataset_id, "model_id": model_id}).json()
+    assert first["id"] != second["id"]
+
+    resp = real_client.get(f"/api/v1/inference/jobs/latest?dataset_id={dataset_id}")
+    assert resp.status_code == 200
+    assert resp.json()["id"] == second["id"]
+
+
+def test_latest_inference_job_none_found_returns_null(real_client: TestClient, unique_name: str) -> None:
+    project = real_client.post("/api/v1/projects", json={"name": unique_name}).json()
+    dataset = real_client.post(f"/api/v1/projects/{project['id']}/datasets", json={"name": "d"}).json()
+    resp = real_client.get(f"/api/v1/inference/jobs/latest?dataset_id={dataset['id']}")
+    assert resp.status_code == 200
+    assert resp.json() is None
+
+
 def test_get_missing_job_404(real_client: TestClient) -> None:
     import uuid
 

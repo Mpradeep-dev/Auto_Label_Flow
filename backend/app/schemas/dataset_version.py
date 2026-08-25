@@ -31,4 +31,6 @@ class DatasetVersionRead(BaseModel):
     total_annotations: int
     error: str | None
     download_url: str | None = None
+    coco_download_url: str | None = None
+    cvat_download_url: str | None = None
     created_at: datetime

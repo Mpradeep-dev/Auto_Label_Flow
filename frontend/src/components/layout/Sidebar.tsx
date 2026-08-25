@@ -15,7 +15,11 @@ const NAV_ITEMS = [
   { label: "Models", path: "/models" },
   { label: "Training Runs", path: "/training" },
   { label: "Export", path: "/export" },
-  { label: "Settings", path: "/settings" },
+  // Distinct from the always-visible top-level "Settings" link below
+  // (Kaggle/Roboflow, account-wide) — this one is this project's own name,
+  // class taxonomy, and quality rule packs. `short` avoids colliding with
+  // "Pipeline" in the collapsed one-letter rail.
+  { label: "Project Settings", short: "PS", path: "/settings" },
 ] as const;
 
 export function Sidebar({
@@ -46,11 +50,24 @@ export function Sidebar({
         to="/projects"
         className={({ isActive }) =>
           `flex h-12 shrink-0 items-center border-b-2 border-ink px-4 text-xs font-bold uppercase tracking-widest ${
-            isActive ? "bg-ink text-paper" : "hover:bg-muted"
+            isActive ? "bg-ink text-paper" : "hover:bg-orange"
           }`
         }
       >
         {collapsed ? "P" : "Projects"}
+      </NavLink>
+
+      {/* Account-wide (Kaggle/Roboflow connect) — deliberately NOT gated
+          behind selecting a project, unlike everything in the list below. */}
+      <NavLink
+        to="/settings"
+        className={({ isActive }) =>
+          `flex h-12 shrink-0 items-center border-b-4 border-ink px-4 text-xs font-bold uppercase tracking-widest ${
+            isActive ? "bg-ink text-paper" : "hover:bg-orange"
+          }`
+        }
+      >
+        {collapsed ? "S" : "Settings"}
       </NavLink>
 
       <ul className="flex-1 overflow-y-auto">
@@ -69,11 +86,11 @@ export function Sidebar({
                       ? "cursor-not-allowed text-ink/30"
                       : isActive
                         ? "bg-ink text-paper"
-                        : "hover:bg-muted"
+                        : "hover:bg-orange"
                   }`
                 }
               >
-                {collapsed ? item.label.slice(0, 1) : item.label}
+                {collapsed ? ("short" in item ? item.short : item.label.slice(0, 1)) : item.label}
               </NavLink>
             </li>
           );

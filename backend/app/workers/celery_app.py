@@ -26,6 +26,7 @@ celery_app = Celery(
         "app.workers.tasks.video",
         "app.workers.tasks.training",
         "app.workers.tasks.quality",
+        "app.workers.tasks.roboflow",
     ],
 )
 
@@ -40,6 +41,7 @@ celery_app.conf.update(
         "app.workers.tasks.training.*": {"queue": "gpu"},
         "app.workers.tasks.quality.*": {"queue": "gpu"},
         "app.workers.tasks.video.*": {"queue": "default"},
+        "app.workers.tasks.roboflow.*": {"queue": "default"},
     },
     task_track_started=True,
     worker_prefetch_multiplier=1,  # long-running tasks: don't hoard extra work per worker

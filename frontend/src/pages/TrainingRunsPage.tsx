@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useParams } from "react-router-dom";
+import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
 import { SectionLabel } from "@/components/layout/SectionLabel";
@@ -144,6 +144,16 @@ export function TrainingRunsPage() {
   const [epochs, setEpochs] = useState(100);
   const [batchSize, setBatchSize] = useState(8);
   const [imageSize, setImageSize] = useState(640);
+  const [learningRate, setLearningRate] = useState("");
+  const [device, setDevice] = useState("0");
+  // Free-form passthrough for any other Ultralytics `YOLO.train()` kwarg
+  // (optimizer, patience, dropout, augmentation knobs, ...) — the backend
+  // has a typed column per the handful of settings above, but Ultralytics
+  // documents ~100 train() arguments in total; a JSON box covers the rest
+  // without a dedicated field for each one. Server-side, these always lose
+  // to the typed fields above on conflict.
+  const [extraArgsJson, setExtraArgsJson] = useState("");
+  const [extraArgsError, setExtraArgsError] = useState<string | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
 
   const providersQuery = useQuery({ queryKey: ["training-providers"], queryFn: api.getTrainingProviders });
@@ -167,20 +177,48 @@ export function TrainingRunsPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: () =>
-      api.createTrainingJob({
+    mutationFn: () => {
+      let extra_args: Record<string, unknown> | undefined;
+      if (extraArgsJson.trim()) {
+        try {
+          extra_args = JSON.parse(extraArgsJson);
+        } catch {
+          throw new Error("Advanced parameters isn't valid JSON — fix it or clear the box.");
+        }
+      }
+      return api.createTrainingJob({
         dataset_version_id: versionId,
         base_model_id: baseModelId,
         provider,
         epochs,
         batch_size: batchSize,
         image_size: imageSize,
-      }),
+        learning_rate: learningRate.trim() ? parseFloat(learningRate) : undefined,
+        device: device.trim() || undefined,
+        extra_args,
+      });
+    },
     onSuccess: (job) => {
       setSelectedJobId(job.id);
       queryClient.invalidateQueries({ queryKey: ["training-jobs", projectId] });
     },
   });
+
+  function onExtraArgsChange(value: string) {
+    setExtraArgsJson(value);
+    if (!value.trim()) {
+      setExtraArgsError(null);
+      return;
+    }
+    try {
+      const parsed = JSON.parse(value);
+      setExtraArgsError(
+        parsed && typeof parsed === "object" && !Array.isArray(parsed) ? null : "Must be a JSON object, e.g. {\"patience\": 20}",
+      );
+    } catch {
+      setExtraArgsError("Not valid JSON");
+    }
+  }
 
   if (!projectId) return null;
 
@@ -264,6 +302,20 @@ export function TrainingRunsPage() {
                 </option>
               ))}
             </select>
+            {/* A dataset version is a separate, deliberate step (Export
+                page → "Create version") — it's not created for you just by
+                approving images in Review, so an empty dropdown here isn't
+                a bug, it's "you haven't done that step yet." Say so instead
+                of leaving a silently-empty <select>. */}
+            {datasetId && !versionsQuery.isLoading && versionsQuery.data?.length === 0 && (
+              <p className="mt-1 text-[10px] text-ink/50">
+                No versions yet for this dataset —{" "}
+                <Link to={`/projects/${projectId}/export`} className="underline hover:text-accent">
+                  create one on the Export page
+                </Link>{" "}
+                first (approve some images in Review, then "Create version").
+              </p>
+            )}
           </div>
         </div>
 
@@ -319,9 +371,61 @@ export function TrainingRunsPage() {
           </label>
         </div>
 
+        <div className="grid grid-cols-2 gap-4">
+          <label className="text-[10px] font-bold uppercase tracking-widest text-ink/50">
+            Learning rate (lr0)
+            <input
+              type="number"
+              min={0}
+              step={0.0001}
+              value={learningRate}
+              onChange={(e) => setLearningRate(e.target.value)}
+              placeholder="auto (0.01)"
+              className="tabular mt-1 w-full border border-ink/30 px-2 py-1 text-sm placeholder:normal-case placeholder:text-ink/30"
+            />
+          </label>
+          <label className="text-[10px] font-bold uppercase tracking-widest text-ink/50">
+            Device
+            <input
+              value={device}
+              onChange={(e) => setDevice(e.target.value)}
+              placeholder="0, 0,1, or cpu"
+              className="tabular mt-1 w-full border border-ink/30 px-2 py-1 text-sm placeholder:normal-case placeholder:text-ink/30"
+            />
+          </label>
+        </div>
+
+        <div>
+          <label className="mb-1 flex items-baseline justify-between text-[10px] font-bold uppercase tracking-widest text-ink/50">
+            <span>Advanced YOLO parameters (JSON)</span>
+            <a
+              href="https://docs.ultralytics.com/modes/train/#train-settings"
+              target="_blank"
+              rel="noreferrer"
+              className="font-normal normal-case text-ink/40 underline"
+            >
+              Ultralytics train() reference →
+            </a>
+          </label>
+          <textarea
+            value={extraArgsJson}
+            onChange={(e) => onExtraArgsChange(e.target.value)}
+            placeholder='{"optimizer": "AdamW", "patience": 20, "dropout": 0.1, "mosaic": 0.5}'
+            rows={3}
+            spellCheck={false}
+            className="tabular w-full border border-ink/30 bg-paper px-2 py-1.5 text-xs outline-none placeholder:text-ink/30 focus:border-accent"
+          />
+          <p className="mt-1 text-[10px] text-ink/40">
+            Any other <span className="tabular">YOLO.train()</span> keyword — optimizer, patience, dropout,
+            augmentation knobs, and everything else not already a field above. Epochs/batch/image
+            size/learning rate/device here always win over the same key typed in this box.
+          </p>
+          {extraArgsError && <p className="mt-1 text-xs text-accent">{extraArgsError}</p>}
+        </div>
+
         <button
           onClick={() => createMutation.mutate()}
-          disabled={!versionId || !baseModelId || createMutation.isPending}
+          disabled={!versionId || !baseModelId || !!extraArgsError || createMutation.isPending}
           className="w-full border-2 border-ink bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
         >
           {createMutation.isPending ? "Starting…" : `Start ${provider === "LOCAL" ? "local" : "Kaggle"} training`}

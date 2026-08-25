@@ -13,7 +13,19 @@ interface Props {
   hasSelection: boolean;
   drawing: boolean;
   position: string; // "N / total"
+  reviewStatus: "PENDING" | "APPROVED" | "REJECTED";
+  approving: boolean;
+  rejecting: boolean;
+  approveError: string | null;
+  rejectError: string | null;
+  justSaved: boolean;
 }
+
+const STATUS_STYLE: Record<Props["reviewStatus"], string> = {
+  PENDING: "text-ink/40",
+  APPROVED: "text-ink",
+  REJECTED: "text-accent",
+};
 
 function ToolButton({
   label,
@@ -33,7 +45,7 @@ function ToolButton({
       onClick={onClick}
       disabled={disabled}
       className={`flex h-full items-center gap-1.5 border-r border-ink/20 px-3 text-xs font-bold uppercase tracking-widest transition-colors duration-150 ${
-        active ? "bg-ink text-paper" : "hover:bg-muted"
+        active ? "bg-ink text-paper" : "hover:bg-orange"
       } disabled:cursor-not-allowed disabled:opacity-30`}
     >
       {label}
@@ -43,6 +55,7 @@ function ToolButton({
 }
 
 export function Toolbar(props: Props) {
+  const error = props.approveError ?? props.rejectError;
   return (
     <div className="flex h-11 shrink-0 items-stretch border-t-4 border-ink bg-paper">
       <ToolButton label="← Prev" shortcut="←" onClick={props.onPrev} />
@@ -53,18 +66,32 @@ export function Toolbar(props: Props) {
       <ToolButton label="Add" shortcut="A" onClick={props.onAdd} active={props.drawing} />
       <ToolButton label="Delete" shortcut="D" onClick={props.onDeleteSelected} disabled={!props.hasSelection} />
       <div className="flex-1" />
+      {error ? (
+        <div className="flex items-center border-r border-ink/20 px-3 text-xs font-bold uppercase tracking-widest text-accent">
+          {error}
+        </div>
+      ) : (
+        // Without this, a click on Approve/Reject that actually succeeds
+        // (or fails) is invisible on this page — nothing here changes, so
+        // "the button doesn't work" is the only reasonable read even when
+        // the request went through fine.
+        <div className={`flex items-center border-r border-ink/20 px-3 text-xs font-bold uppercase tracking-widest ${STATUS_STYLE[props.reviewStatus]}`}>
+          {props.reviewStatus}
+        </div>
+      )}
       <ToolButton label="−" shortcut="Zoom" onClick={props.onZoomOut} />
       <ToolButton label="+" onClick={props.onZoomIn} />
       <ToolButton label="Fit" shortcut="F" onClick={props.onFit} />
       <ToolButton label="?" onClick={props.onToggleShortcuts} />
       <div className="flex-1" />
-      <ToolButton label="Save" shortcut="S" onClick={props.onSave} />
-      <ToolButton label="Reject" onClick={props.onReject} />
+      <ToolButton label={props.justSaved ? "Saved ✓" : "Save"} shortcut="S" onClick={props.onSave} />
+      <ToolButton label={props.rejecting ? "Rejecting…" : "Reject"} onClick={props.onReject} disabled={props.rejecting} />
       <button
         onClick={props.onApprove}
-        className="flex h-full items-center gap-1.5 bg-ink px-4 text-xs font-bold uppercase tracking-widest text-paper transition-colors duration-150 hover:bg-accent"
+        disabled={props.approving}
+        className="flex h-full items-center gap-1.5 bg-ink px-4 text-xs font-bold uppercase tracking-widest text-paper transition-colors duration-150 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
       >
-        Approve <span className="text-[9px] font-normal text-paper/50">Space</span>
+        {props.approving ? "Approving…" : "Approve"} <span className="text-[9px] font-normal text-paper/50">Space</span>
       </button>
     </div>
   );

@@ -19,6 +19,11 @@ export function ReviewQueuePage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [flagType, setFlagType] = useState<FlagType | "">("");
   const [analyzeDatasetId, setAnalyzeDatasetId] = useState("");
+  // Split into two buckets by `review_status` rather than one undifferentiated
+  // list — an image a human has already approved has nothing left to review,
+  // so mixing it back in with what's still pending made "did approving this
+  // actually do anything?" impossible to answer from this page alone.
+  const [tab, setTab] = useState<"PENDING" | "APPROVED">("PENDING");
   const queryClient = useQueryClient();
 
   const datasetsQuery = useQuery({
@@ -27,12 +32,31 @@ export function ReviewQueuePage() {
     enabled: !!projectId,
   });
 
-  const queueQuery = useQuery({
-    queryKey: ["review-queue", projectId, flagType],
+  // Both fetched (not just the active tab) so switching tabs is instant and
+  // each tab button can show its own live count.
+  const pendingQuery = useQuery({
+    queryKey: ["review-queue", projectId, flagType, "PENDING"],
     queryFn: () =>
-      api.getReviewQueue({ project_id: projectId!, flag_type: flagType || undefined, limit: 60 }),
+      api.getReviewQueue({
+        project_id: projectId!,
+        flag_type: flagType || undefined,
+        review_status: "PENDING",
+        limit: 60,
+      }),
     enabled: !!projectId,
   });
+  const approvedQuery = useQuery({
+    queryKey: ["review-queue", projectId, flagType, "APPROVED"],
+    queryFn: () =>
+      api.getReviewQueue({
+        project_id: projectId!,
+        flag_type: flagType || undefined,
+        review_status: "APPROVED",
+        limit: 60,
+      }),
+    enabled: !!projectId,
+  });
+  const queueQuery = tab === "PENDING" ? pendingQuery : approvedQuery;
 
   const analyzeMutation = useMutation({
     mutationFn: () => api.analyzeDatasetQuality(analyzeDatasetId),
@@ -89,8 +113,28 @@ export function ReviewQueuePage() {
         </div>
       </div>
 
+      <div className="mb-6 flex border-2 border-ink">
+        {(
+          [
+            ["PENDING", "Pending review", pendingQuery.data?.total],
+            ["APPROVED", "Human approved", approvedQuery.data?.total],
+          ] as const
+        ).map(([value, label, total]) => (
+          <button
+            key={value}
+            onClick={() => setTab(value)}
+            className={`flex-1 border-r-2 border-ink px-4 py-3 text-xs font-bold uppercase tracking-widest last:border-r-0 ${
+              tab === value ? "bg-ink text-paper" : "hover:bg-muted"
+            }`}
+          >
+            {label} <span className="tabular">{total ?? "…"}</span>
+          </button>
+        ))}
+      </div>
+
       <p className="tabular mb-6 text-xs uppercase tracking-widest text-ink/50">
-        {queueQuery.data?.total ?? 0} images · sorted by difficulty, most suspicious first
+        {queueQuery.data?.total ?? 0} images ·{" "}
+        {tab === "PENDING" ? "sorted by difficulty, most suspicious first" : "most recently approved first"}
       </p>
 
       <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
@@ -136,7 +180,9 @@ export function ReviewQueuePage() {
         })}
         {items.length === 0 && !queueQuery.isLoading && (
           <p className="col-span-full py-8 text-sm text-ink/50">
-            Nothing in the queue yet — run quality analysis on a dataset first.
+            {tab === "PENDING"
+              ? "Nothing pending — run quality analysis on a dataset to populate this queue."
+              : "Nothing approved yet — approve an image from its Annotate page and it'll show up here."}
           </p>
         )}
       </div>

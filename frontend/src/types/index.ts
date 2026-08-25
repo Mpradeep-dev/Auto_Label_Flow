@@ -152,6 +152,8 @@ export interface DatasetVersion {
   total_annotations: number;
   error: string | null;
   download_url: string | null;
+  coco_download_url: string | null;
+  cvat_download_url: string | null;
   created_at: string;
 }
 
@@ -171,6 +173,7 @@ export interface TrainingJob {
   image_size: number;
   learning_rate: number | null;
   device: string;
+  extra_args: Record<string, unknown>;
   current_epoch: number;
   metrics: Record<string, number>;
   error: string | null;
@@ -285,4 +288,56 @@ export interface MLModel {
   is_active: boolean;
   created_at: string;
   updated_at: string;
+}
+
+export type IntegrationProviderName = "KAGGLE" | "ROBOFLOW";
+
+export interface IntegrationStatus {
+  provider: IntegrationProviderName;
+  connected: boolean;
+  identifier: string | null;
+  verified_at: string | null;
+  last_error: string | null;
+}
+
+export interface RoboflowExportResult {
+  uploaded: number;
+  failed: number;
+  failures: string[];
+}
+
+export type RoboflowJobKind = "IMPORT" | "EXPORT";
+export type RoboflowJobStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
+
+export interface RoboflowJob {
+  id: string;
+  project_id: string;
+  kind: RoboflowJobKind;
+  status: RoboflowJobStatus;
+  workspace: string;
+  project_slug: string;
+  version: number | null;
+  unannotated_only: boolean;
+  total_items: number;
+  processed_items: number;
+  uploaded_count: number;
+  failed_count: number;
+  failures: string[];
+  result_dataset_id: string | null;
+  dataset_version_id: string | null;
+  error: string | null;
+  created_at: string;
+}
+
+export interface RoboflowProjectSummary {
+  workspace: string;
+  project: string;
+  name: string;
+  type: string;
+  image_count: number;
+}
+
+export interface RoboflowVersionSummary {
+  version: number;
+  image_count: number;
 }

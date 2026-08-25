@@ -23,8 +23,15 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 PROJECT_ROOT = BACKEND_DIR.parent
+# Correct for a local venv run (config.py sits three levels under the repo
+# root: backend/app/core/config.py). Under Docker this is wrong — the
+# Dockerfile COPYs `backend/`'s own contents to `/app`, so there's no
+# separate "project root" above it the way there is in the repo checkout,
+# and this would resolve to `/artifacts` instead of the volume-mounted
+# `/app/artifacts` (see docker-compose.yml's `ARTIFACTS_DIR=/app/artifacts`
+# override for `backend`/`worker`, which is what actually makes this
+# correct in that environment).
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
-MODELS_DIR = ARTIFACTS_DIR / "models"
 LOCAL_STORAGE_DIR = PROJECT_ROOT / "storage" / "local"
 
 
@@ -98,7 +105,15 @@ class Settings(BaseSettings):
 
     # --- Models ---
     ARTIFACTS_DIR: Path = ARTIFACTS_DIR
-    MODELS_DIR: Path = MODELS_DIR
+
+    # Derived from ARTIFACTS_DIR rather than a second independently
+    # env-overridable default — the bug this fixes was exactly that kind of
+    # drift: overriding ARTIFACTS_DIR alone used to leave this pointing at
+    # a stale, separately-computed default that disagreed with it.
+    @computed_field  # type: ignore[misc]
+    @property
+    def MODELS_DIR(self) -> Path:
+        return self.ARTIFACTS_DIR / "models"
 
     # --- Inference defaults ---
     # Auto-annotation runs at a low confidence floor by design: on the
@@ -130,7 +145,11 @@ class Settings(BaseSettings):
 
     # --- GPU / training ---
     TRAINING_DEVICE: str = "0"  # torch device string; "cpu" falls back cleanly
-    TRAINING_OUTPUT_DIR: Path = ARTIFACTS_DIR / "training_runs"
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def TRAINING_OUTPUT_DIR(self) -> Path:
+        return self.ARTIFACTS_DIR / "training_runs"
 
 
 settings = Settings()

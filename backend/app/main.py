@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -7,7 +10,25 @@ from fastapi.staticfiles import StaticFiles
 from app.api.v1.router import api_router
 from app.core.config import settings
 
-app = FastAPI(title=settings.APP_NAME, debug=settings.DEBUG)
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    # Replays a previously-connected Kaggle account into the process
+    # environment (see services/integrations/kaggle_connect.py docstring)
+    # so a container restart doesn't silently lose the connection until
+    # someone notices Kaggle training stopped being offered.
+    from app.db.session import SessionLocal
+    from app.services.integrations import kaggle_connect
+
+    db = SessionLocal()
+    try:
+        kaggle_connect.load_on_startup(db)
+    finally:
+        db.close()
+    yield
+
+
+app = FastAPI(title=settings.APP_NAME, debug=settings.DEBUG, lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,

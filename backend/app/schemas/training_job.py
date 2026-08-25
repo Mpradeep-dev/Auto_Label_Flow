@@ -17,6 +17,11 @@ class TrainingJobCreate(BaseModel):
     image_size: int = Field(default=640, ge=32, le=2048)
     learning_rate: float | None = Field(default=None, gt=0.0)
     device: str = "0"
+    # Any other Ultralytics `YOLO.train()` keyword — optimizer, patience,
+    # dropout, augmentation knobs (mosaic, mixup, hsv_h, ...), etc. Passed
+    # through as-is; see `train_local_model` for how conflicts with the
+    # typed fields above are resolved (the typed fields always win).
+    extra_args: dict = Field(default_factory=dict)
 
 
 class TrainingJobEpochRead(BaseModel):
@@ -48,6 +53,7 @@ class TrainingJobRead(BaseModel):
     image_size: int
     learning_rate: float | None
     device: str
+    extra_args: dict
     current_epoch: int
     metrics: dict
     error: str | None

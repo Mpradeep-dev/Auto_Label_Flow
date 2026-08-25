@@ -9,9 +9,13 @@ import type {
   ImageListPage,
   DatasetVersion,
   InferenceJob,
+  IntegrationStatus,
   MLModel,
   Project,
   ReviewQueuePage,
+  RoboflowJob,
+  RoboflowProjectSummary,
+  RoboflowVersionSummary,
   TrainingJob,
   TrainingJobEpochRow,
   TrainingProviders,
@@ -55,8 +59,10 @@ export const api = {
   getProject: (id: string) => request<Project>(`/projects/${id}`),
   createProject: (data: { name: string; description?: string }) =>
     request<Project>("/projects", { method: "POST", body: JSON.stringify(data) }),
-  updateProject: (id: string, data: Partial<Pick<Project, "name" | "description" | "class_config">>) =>
-    request<Project>(`/projects/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
+  updateProject: (
+    id: string,
+    data: Partial<Pick<Project, "name" | "description" | "class_config" | "quality_rule_config">>,
+  ) => request<Project>(`/projects/${id}`, { method: "PATCH", body: JSON.stringify(data) }),
   deleteProject: (id: string) => request<void>(`/projects/${id}`, { method: "DELETE" }),
 
   // --- Datasets ---
@@ -127,6 +133,10 @@ export const api = {
   createInferenceJob: (data: { dataset_id: string; model_id: string; conf?: number; iou?: number }) =>
     request<InferenceJob>("/inference/jobs", { method: "POST", body: JSON.stringify(data) }),
   getInferenceJob: (id: string) => request<InferenceJob>(`/inference/jobs/${id}`),
+  // Lets the Auto Annotation page reattach to a job it kicked off before a
+  // navigation away or a reload dropped its local state.
+  getLatestInferenceJob: (datasetId: string) =>
+    request<InferenceJob | null>(`/inference/jobs/latest?dataset_id=${datasetId}`),
 
   // --- Dataset versions / export ---
   listDatasetVersions: (datasetId: string) => request<DatasetVersion[]>(`/datasets/${datasetId}/versions`),
@@ -136,6 +146,25 @@ export const api = {
   ) => request<DatasetVersion>(`/datasets/${datasetId}/versions`, { method: "POST", body: JSON.stringify(data) }),
   exportDatasetVersion: (versionId: string) =>
     request<DatasetVersion>(`/versions/${versionId}/export`, { method: "POST" }),
+  exportVersionCoco: (versionId: string) =>
+    request<DatasetVersion>(`/versions/${versionId}/export/coco`, { method: "POST" }),
+  exportVersionCvat: (versionId: string) =>
+    request<DatasetVersion>(`/versions/${versionId}/export/cvat`, { method: "POST" }),
+
+  // --- COCO / CVAT-XML import (the CVAT round trip — see export_coco.py /
+  // export_cvat.py's docstrings for why these two formats specifically) ---
+  importCocoDataset: (projectId: string, file: File, datasetName?: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (datasetName) form.append("dataset_name", datasetName);
+    return request<Dataset>(`/projects/${projectId}/import/coco`, { method: "POST", body: form });
+  },
+  importCvatDataset: (projectId: string, file: File, datasetName?: string) => {
+    const form = new FormData();
+    form.append("file", file);
+    if (datasetName) form.append("dataset_name", datasetName);
+    return request<Dataset>(`/projects/${projectId}/import/cvat`, { method: "POST", body: form });
+  },
 
   // --- Training ---
   getTrainingProviders: () => request<TrainingProviders>("/training/providers"),
@@ -151,6 +180,7 @@ export const api = {
     image_size?: number;
     learning_rate?: number;
     device?: string;
+    extra_args?: Record<string, unknown>;
   }) => request<TrainingJob>("/training/jobs", { method: "POST", body: JSON.stringify(data) }),
   cancelTrainingJob: (id: string) => request<TrainingJob>(`/training/jobs/${id}/cancel`, { method: "POST" }),
 
@@ -165,11 +195,19 @@ export const api = {
     }),
   analyzeDatasetQuality: (datasetId: string) =>
     request<{ task_id: string | null }>(`/datasets/${datasetId}/analyze-quality`, { method: "POST" }),
-  getReviewQueue: (params: { project_id: string; dataset_id?: string; flag_type?: string; limit?: number; offset?: number }) => {
+  getReviewQueue: (params: {
+    project_id: string;
+    dataset_id?: string;
+    flag_type?: string;
+    review_status?: "PENDING" | "APPROVED" | "REJECTED";
+    limit?: number;
+    offset?: number;
+  }) => {
     const query = new URLSearchParams();
     query.set("project_id", params.project_id);
     if (params.dataset_id) query.set("dataset_id", params.dataset_id);
     if (params.flag_type) query.set("flag_type", params.flag_type);
+    if (params.review_status) query.set("review_status", params.review_status);
     if (params.limit) query.set("limit", String(params.limit));
     if (params.offset) query.set("offset", String(params.offset));
     return request<ReviewQueuePage>(`/review/queue?${query.toString()}`);
@@ -180,6 +218,53 @@ export const api = {
   getErrorAnalysis: (datasetId: string) => request<ErrorAnalysis>(`/datasets/${datasetId}/error-analysis`),
   updateModelMetrics: (modelId: string, metrics: Record<string, number>) =>
     request<MLModel>(`/models/${modelId}/metrics`, { method: "PUT", body: JSON.stringify({ metrics }) }),
+
+  // --- Integrations (Settings page: Kaggle + Roboflow connect) ---
+  listIntegrations: () => request<IntegrationStatus[]>("/integrations"),
+  connectKaggle: (data: { username: string; key: string }) =>
+    request<IntegrationStatus>("/integrations/kaggle", { method: "POST", body: JSON.stringify(data) }),
+  disconnectKaggle: () => request<void>("/integrations/kaggle", { method: "DELETE" }),
+  connectRoboflow: (data: { api_key: string; default_workspace?: string }) =>
+    request<IntegrationStatus>("/integrations/roboflow", { method: "POST", body: JSON.stringify(data) }),
+  disconnectRoboflow: () => request<void>("/integrations/roboflow", { method: "DELETE" }),
+  exportVersionToRoboflow: (versionId: string, data: { workspace: string; project: string }) =>
+    request<RoboflowJob>(`/versions/${versionId}/export/roboflow`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  importRoboflowDataset: (
+    projectId: string,
+    // `version: undefined` pulls the project's raw uploaded images instead
+    // of a generated Version — see RoboflowImportSection in DatasetsPage.
+    // `unannotated_only` only matters for that raw path.
+    data: {
+      workspace: string;
+      project: string;
+      version?: number;
+      dataset_name?: string;
+      unannotated_only?: boolean;
+    },
+  ) => request<RoboflowJob>(`/projects/${projectId}/import/roboflow`, { method: "POST", body: JSON.stringify(data) }),
+  listRoboflowProjects: (workspace?: string) =>
+    request<RoboflowProjectSummary[]>(
+      `/integrations/roboflow/projects${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ""}`,
+    ),
+  listRoboflowVersions: (workspace: string, project: string) =>
+    request<RoboflowVersionSummary[]>(
+      `/integrations/roboflow/projects/${encodeURIComponent(workspace)}/${encodeURIComponent(project)}/versions`,
+    ),
+  getRoboflowJob: (id: string) => request<RoboflowJob>(`/integrations/roboflow/jobs/${id}`),
+  // Lets a page reattach to a job it kicked off before a navigation away
+  // or a reload dropped its local state — see RoboflowImportSection /
+  // RoboflowExportControls, which poll this on mount.
+  getLatestRoboflowJob: (params: { kind: "IMPORT"; project_id: string } | { kind: "EXPORT"; dataset_version_id: string }) => {
+    const query = new URLSearchParams({ kind: params.kind });
+    if ("project_id" in params) query.set("project_id", params.project_id);
+    if ("dataset_version_id" in params) query.set("dataset_version_id", params.dataset_version_id);
+    return request<RoboflowJob | null>(`/integrations/roboflow/jobs/latest?${query.toString()}`);
+  },
+  cancelRoboflowJob: (id: string) =>
+    request<RoboflowJob>(`/integrations/roboflow/jobs/${id}/cancel`, { method: "POST" }),
 };
 
 export { ApiError };

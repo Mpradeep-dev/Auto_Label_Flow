@@ -45,15 +45,19 @@ class _FakeTrainer:
 
 
 class _FakeYOLO:
+    last_instance: "_FakeYOLO | None" = None
+
     def __init__(self, weights_path: str) -> None:
         self.weights_path = weights_path
         self._callback = None
+        _FakeYOLO.last_instance = self
 
     def add_callback(self, event: str, fn) -> None:
         if event == "on_fit_epoch_end":
             self._callback = fn
 
     def train(self, **kwargs) -> None:
+        self.last_kwargs = kwargs
         for e in range(kwargs["epochs"]):
             trainer = _FakeTrainer(e)
             if self._callback:
@@ -144,6 +148,39 @@ def test_training_job_completes_and_registers_new_model(
     assert any(j["id"] == job["id"] for j in jobs_for_project)
 
 
+def test_training_job_extra_args_reach_yolo_train_and_typed_fields_win(
+    real_client: TestClient, version_and_base_model
+) -> None:
+    """`extra_args` should reach the real `YOLO.train()` call as extra
+    kwargs, but must never override the job's own typed fields — a
+    `patience` the user typed in should show up, an `epochs` they also
+    (accidentally or not) put in `extra_args` must not beat the job's real
+    `epochs=3`."""
+    _, version_id, base_model_id = version_and_base_model
+
+    resp = real_client.post(
+        "/api/v1/training/jobs",
+        json={
+            "dataset_version_id": version_id,
+            "base_model_id": base_model_id,
+            "epochs": 3,
+            "batch_size": 2,
+            "extra_args": {"patience": 20, "optimizer": "AdamW", "dropout": 0.1, "epochs": 999},
+        },
+    )
+    assert resp.status_code == 202, resp.text
+    job = resp.json()
+    assert job["status"] == "COMPLETED"
+    assert job["extra_args"] == {"patience": 20, "optimizer": "AdamW", "dropout": 0.1, "epochs": 999}
+
+    used_kwargs = _FakeYOLO.last_instance.last_kwargs
+    assert used_kwargs["patience"] == 20
+    assert used_kwargs["optimizer"] == "AdamW"
+    assert used_kwargs["dropout"] == 0.1
+    assert used_kwargs["epochs"] == 3  # the job's real epochs, not extra_args' 999
+    assert job["current_epoch"] == 3  # confirms it actually trained for 3, not 999
+
+
 def test_training_job_missing_version_404(real_client: TestClient, version_and_base_model) -> None:
     _, _, base_model_id = version_and_base_model
     resp = real_client.post(
@@ -216,3 +253,26 @@ def test_cancel_flag_checked_at_epoch_boundary_stops_early(
     assert job.status == TrainingJobStatus.CANCELLED
     assert job.current_epoch == 1  # stopped after the first epoch's boundary check, not all 5
     assert job.result_model_id is None  # cancelled runs must not register a model
+
+
+def test_deleting_project_cascades_through_a_completed_training_job(
+    real_client: TestClient, version_and_base_model
+) -> None:
+    """Regression: deleting a project whose dataset version has a training
+    job on it used to 500 with a ForeignKeyViolation — `training_jobs
+    .dataset_version_id` was ON DELETE RESTRICT, which blocked the
+    project -> dataset -> dataset_version cascade this endpoint promises
+    ('permanently deletes everything inside it', per the frontend's
+    delete-confirmation copy). See training_job.py for the fix."""
+    project_id, version_id, base_model_id = version_and_base_model
+
+    job_resp = real_client.post(
+        "/api/v1/training/jobs",
+        json={"dataset_version_id": version_id, "base_model_id": base_model_id, "epochs": 1, "batch_size": 2},
+    )
+    assert job_resp.status_code == 202, job_resp.text
+    assert job_resp.json()["status"] == "COMPLETED"
+
+    resp = real_client.delete(f"/api/v1/projects/{project_id}")
+    assert resp.status_code == 204, resp.text
+    assert real_client.get(f"/api/v1/projects/{project_id}").status_code == 404

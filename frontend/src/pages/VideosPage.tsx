@@ -1,9 +1,17 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
 import { SectionLabel } from "@/components/layout/SectionLabel";
 import type { VideoRecord } from "@/types";
+
+// Same reasoning as AutoAnnotationPage's selectionStorageKey: the dataset
+// dropdown here is plain form state with nothing else to restore it from —
+// without persisting it, navigating away and back reset it to empty and the
+// whole video list (including anything still extracting) appeared to vanish.
+function selectionStorageKey(projectId: string): string {
+  return `videos-selection:${projectId}`;
+}
 
 const STATUS_LABEL: Record<string, string> = {
   UPLOADED: "Uploaded",
@@ -55,8 +63,24 @@ export function VideosPage() {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [interval, setInterval_] = useState(5);
   const [uploading, setUploading] = useState(false);
-  const [datasetId, setDatasetId] = useState("");
+  const [datasetId, setDatasetId] = useState(() => {
+    if (!projectId) return "";
+    try {
+      return localStorage.getItem(selectionStorageKey(projectId)) ?? "";
+    } catch {
+      return "";
+    }
+  });
   const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (!projectId) return;
+    try {
+      localStorage.setItem(selectionStorageKey(projectId), datasetId);
+    } catch {
+      /* private-browsing or storage-disabled — losing the remembered selection is harmless */
+    }
+  }, [projectId, datasetId]);
 
   const datasetsQuery = useQuery({
     queryKey: ["datasets", projectId],

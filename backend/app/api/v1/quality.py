@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.image import Image
+from app.models.image import Image, ImageReviewStatus
 from app.models.project import Project
 from app.models.quality import AnnotationFlag, FlagType
 from app.schemas.quality import (
@@ -81,13 +81,17 @@ def get_review_queue(
     project_id: uuid.UUID = Query(...),
     dataset_id: uuid.UUID | None = None,
     flag_type: FlagType | None = None,
+    review_status: ImageReviewStatus | None = None,
     limit: int = 50,
     offset: int = 0,
     db: Session = Depends(get_db),
 ) -> ReviewQueuePage:
     """Prioritized by difficulty_score DESC (nulls last — an image with no
     computed score yet isn't assumed easy, it's just unranked, so it sorts
-    after ranked images but images are never hidden for lacking a score)."""
+    after ranked images but images are never hidden for lacking a score),
+    except for the APPROVED bucket, which has nothing left to prioritize by
+    difficulty — most-recently-approved-first there instead, so the queue
+    reads as "here's what a human just cleared," not a frozen snapshot."""
     limit = max(1, min(limit, 200))
 
     query = select(Image).where(Image.project_id == project_id)
@@ -96,10 +100,16 @@ def get_review_queue(
     if flag_type is not None:
         flagged_image_ids = select(AnnotationFlag.image_id).where(AnnotationFlag.flag_type == flag_type)
         query = query.where(Image.id.in_(flagged_image_ids))
+    if review_status is not None:
+        query = query.where(Image.review_status == review_status)
 
     total = db.scalar(select(func.count()).select_from(query.subquery())) or 0
 
-    ordered = query.order_by(Image.difficulty_score.desc().nullslast(), Image.created_at.asc()).limit(limit).offset(offset)
+    if review_status == ImageReviewStatus.APPROVED:
+        ordered = query.order_by(Image.updated_at.desc())
+    else:
+        ordered = query.order_by(Image.difficulty_score.desc().nullslast(), Image.created_at.asc())
+    ordered = ordered.limit(limit).offset(offset)
     images = list(db.scalars(ordered))
 
     items = []

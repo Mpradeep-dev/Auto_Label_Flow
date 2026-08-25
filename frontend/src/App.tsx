@@ -12,7 +12,8 @@ import { ExportPage } from "@/pages/ExportPage";
 import { TrainingRunsPage } from "@/pages/TrainingRunsPage";
 import { ReviewQueuePage } from "@/pages/ReviewQueuePage";
 import { DatasetStatisticsPage } from "@/pages/DatasetStatisticsPage";
-import { PlaceholderPage } from "@/pages/PlaceholderPage";
+import { SettingsPage } from "@/pages/SettingsPage";
+import { IntegrationsPage } from "@/pages/IntegrationsPage";
 
 export default function App() {
   return (
@@ -20,6 +21,7 @@ export default function App() {
       <Route element={<AppShell />}>
         <Route path="/" element={<Navigate to="/projects" replace />} />
         <Route path="/projects" element={<ProjectsPage />} />
+        <Route path="/settings" element={<IntegrationsPage />} />
         <Route path="/projects/:projectId" element={<PipelineHome />} />
         <Route path="/projects/:projectId/datasets" element={<DatasetsPage />} />
         <Route
@@ -34,20 +36,14 @@ export default function App() {
           path="/projects/:projectId/datasets/:datasetId/statistics"
           element={<DatasetStatisticsPage />}
         />
-        <Route
-          path="/projects/:projectId/images"
-          element={<PlaceholderPage title="Images" phase="Open a dataset from Dataset → pick one to browse its images." />}
-        />
+        <Route path="/projects/:projectId/images" element={<ImagesPage />} />
         <Route path="/projects/:projectId/videos" element={<VideosPage />} />
         <Route path="/projects/:projectId/auto-annotation" element={<AutoAnnotationPage />} />
         <Route path="/projects/:projectId/review" element={<ReviewQueuePage />} />
         <Route path="/projects/:projectId/models" element={<ModelsPage />} />
         <Route path="/projects/:projectId/training" element={<TrainingRunsPage />} />
         <Route path="/projects/:projectId/export" element={<ExportPage />} />
-        <Route
-          path="/projects/:projectId/settings"
-          element={<PlaceholderPage title="Settings" phase="Project settings (class config, quality rules) roll out alongside the phases that need them." />}
-        />
+        <Route path="/projects/:projectId/settings" element={<SettingsPage />} />
         <Route path="*" element={<Navigate to="/projects" replace />} />
       </Route>
     </Routes>

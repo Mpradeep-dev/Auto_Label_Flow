@@ -6,6 +6,7 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -41,6 +42,20 @@ def create_inference_job(payload: InferenceJobCreate, db: Session = Depends(get_
     run_inference_batch.delay(str(job.id))
     db.refresh(job)  # eager/test mode: already terminal by the time we return
     return job
+
+
+@router.get("/latest", response_model=InferenceJobRead | None)
+def get_latest_inference_job(dataset_id: uuid.UUID, db: Session = Depends(get_db)) -> InferenceJob | None:
+    """Lets the Auto Annotation page reattach to a job it kicked off
+    before a navigation away (or a reload) wiped its local state —
+    otherwise a still-running batch just disappears from the UI even
+    though it keeps going server-side. Must be registered before
+    `/{job_id}` — Starlette matches routes in registration order and
+    `{job_id}: uuid.UUID` would otherwise swallow "latest" first and 422
+    trying to parse it as a UUID (see the identical Roboflow-jobs gotcha)."""
+    return db.scalar(
+        select(InferenceJob).where(InferenceJob.dataset_id == dataset_id).order_by(InferenceJob.created_at.desc()).limit(1)
+    )
 
 
 @router.get("/{job_id}", response_model=InferenceJobRead)

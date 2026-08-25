@@ -143,7 +143,14 @@ def train_local_model(self, training_job_id: str) -> None:
         except ImportError:
             device = "cpu"
 
-        model.train(
+        # `extra_args` (any other Ultralytics train() kwarg — optimizer,
+        # patience, dropout, augmentation knobs, ...) is merged in first so
+        # every typed field below always wins on conflict: the job row's
+        # own epochs/imgsz/batch/device/lr0 and the paths that make this
+        # run findable/resumable must never be silently overridden by
+        # whatever someone typed into the advanced-params box.
+        train_kwargs = dict(job.extra_args or {})
+        train_kwargs.update(
             data=str(data_yaml_path),
             epochs=job.epochs,
             imgsz=job.image_size,
@@ -155,6 +162,7 @@ def train_local_model(self, training_job_id: str) -> None:
             exist_ok=True,
             verbose=False,
         )
+        model.train(**train_kwargs)
 
         db.refresh(job)
         if job.status == TrainingJobStatus.CANCELLED:

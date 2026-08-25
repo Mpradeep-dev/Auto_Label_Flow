@@ -21,9 +21,11 @@ from app.models.dataset_version import (  # noqa: F401
 )
 from app.models.image import Image, ImageReviewStatus, ImageSourceType  # noqa: F401
 from app.models.inference_job import InferenceJob, JobStatus  # noqa: F401
+from app.models.integration import Integration, IntegrationProvider  # noqa: F401
 from app.models.ml_model import MLModel, ModelKind  # noqa: F401
 from app.models.project import Project  # noqa: F401
 from app.models.quality import AnnotationFlag, FlagResolution, FlagType, ImagePoseContext  # noqa: F401
+from app.models.roboflow_job import RoboflowJob, RoboflowJobKind, RoboflowJobStatus  # noqa: F401
 from app.models.training_job import (  # noqa: F401
     TrainingJob,
     TrainingJobEpoch,
@@ -53,6 +55,8 @@ __all__ = [
     "ErrorReason",
     "InferenceJob",
     "JobStatus",
+    "Integration",
+    "IntegrationProvider",
     "DatasetVersion",
     "DatasetVersionStatus",
     "DatasetVersionImage",
@@ -66,4 +70,7 @@ __all__ = [
     "FlagType",
     "FlagResolution",
     "ImagePoseContext",
+    "RoboflowJob",
+    "RoboflowJobKind",
+    "RoboflowJobStatus",
 ]

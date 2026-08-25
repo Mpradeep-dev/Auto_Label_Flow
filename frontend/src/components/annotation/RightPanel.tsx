@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Annotation, AnnotationFlag, ClassEntry } from "@/types";
 import { classColor } from "@/config/classColors";
 
@@ -10,6 +11,95 @@ interface Props {
   onDelete: () => void;
   onDuplicate: () => void;
   onResolveFlag: (flagId: string, resolution: "CONFIRMED_FP" | "CONFIRMED_OK") => void;
+  // The "active label" for the NEXT box you draw — separate from
+  // `annotation.class_id` above, which relabels a box that already
+  // exists. Same split CVAT/Roboflow make: picking here doesn't touch
+  // whatever's currently selected.
+  drawClassId: number;
+  onSelectDrawClass: (classId: number) => void;
+  onAddClass: (name: string) => void;
+  addingClass: boolean;
+}
+
+function ClassPicker({
+  classEntries,
+  drawClassId,
+  onSelectDrawClass,
+  onAddClass,
+  addingClass,
+}: {
+  classEntries: ClassEntry[];
+  drawClassId: number;
+  onSelectDrawClass: (classId: number) => void;
+  onAddClass: (name: string) => void;
+  addingClass: boolean;
+}) {
+  const [adding, setAdding] = useState(false);
+  const [newName, setNewName] = useState("");
+
+  function submit() {
+    const name = newName.trim();
+    if (!name) return;
+    onAddClass(name);
+    setNewName("");
+    setAdding(false);
+  }
+
+  return (
+    <div className="mb-6 border-b-2 border-ink pb-6">
+      <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/50">
+        Drawing as — next box uses this class
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {classEntries.map((c, i) => (
+          <button
+            key={c.id}
+            onClick={() => onSelectDrawClass(c.id)}
+            className={`flex items-center gap-1.5 border-2 px-2 py-1 text-xs font-semibold uppercase tracking-wide transition-colors duration-150 ${
+              c.id === drawClassId ? "border-ink bg-ink text-paper" : "border-ink/20 hover:border-ink"
+            }`}
+          >
+            <span className="h-2 w-2 shrink-0" style={{ backgroundColor: classColor(i) }} />
+            {c.name}
+            {i < 9 && <span className="text-[9px] font-normal opacity-50">{i + 1}</span>}
+          </button>
+        ))}
+        {classEntries.length === 0 && (
+          <p className="text-xs text-ink/50">No classes yet — add one below to start drawing.</p>
+        )}
+      </div>
+
+      {adding ? (
+        <div className="mt-2 flex gap-1.5">
+          <input
+            autoFocus
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") submit();
+              if (e.key === "Escape") setAdding(false);
+            }}
+            placeholder="NEW CLASS NAME"
+            className="min-w-0 flex-1 border-2 border-ink bg-paper px-2 py-1 text-xs outline-none focus:border-accent"
+          />
+          <button
+            onClick={submit}
+            disabled={!newName.trim() || addingClass}
+            className="border-2 border-ink bg-ink px-3 text-xs font-bold uppercase tracking-widest text-paper disabled:opacity-40"
+          >
+            {addingClass ? "…" : "Add"}
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={() => setAdding(true)}
+          className="mt-2 text-[10px] font-bold uppercase tracking-widest text-ink/50 underline decoration-1 underline-offset-2 hover:text-accent"
+        >
+          + Add new class
+        </button>
+      )}
+    </div>
+  );
 }
 
 const SOURCE_LABEL: Record<string, string> = { AUTO: "Auto", HUMAN: "Human", CORRECTED: "Corrected" };
@@ -50,10 +140,21 @@ export function RightPanel({
   onDelete,
   onDuplicate,
   onResolveFlag,
+  drawClassId,
+  onSelectDrawClass,
+  onAddClass,
+  addingClass,
 }: Props) {
   if (!annotation) {
     return (
-      <aside className="flex h-full w-72 shrink-0 flex-col border-l-4 border-ink bg-paper p-6">
+      <aside className="flex h-full w-72 shrink-0 flex-col overflow-y-auto border-l-4 border-ink bg-paper p-6">
+        <ClassPicker
+          classEntries={classEntries}
+          drawClassId={drawClassId}
+          onSelectDrawClass={onSelectDrawClass}
+          onAddClass={onAddClass}
+          addingClass={addingClass}
+        />
         <p className="text-xs font-bold uppercase tracking-widest text-ink/40">
           No annotation selected
         </p>
@@ -66,6 +167,14 @@ export function RightPanel({
 
   return (
     <aside className="flex h-full w-72 shrink-0 flex-col overflow-y-auto border-l-4 border-ink bg-paper p-6">
+      <ClassPicker
+        classEntries={classEntries}
+        drawClassId={drawClassId}
+        onSelectDrawClass={onSelectDrawClass}
+        onAddClass={onAddClass}
+        addingClass={addingClass}
+      />
+
       <div className="mb-4 flex items-center gap-2">
         <span className="h-3 w-3 shrink-0" style={{ backgroundColor: color }} />
         <h3 className="text-sm font-bold uppercase tracking-widest">Selected</h3>

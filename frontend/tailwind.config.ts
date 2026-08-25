@@ -15,6 +15,7 @@ export default {
         ink: "#000000",
         muted: "#F2F2F2",
         accent: "#FF3000", // "Swiss red" — reserved exclusively for alerts/flags, never a class colour
+        orange: "#FF4500",
         plate: "#000000", // the black image-well ground (see DESIGN.md "Ground")
       },
       fontFamily: {
