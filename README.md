@@ -15,6 +15,10 @@ cone), which the platform's quality-analysis layer is designed to catch —
 see `frontend/DESIGN.md` and the code comments in
 `backend/app/services/quality/` for the specifics.
 
+**New to the app, or lost in the sidebar?** [`docs/WORKFLOW.md`](docs/WORKFLOW.md)
+walks through the six-stage loop, the sidebar layout, and a "why is this
+blocked" troubleshooting table — the same content is also in-app at `/help`.
+
 ## Stack
 
 - **Backend**: FastAPI, Pydantic v2, SQLAlchemy 2.x, PostgreSQL, Alembic, Celery + Redis, Ultralytics YOLO

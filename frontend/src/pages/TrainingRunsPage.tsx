@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
 import { SectionLabel } from "@/components/layout/SectionLabel";
+import { EmptyState } from "@/components/layout/EmptyState";
 import type { TrainingJob, TrainingProviderName } from "@/types";
 
 const STATUS_STYLE: Record<string, string> = {
@@ -136,9 +137,13 @@ function JobDetail({ job }: { job: TrainingJob }) {
 export function TrainingRunsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const queryClient = useQueryClient();
+  // Arrives here from ExportPage's "Train with this version →" CTA, which
+  // links with these two params set — pre-filling the form so the export →
+  // train handoff is one click instead of re-picking what was just versioned.
+  const [searchParams] = useSearchParams();
 
-  const [datasetId, setDatasetId] = useState("");
-  const [versionId, setVersionId] = useState("");
+  const [datasetId, setDatasetId] = useState(() => searchParams.get("datasetId") ?? "");
+  const [versionId, setVersionId] = useState(() => searchParams.get("versionId") ?? "");
   const [baseModelId, setBaseModelId] = useState("");
   const [provider, setProvider] = useState<TrainingProviderName>("LOCAL");
   const [epochs, setEpochs] = useState(100);
@@ -175,6 +180,19 @@ export function TrainingRunsPage() {
     enabled: !!projectId,
     refetchInterval: 5000,
   });
+  // Project-wide "does any dataset have a version" check for the
+  // prerequisites checklist below — mirrors the same aggregation on
+  // PipelineHome, since versions live per-dataset rather than per-project.
+  const anyVersionQuery = useQuery({
+    queryKey: ["dataset-versions", projectId, datasetsQuery.data?.map((d) => d.id)],
+    queryFn: async () => {
+      const datasets = datasetsQuery.data ?? [];
+      const all = await Promise.all(datasets.map((d) => api.listDatasetVersions(d.id)));
+      return all.flat();
+    },
+    enabled: !!datasetsQuery.data,
+  });
+  const hasAnyVersion = (anyVersionQuery.data?.length ?? 0) > 0;
 
   const createMutation = useMutation({
     mutationFn: () => {
@@ -242,6 +260,34 @@ export function TrainingRunsPage() {
             {gpu.vram_total_mb && ` · ${(gpu.vram_total_mb / 1024).toFixed(1)} GB VRAM`}
             {gpu.cuda_version && ` · CUDA ${gpu.cuda_version}`} · torch {gpu.torch_version}
           </p>
+        </div>
+      )}
+
+      {jobs.length === 0 && (
+        <div className="mb-8 max-w-3xl">
+          <EmptyState
+            title="Train a model on your annotated data"
+            description="Once these are ready, pick them below and start a run — local (RTX) or on Kaggle."
+          >
+            <ul className="w-full space-y-1.5 text-xs font-bold uppercase tracking-widest">
+              <li className={hasAnyVersion ? "text-ink" : "text-ink/40"}>
+                {hasAnyVersion ? "✓" : "○"} Dataset version created{" "}
+                {!hasAnyVersion && (
+                  <Link to={`/projects/${projectId}/export`} className="underline hover:text-accent">
+                    (create one on Export)
+                  </Link>
+                )}
+              </li>
+              <li className={detectorModels.length > 0 ? "text-ink" : "text-ink/40"}>
+                {detectorModels.length > 0 ? "✓" : "○"} Detector model registered{" "}
+                {detectorModels.length === 0 && (
+                  <Link to={`/projects/${projectId}/models`} className="underline hover:text-accent">
+                    (register one on Models)
+                  </Link>
+                )}
+              </li>
+            </ul>
+          </EmptyState>
         </div>
       )}
 

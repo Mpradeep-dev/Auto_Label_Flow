@@ -14,6 +14,7 @@ import { ReviewQueuePage } from "@/pages/ReviewQueuePage";
 import { DatasetStatisticsPage } from "@/pages/DatasetStatisticsPage";
 import { SettingsPage } from "@/pages/SettingsPage";
 import { IntegrationsPage } from "@/pages/IntegrationsPage";
+import { HelpPage } from "@/pages/HelpPage";
 
 export default function App() {
   return (
@@ -22,6 +23,7 @@ export default function App() {
         <Route path="/" element={<Navigate to="/projects" replace />} />
         <Route path="/projects" element={<ProjectsPage />} />
         <Route path="/settings" element={<IntegrationsPage />} />
+        <Route path="/help" element={<HelpPage />} />
         <Route path="/projects/:projectId" element={<PipelineHome />} />
         <Route path="/projects/:projectId/datasets" element={<DatasetsPage />} />
         <Route

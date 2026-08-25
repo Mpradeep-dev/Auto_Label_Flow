@@ -5,11 +5,8 @@ import { RoboflowJobProgress } from "@/components/integrations/RoboflowJobProgre
 import { RoboflowProjectSelect } from "@/components/integrations/RoboflowProjectSelect";
 import type { RoboflowJob } from "@/types";
 
-// Lives on Project Settings, not the Datasets page — a Roboflow project is
-// naturally a *project*-level data source (this project's external origin
-// for media), not something tied to any one dataset. Each run still
-// creates its own new Dataset underneath, same as before; only the entry
-// point moved.
+// Lives on the Datasets page, alongside the local-file import — each run
+// creates its own new Dataset underneath, same as any other import path.
 export function RoboflowImportSection({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient();
   const [workspace, setWorkspace] = useState("");
@@ -65,7 +62,7 @@ export function RoboflowImportSection({ projectId }: { projectId: string }) {
   const running = job != null && (job.status === "RUNNING" || job.status === "QUEUED");
 
   return (
-    <div className="max-w-xl border-2 border-ink p-6">
+    <div className="max-w-xl flex-1 border-2 border-ink p-6">
       <p className="mb-4 text-sm font-bold uppercase tracking-tight">Import from Roboflow</p>
       <div className="space-y-3">
         <RoboflowProjectSelect

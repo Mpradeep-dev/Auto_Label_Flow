@@ -3,7 +3,6 @@ import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "@/services/api";
 import { SectionLabel } from "@/components/layout/SectionLabel";
-import { RoboflowImportSection } from "@/components/integrations/RoboflowImportSection";
 import { classColor } from "@/config/classColors";
 
 function FieldError({ error }: { error: unknown }) {
@@ -171,17 +170,19 @@ export function SettingsPage() {
         Project settings
       </h1>
       <p className="mb-12 max-w-2xl text-sm text-ink/60">
-        Looking for Kaggle or Roboflow?{" "}
+        Looking for Kaggle or Roboflow account connections?{" "}
         <Link to="/settings" className="font-semibold underline decoration-1 underline-offset-2 hover:text-accent">
           Those are account-wide, under Settings →
+        </Link>{" "}
+        Importing a Roboflow project into this project now lives on the{" "}
+        <Link
+          to={`/projects/${projectId}/datasets`}
+          className="font-semibold underline decoration-1 underline-offset-2 hover:text-accent"
+        >
+          Datasets page →
         </Link>
       </p>
       <ProjectSection projectId={projectId} />
-
-      <section className="mt-12">
-        <SectionLabel index={2}>Import</SectionLabel>
-        <RoboflowImportSection projectId={projectId} />
-      </section>
     </div>
   );
 }

@@ -139,8 +139,14 @@ def test_auto_annotate_then_correct_moves_to_corrected(client: TestClient, image
         f"/api/v1/images/{image_id}/auto-annotate", json={"model_id": model["id"]}
     ).json()
     target = annotations[0]
+    # auto-annotate resolves "cone" against the project's (empty) class_config
+    # and registers it under whatever id comes next — pick a different one so
+    # this PUT is an actual class change, not a no-op that happens to match.
+    new_class_id = target["class_id"] + 1
 
-    corrected = client.put(f"/api/v1/annotations/{target['id']}", json={"class_id": 0, "class_name": "ball"}).json()
+    corrected = client.put(
+        f"/api/v1/annotations/{target['id']}", json={"class_id": new_class_id, "class_name": "ball"}
+    ).json()
     assert corrected["source"] == "CORRECTED"
     assert corrected["class_name"] == "ball"
 

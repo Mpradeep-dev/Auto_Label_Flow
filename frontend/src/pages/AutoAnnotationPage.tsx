@@ -1,9 +1,32 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
 import { SectionLabel } from "@/components/layout/SectionLabel";
-import type { InferenceJob, JobProgressEvent } from "@/types";
+import type { Dataset, InferenceJob, JobProgressEvent, MLModel } from "@/types";
+
+const STATUS_STYLE: Record<string, string> = {
+  QUEUED: "bg-muted text-ink/70",
+  RUNNING: "bg-ink text-paper",
+  COMPLETED: "bg-ink text-paper",
+  FAILED: "bg-accent text-paper",
+  CANCELLED: "bg-muted text-ink/50",
+};
+
+// Converts a finished/history job row into the same shape the live SSE
+// stream produces, so History can reuse the one progress-bar renderer
+// instead of a second display for "job I'm not currently following".
+function jobToProgress(job: InferenceJob): JobProgressEvent {
+  return {
+    current: job.processed_images,
+    total: job.total_images,
+    predictions: job.total_predictions,
+    fps: 0,
+    eta_s: null,
+    status: job.status,
+    error: job.error,
+  };
+}
 
 /**
  * Dispatches a real background job (Celery, `gpu` queue) and follows its
@@ -18,6 +41,83 @@ import type { InferenceJob, JobProgressEvent } from "@/types";
 // instead of requiring you to re-pick the same dataset first.
 function selectionStorageKey(projectId: string): string {
   return `auto-annotate-selection:${projectId}`;
+}
+
+// Project-scoped run history — independent of whichever job the page is
+// currently following (or not). Polls on its own timer so a job that
+// finished (or failed) while the user was on another page still shows up
+// here instead of just disappearing, which is what the single-dataset
+// /latest reattach above this component can't do on its own.
+function HistorySection({
+  projectId,
+  datasets,
+  models,
+  activeJobId,
+  onSelect,
+}: {
+  projectId: string;
+  datasets: Dataset[];
+  models: MLModel[];
+  activeJobId: string | null;
+  onSelect: (job: InferenceJob) => void;
+}) {
+  const queryClient = useQueryClient();
+  const jobsQuery = useQuery({
+    queryKey: ["inference-jobs", projectId],
+    queryFn: () => api.listInferenceJobs(projectId),
+    refetchInterval: 5000,
+  });
+
+  const cancelMutation = useMutation({
+    mutationFn: (id: string) => api.cancelInferenceJob(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["inference-jobs", projectId] }),
+  });
+
+  const jobs = jobsQuery.data ?? [];
+  if (jobs.length === 0) return null;
+
+  return (
+    <div className="mt-16 max-w-3xl">
+      <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/50">History</p>
+      <div className="border-t-2 border-ink">
+        {jobs.map((j) => {
+          const dataset = datasets.find((d) => d.id === j.dataset_id);
+          const model = models.find((m) => m.id === j.model_id);
+          const cancellable = j.status === "RUNNING" || j.status === "QUEUED";
+          return (
+            <div
+              key={j.id}
+              className={`flex items-center justify-between gap-4 border-b-2 border-ink py-3 ${
+                j.id === activeJobId ? "bg-muted" : ""
+              }`}
+            >
+              <button onClick={() => onSelect(j)} className="flex-1 text-left hover:text-accent">
+                <span className="text-xs font-semibold">
+                  {dataset?.name ?? "Unknown dataset"} · {model?.name ?? "Unknown model"}
+                </span>
+                <span className="tabular ml-2 text-[10px] text-ink/50">
+                  {j.processed_images}/{j.total_images} images · {j.total_predictions} predictions ·{" "}
+                  {new Date(j.created_at).toLocaleString()}
+                </span>
+              </button>
+              <span className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest ${STATUS_STYLE[j.status]}`}>
+                {j.status}
+              </span>
+              {cancellable && (
+                <button
+                  onClick={() => cancelMutation.mutate(j.id)}
+                  disabled={cancelMutation.isPending}
+                  className="border border-ink/30 px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:border-accent hover:text-accent disabled:opacity-40"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 export function AutoAnnotationPage() {
@@ -121,6 +221,19 @@ export function AutoAnnotationPage() {
           : { current: 0, total: 0, predictions: 0, fps: 0, eta_s: null, status: "FAILED", error: "Lost connection to the progress stream." },
       );
     };
+  }
+
+  // Clicking a History row: still-live jobs reattach over SSE like a normal
+  // follow; terminal ones just render their final DB state directly — no
+  // need to open a stream for a job that's already done.
+  function selectJob(job: InferenceJob) {
+    setJobId(job.id);
+    if (job.status === "RUNNING" || job.status === "QUEUED") {
+      followJob(job.id);
+    } else {
+      eventSourceRef.current?.close();
+      setProgress(jobToProgress(job));
+    }
   }
 
   async function run() {
@@ -240,8 +353,8 @@ export function AutoAnnotationPage() {
                   {" "}
                   · <span className="font-bold uppercase">{progress.status}</span>
                   {" · "}
-                  <Link to={`/projects/${projectId}/datasets`} className="underline">
-                    Review results →
+                  <Link to={`/projects/${projectId}/review?datasetId=${datasetId}`} className="underline">
+                    Start reviewing →
                   </Link>
                 </>
               )}
@@ -249,13 +362,21 @@ export function AutoAnnotationPage() {
             {progress.error && <p className="mt-1 text-xs text-accent">{progress.error}</p>}
           </div>
         )}
-        {jobId && (
+        {jobId && !finished && (
           <p className="text-[10px] uppercase tracking-widest text-ink/30">
             Job <span className="tabular">{jobId}</span> runs in the background — this page can be
             left safely.
           </p>
         )}
       </div>
+
+      <HistorySection
+        projectId={projectId}
+        datasets={datasetsQuery.data ?? []}
+        models={modelsQuery.data ?? []}
+        activeJobId={jobId}
+        onSelect={selectJob}
+      />
     </div>
   );
 }

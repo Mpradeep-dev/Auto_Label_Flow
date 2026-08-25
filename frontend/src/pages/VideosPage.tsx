@@ -20,14 +20,35 @@ const STATUS_LABEL: Record<string, string> = {
   FAILED: "Failed",
 };
 
-function VideoRow({ video, onExtract }: { video: VideoRecord; onExtract: (id: string) => void }) {
+function VideoRow({
+  video,
+  queued,
+  onExtract,
+  onDelete,
+  deleting,
+}: {
+  video: VideoRecord;
+  queued: boolean;
+  onExtract: (id: string) => void;
+  onDelete: (id: string) => void;
+  deleting: boolean;
+}) {
   const isExtracting = video.status === "EXTRACTING";
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+
+  // The dev worker runs with concurrency 1 (see celery_app.py), so a video
+  // only flips to EXTRACTING once it reaches the front of the queue — until
+  // then it's still UPLOADED in the DB even though it's already queued.
+  // `queued` (set locally the moment we ask for extraction) keeps polling
+  // and hides the trigger button for that whole wait, so "queued but not
+  // started yet" doesn't look identical to "never asked".
+  const stillWaiting = queued && video.status === "UPLOADED";
 
   const pollingQuery = useQuery({
     queryKey: ["video-poll", video.id],
     queryFn: () => api.listVideos(video.dataset_id).then((vs) => vs.find((v) => v.id === video.id) ?? video),
-    enabled: isExtracting,
-    refetchInterval: isExtracting ? 1500 : false,
+    enabled: isExtracting || stillWaiting,
+    refetchInterval: isExtracting || stillWaiting ? 1500 : false,
   });
   const current = pollingQuery.data ?? video;
 
@@ -42,10 +63,10 @@ function VideoRow({ video, onExtract }: { video: VideoRecord; onExtract: (id: st
       </div>
       <div className="flex items-center gap-4">
         <span className="px-2 py-1 text-[10px] font-bold uppercase tracking-widest bg-muted">
-          {STATUS_LABEL[current.status]}
+          {stillWaiting ? "Queued…" : STATUS_LABEL[current.status]}
           {current.status === "EXTRACTED" && ` · ${current.extracted_frame_count}`}
         </span>
-        {current.status === "UPLOADED" && (
+        {current.status === "UPLOADED" && !stillWaiting && (
           <button
             onClick={() => onExtract(current.id)}
             className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-paper"
@@ -53,16 +74,50 @@ function VideoRow({ video, onExtract }: { video: VideoRecord; onExtract: (id: st
             Extract frames
           </button>
         )}
+        {confirmingDelete ? (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => onDelete(current.id)}
+              disabled={deleting}
+              className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-ink hover:border-ink disabled:opacity-40"
+            >
+              {deleting ? "Removing…" : "Confirm"}
+            </button>
+            <button
+              onClick={() => setConfirmingDelete(false)}
+              disabled={deleting}
+              className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-muted"
+            >
+              Cancel
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setConfirmingDelete(true)}
+            className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest text-ink/60 hover:border-accent hover:text-accent"
+          >
+            Remove
+          </button>
+        )}
       </div>
     </div>
   );
 }
 
+const VIDEO_EXTENSIONS = [".mp4", ".mov", ".avi", ".mkv"];
+
+function isVideoFile(file: File): boolean {
+  const name = file.name.toLowerCase();
+  return VIDEO_EXTENSIONS.some((ext) => name.endsWith(ext));
+}
+
 export function VideosPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const [interval, setInterval_] = useState(5);
   const [uploading, setUploading] = useState(false);
+  const [folderProgress, setFolderProgress] = useState<{ done: number; total: number } | null>(null);
   const [datasetId, setDatasetId] = useState(() => {
     if (!projectId) return "";
     try {
@@ -94,8 +149,44 @@ export function VideosPage() {
     enabled: !!datasetId,
   });
 
+  // Videos we've already asked the backend to extract, kept locally because
+  // the DB row stays "UPLOADED" until the (concurrency-1) worker actually
+  // picks the task up — see VideoRow's `stillWaiting`. Without this, videos
+  // still sitting in the queue looked untouched and re-clicking "Extract
+  // all" re-enqueued them, so the same video got extracted twice.
+  const [queuedIds, setQueuedIds] = useState<Set<string>>(new Set());
+  function markQueued(ids: string[]) {
+    setQueuedIds((prev) => new Set([...prev, ...ids]));
+  }
+
+  const uploadedCount = (videosQuery.data ?? []).filter(
+    (v) => v.status === "UPLOADED" && !queuedIds.has(v.id),
+  ).length;
+
   const extractMutation = useMutation({
     mutationFn: (videoId: string) => api.extractFrames(videoId, { interval }),
+    onSuccess: (_data, videoId) => {
+      markQueued([videoId]);
+      queryClient.invalidateQueries({ queryKey: ["videos", datasetId] });
+    },
+  });
+
+  // Kicks off extraction for every not-yet-queued video sequentially —
+  // extract-frames just enqueues a worker task, so this returns as fast as
+  // the requests round-trip and the rows then poll their own progress.
+  const extractAllMutation = useMutation({
+    mutationFn: async () => {
+      const targets = (videosQuery.data ?? []).filter((v) => v.status === "UPLOADED" && !queuedIds.has(v.id));
+      for (const v of targets) {
+        await api.extractFrames(v.id, { interval });
+        markQueued([v.id]);
+      }
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["videos", datasetId] }),
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (videoId: string) => api.deleteVideo(videoId),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["videos", datasetId] }),
   });
 
@@ -107,6 +198,27 @@ export function VideosPage() {
       queryClient.invalidateQueries({ queryKey: ["videos", datasetId] });
     } finally {
       setUploading(false);
+    }
+  }
+
+  // Browsers hand a folder pick over as a flat FileList (no real "upload a
+  // directory" request exists), so we filter it down to video files and
+  // upload them one at a time through the same single-file endpoint,
+  // invalidating once at the end rather than after every file.
+  async function handleFolder(fileList: FileList | null) {
+    if (!fileList || !datasetId) return;
+    const files = Array.from(fileList).filter(isVideoFile);
+    if (files.length === 0) return;
+
+    setFolderProgress({ done: 0, total: files.length });
+    try {
+      for (const file of files) {
+        await api.uploadVideo(datasetId, file);
+        setFolderProgress((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
+      }
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ["videos", datasetId] });
+      setFolderProgress(null);
     }
   }
 
@@ -160,6 +272,32 @@ export function VideosPage() {
           >
             {uploading ? "Uploading…" : "Upload video"}
           </button>
+          <input
+            ref={folderInputRef}
+            type="file"
+            multiple
+            {...({ webkitdirectory: "", directory: "" } as Record<string, string>)}
+            className="hidden"
+            onChange={(e) => {
+              const { files } = e.target;
+              handleFolder(files);
+              e.target.value = "";
+            }}
+          />
+          <button
+            onClick={() => folderInputRef.current?.click()}
+            disabled={!!folderProgress || !datasetId}
+            className="border-2 border-ink px-6 py-3 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-paper disabled:opacity-40"
+          >
+            {folderProgress ? `Uploading ${folderProgress.done}/${folderProgress.total}…` : "Upload folder"}
+          </button>
+          <button
+            onClick={() => extractAllMutation.mutate()}
+            disabled={extractAllMutation.isPending || !uploadedCount}
+            className="border-2 border-ink px-6 py-3 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-paper disabled:opacity-40"
+          >
+            {extractAllMutation.isPending ? "Extracting…" : `Extract all${uploadedCount ? ` (${uploadedCount})` : ""}`}
+          </button>
         </div>
       </div>
 
@@ -167,7 +305,14 @@ export function VideosPage() {
 
       <div className="max-w-4xl border-t-2 border-ink">
         {(videosQuery.data ?? []).map((video) => (
-          <VideoRow key={video.id} video={video} onExtract={(id) => extractMutation.mutate(id)} />
+          <VideoRow
+            key={video.id}
+            video={video}
+            queued={queuedIds.has(video.id)}
+            onExtract={(id) => extractMutation.mutate(id)}
+            onDelete={(id) => deleteMutation.mutate(id)}
+            deleting={deleteMutation.isPending && deleteMutation.variables === video.id}
+          />
         ))}
         {videosQuery.data?.length === 0 && (
           <p className="py-8 text-sm text-ink/50">No videos yet — upload one to get started.</p>

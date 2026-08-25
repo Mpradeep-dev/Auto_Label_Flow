@@ -9,10 +9,16 @@ process; see PLAN "Jobs: Celery + Redis" for why this matters for the
 """
 from __future__ import annotations
 
+import shutil
 import uuid
+from pathlib import Path
+from urllib.parse import urlsplit
 
+import httpx
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
+from app.core.slugify import slugify
 from app.models.ml_model import MLModel, ModelKind
 from app.services.inference.detector import DetectionModel, ModelLoadError, PoseModel
 from app.services.inference.ultralytics_adapter import UltralyticsDetectionModel, UltralyticsPoseModel
@@ -60,6 +66,115 @@ def register_model(
     db.commit()
     db.refresh(model)
     return model
+
+
+def _download_weights(url: str, name: str) -> Path:
+    """Stream `url` onto disk under MODELS_DIR/pt, returning the local path.
+    Runs before any DB row exists, so a failed/invalid download never
+    registers anything — see register_model_from_url."""
+    scheme = urlsplit(url).scheme
+    if scheme not in ("http", "https"):
+        raise ModelLoadError(f"Unsupported URL scheme {scheme!r} — only http/https links are allowed")
+
+    suffix = Path(urlsplit(url).path).suffix or ".pt"
+    dest_dir = settings.MODELS_DIR / "pt"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{slugify(name)}-{uuid.uuid4().hex[:8]}{suffix}"
+
+    try:
+        with httpx.stream("GET", url, follow_redirects=True, timeout=300.0) as response:
+            response.raise_for_status()
+            with dest.open("wb") as f:
+                for chunk in response.iter_bytes(chunk_size=1024 * 1024):
+                    f.write(chunk)
+    except httpx.HTTPError as exc:
+        dest.unlink(missing_ok=True)
+        raise ModelLoadError(f"Failed to download weights from {url}: {exc}") from exc
+
+    return dest
+
+
+def register_model_from_url(
+    db: Session,
+    *,
+    name: str,
+    url: str,
+    kind: ModelKind,
+    version: str = "v1",
+    framework: str = "ultralytics",
+) -> MLModel:
+    """Downloads `url` into ARTIFACTS_DIR then registers it exactly like
+    register_model. Deletes the downloaded file if it turns out not to be
+    loadable weights, so a bad link never leaves an orphaned file behind."""
+    weights_path = _download_weights(url, name)
+    try:
+        return register_model(db, name=name, weights_path=str(weights_path), kind=kind, version=version, framework=framework)
+    except ModelLoadError:
+        weights_path.unlink(missing_ok=True)
+        raise
+
+
+def _place_weights_file(temp_path: Path, name: str, suffix: str) -> Path:
+    """Move an already-streamed-to-disk temp file (see
+    core/security.stream_upload_to_temp) into MODELS_DIR/pt under a
+    collision-proof name."""
+    dest_dir = settings.MODELS_DIR / "pt"
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    dest = dest_dir / f"{slugify(name)}-{uuid.uuid4().hex[:8]}{suffix}"
+    shutil.move(str(temp_path), dest)
+    return dest
+
+
+def register_model_from_upload(
+    db: Session,
+    *,
+    name: str,
+    temp_path: Path,
+    suffix: str,
+    kind: ModelKind,
+    version: str = "v1",
+    framework: str = "ultralytics",
+) -> MLModel:
+    """Browser-upload counterpart to register_model_from_url: places a
+    weights file the user picked from their own machine into ARTIFACTS_DIR,
+    then registers it exactly like register_model."""
+    weights_path = _place_weights_file(temp_path, name, suffix)
+    try:
+        return register_model(db, name=name, weights_path=str(weights_path), kind=kind, version=version, framework=framework)
+    except ModelLoadError:
+        weights_path.unlink(missing_ok=True)
+        raise
+
+
+def rename_model(db: Session, model: MLModel, name: str) -> MLModel:
+    model.name = name
+    db.commit()
+    db.refresh(model)
+    return model
+
+
+def evict_model_cache(model_id: uuid.UUID) -> None:
+    key = str(model_id)
+    _detection_cache.pop(key, None)
+    _pose_cache.pop(key, None)
+
+
+def delete_model(db: Session, model: MLModel) -> None:
+    evict_model_cache(model.id)
+
+    # Only remove the file if it's a weights file this app manages (under
+    # ARTIFACTS_DIR) — never delete something a manually-entered path might
+    # point at outside that tree.
+    weights_path = Path(model.weights_path)
+    try:
+        weights_path.relative_to(settings.ARTIFACTS_DIR)
+    except ValueError:
+        pass
+    else:
+        weights_path.unlink(missing_ok=True)
+
+    db.delete(model)
+    db.commit()
 
 
 def get_detection_model(db: Session, model_id: uuid.UUID) -> DetectionModel:

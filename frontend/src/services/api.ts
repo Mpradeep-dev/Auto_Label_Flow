@@ -76,6 +76,23 @@ export const api = {
   // --- Images ---
   listImages: (datasetId: string, limit = 50, offset = 0) =>
     request<ImageListPage>(`/datasets/${datasetId}/images?limit=${limit}&offset=${offset}`),
+  // The backend caps a single page at 200 regardless of the limit
+  // requested — a dataset with more images than that (video frame
+  // extraction routinely produces this) needs every page merged for
+  // callers that require the complete ordered list, not one page of it
+  // (AnnotatePage's prev/next navigation and filmstrip; ImagesPage's own
+  // paginated gallery uses listImages directly instead — it only ever
+  // needs one page at a time).
+  listAllImages: async (datasetId: string): Promise<AnnotationImage[]> => {
+    const pageSize = 200;
+    const first = await request<ImageListPage>(`/datasets/${datasetId}/images?limit=${pageSize}&offset=0`);
+    const items = [...first.items];
+    for (let offset = pageSize; offset < first.total; offset += pageSize) {
+      const page = await request<ImageListPage>(`/datasets/${datasetId}/images?limit=${pageSize}&offset=${offset}`);
+      items.push(...page.items);
+    }
+    return items;
+  },
   getImage: (id: string) => request<AnnotationImage>(`/images/${id}`),
   uploadImage: (datasetId: string, file: File) => {
     const form = new FormData();
@@ -118,6 +135,19 @@ export const api = {
   listModels: () => request<MLModel[]>("/models"),
   registerModel: (data: { name: string; weights_path: string; kind: "DETECTOR" | "POSE"; version?: string }) =>
     request<MLModel>("/models", { method: "POST", body: JSON.stringify(data) }),
+  downloadModel: (data: { name: string; url: string; kind: "DETECTOR" | "POSE"; version?: string }) =>
+    request<MLModel>("/models/download", { method: "POST", body: JSON.stringify(data) }),
+  uploadModel: (file: File, data: { name: string; kind: "DETECTOR" | "POSE"; version?: string }) => {
+    const form = new FormData();
+    form.append("file", file);
+    form.append("name", data.name);
+    form.append("kind", data.kind);
+    if (data.version) form.append("version", data.version);
+    return request<MLModel>("/models/upload", { method: "POST", body: form });
+  },
+  renameModel: (id: string, name: string) =>
+    request<MLModel>(`/models/${id}`, { method: "PATCH", body: JSON.stringify({ name }) }),
+  deleteModel: (id: string) => request<void>(`/models/${id}`, { method: "DELETE" }),
 
   // --- Videos ---
   listVideos: (datasetId: string) => request<VideoRecord[]>(`/datasets/${datasetId}/videos`),
@@ -128,11 +158,17 @@ export const api = {
   },
   extractFrames: (videoId: string, config: { interval?: number; fps?: number }) =>
     request<VideoRecord>(`/videos/${videoId}/extract-frames`, { method: "POST", body: JSON.stringify(config) }),
+  deleteVideo: (videoId: string) => request<void>(`/videos/${videoId}`, { method: "DELETE" }),
 
   // --- Inference jobs ---
   createInferenceJob: (data: { dataset_id: string; model_id: string; conf?: number; iou?: number }) =>
     request<InferenceJob>("/inference/jobs", { method: "POST", body: JSON.stringify(data) }),
   getInferenceJob: (id: string) => request<InferenceJob>(`/inference/jobs/${id}`),
+  // Full run history for a project — backs the Auto Annotation page's
+  // history list, so a job that finished while the user was elsewhere
+  // doesn't just disappear (unlike the single-dataset /latest reattach).
+  listInferenceJobs: (projectId: string) => request<InferenceJob[]>(`/inference/jobs?project_id=${projectId}`),
+  cancelInferenceJob: (id: string) => request<InferenceJob>(`/inference/jobs/${id}/cancel`, { method: "POST" }),
   // Lets the Auto Annotation page reattach to a job it kicked off before a
   // navigation away or a reload dropped its local state.
   getLatestInferenceJob: (datasetId: string) =>

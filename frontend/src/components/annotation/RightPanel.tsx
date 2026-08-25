@@ -4,6 +4,7 @@ import { classColor } from "@/config/classColors";
 
 interface Props {
   annotation: Annotation | null;
+  annotations: Annotation[];
   classEntries: ClassEntry[];
   flags: AnnotationFlag[];
   onChangeClass: (classId: number, className: string) => void;
@@ -19,6 +20,50 @@ interface Props {
   onSelectDrawClass: (classId: number) => void;
   onAddClass: (name: string) => void;
   addingClass: boolean;
+  pendingBox: boolean;
+  onCancelPending: () => void;
+  onDeleteImage: () => void;
+  deletingImage: boolean;
+  collapsed: boolean;
+  onToggleCollapse: () => void;
+}
+
+function DeleteImageSection({ onDeleteImage, deletingImage }: { onDeleteImage: () => void; deletingImage: boolean }) {
+  const [confirming, setConfirming] = useState(false);
+
+  if (confirming) {
+    return (
+      <div className="mt-6 border-2 border-accent p-3">
+        <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-accent">
+          Delete this image and its annotations?
+        </p>
+        <div className="flex gap-2">
+          <button
+            onClick={onDeleteImage}
+            disabled={deletingImage}
+            className="flex-1 border-2 border-accent bg-accent py-1.5 text-[10px] font-bold uppercase tracking-widest text-paper hover:bg-ink hover:border-ink disabled:opacity-40"
+          >
+            {deletingImage ? "Deleting…" : "Delete permanently"}
+          </button>
+          <button
+            onClick={() => setConfirming(false)}
+            className="border-2 border-ink/30 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest hover:bg-muted"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <button
+      onClick={() => setConfirming(true)}
+      className="mt-6 border-2 border-ink/20 py-2 text-[10px] font-bold uppercase tracking-widest text-ink/50 transition-colors duration-150 hover:border-accent hover:text-accent"
+    >
+      Delete image
+    </button>
+  );
 }
 
 function ClassPicker({
@@ -27,12 +72,19 @@ function ClassPicker({
   onSelectDrawClass,
   onAddClass,
   addingClass,
+  pendingBox,
+  onCancelPending,
 }: {
   classEntries: ClassEntry[];
   drawClassId: number;
   onSelectDrawClass: (classId: number) => void;
   onAddClass: (name: string) => void;
   addingClass: boolean;
+  // When a box has just been drawn, this panel switches from "pick the
+  // default for the NEXT box" to "classify THIS box" — same chip list,
+  // different consequence for clicking one (see AnnotatePage).
+  pendingBox: boolean;
+  onCancelPending: () => void;
 }) {
   const [adding, setAdding] = useState(false);
   const [newName, setNewName] = useState("");
@@ -40,15 +92,28 @@ function ClassPicker({
   function submit() {
     const name = newName.trim();
     if (!name) return;
-    onAddClass(name);
+    // A name that only differs by case or stray whitespace from an existing
+    // class reads as "the same class" to a human but would otherwise mint a
+    // second class_config entry with a new id — so annotations end up split
+    // across two "identical-looking" classes. Reuse the existing one instead.
+    const existing = classEntries.find((c) => c.name.trim().toLowerCase() === name.toLowerCase());
+    if (existing) {
+      onSelectDrawClass(existing.id);
+    } else {
+      onAddClass(name);
+    }
     setNewName("");
     setAdding(false);
   }
 
   return (
-    <div className="mb-6 border-b-2 border-ink pb-6">
-      <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/50">
-        Drawing as — next box uses this class
+    <div className={`mb-6 border-b-2 pb-6 ${pendingBox ? "border-[#FFB000]" : "border-ink"}`}>
+      <p
+        className={`mb-2 text-[10px] font-bold uppercase tracking-widest ${
+          pendingBox ? "text-[#FFB000]" : "text-ink/50"
+        }`}
+      >
+        {pendingBox ? "New box — pick a class" : "Drawing as — next box uses this class"}
       </p>
       <div className="flex flex-wrap gap-1.5">
         {classEntries.map((c, i) => (
@@ -56,7 +121,9 @@ function ClassPicker({
             key={c.id}
             onClick={() => onSelectDrawClass(c.id)}
             className={`flex items-center gap-1.5 border-2 px-2 py-1 text-xs font-semibold uppercase tracking-wide transition-colors duration-150 ${
-              c.id === drawClassId ? "border-ink bg-ink text-paper" : "border-ink/20 hover:border-ink"
+              !pendingBox && c.id === drawClassId
+                ? "border-ink bg-ink text-paper"
+                : "border-ink/20 hover:border-ink"
             }`}
           >
             <span className="h-2 w-2 shrink-0" style={{ backgroundColor: classColor(i) }} />
@@ -65,9 +132,19 @@ function ClassPicker({
           </button>
         ))}
         {classEntries.length === 0 && (
-          <p className="text-xs text-ink/50">No classes yet — add one below to start drawing.</p>
+          <p className="text-xs text-ink/50">
+            {pendingBox ? "No classes yet — add one below to classify this box." : "No classes yet — add one below to start drawing."}
+          </p>
         )}
       </div>
+      {pendingBox && (
+        <button
+          onClick={onCancelPending}
+          className="mt-2 text-[10px] font-bold uppercase tracking-widest text-ink/50 underline decoration-1 underline-offset-2 hover:text-accent"
+        >
+          Cancel — discard this box
+        </button>
+      )}
 
       {adding ? (
         <div className="mt-2 flex gap-1.5">
@@ -102,6 +179,52 @@ function ClassPicker({
   );
 }
 
+// One glance answer to "what's actually in this image" — independent of
+// whatever box happens to be selected, so it stays visible whether or not
+// anything is picked (both RightPanel branches below render it). Grouped
+// straight from the annotations' own class_id/class_name rather than joined
+// against the project's class_config: that config can lag what's actually
+// on an image (e.g. an AUTO annotation from a model whose classes were
+// never set as the project's taxonomy), and this should show what's really
+// there regardless — same fallback color-by-class_id pattern as "Selected"
+// below uses when a class isn't found in classEntries.
+function ClassCounts({ annotations, classEntries }: { annotations: Annotation[]; classEntries: ClassEntry[] }) {
+  if (annotations.length === 0) return null;
+
+  const byClass = new Map<number, { name: string; count: number }>();
+  for (const a of annotations) {
+    const existing = byClass.get(a.class_id);
+    if (existing) existing.count += 1;
+    else byClass.set(a.class_id, { name: a.class_name, count: 1 });
+  }
+
+  return (
+    <div className="mb-6 border-b-2 border-ink pb-6">
+      <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/50">
+        In this image — {annotations.length} box{annotations.length === 1 ? "" : "es"}
+      </p>
+      <div className="flex flex-wrap gap-1.5">
+        {[...byClass.entries()].map(([classId, { name, count }]) => {
+          const colorIndex = classEntries.findIndex((c) => c.id === classId);
+          return (
+            <span
+              key={classId}
+              className="flex items-center gap-1.5 border border-ink/20 px-2 py-1 text-xs font-semibold uppercase tracking-wide"
+            >
+              <span
+                className="h-2 w-2 shrink-0"
+                style={{ backgroundColor: classColor(colorIndex >= 0 ? colorIndex : classId) }}
+              />
+              {name}
+              <span className="tabular text-ink/40">{count}</span>
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 const SOURCE_LABEL: Record<string, string> = { AUTO: "Auto", HUMAN: "Human", CORRECTED: "Corrected" };
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
@@ -131,8 +254,21 @@ function CoordInput({ value, onCommit }: { value: number; onCommit: (v: number) 
   );
 }
 
+function CollapseTab({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  return (
+    <button
+      onClick={onToggle}
+      aria-label={collapsed ? "Expand annotation panel" : "Collapse annotation panel"}
+      className="flex h-8 w-8 shrink-0 items-center justify-center self-end border-b-2 border-l-2 border-ink text-xs font-bold hover:bg-ink hover:text-paper"
+    >
+      {collapsed ? "‹" : "›"}
+    </button>
+  );
+}
+
 export function RightPanel({
   annotation,
+  annotations,
   classEntries,
   flags,
   onChangeClass,
@@ -144,20 +280,41 @@ export function RightPanel({
   onSelectDrawClass,
   onAddClass,
   addingClass,
+  pendingBox,
+  onCancelPending,
+  onDeleteImage,
+  deletingImage,
+  collapsed,
+  onToggleCollapse,
 }: Props) {
+  if (collapsed) {
+    return (
+      <aside className="flex h-full w-8 shrink-0 flex-col border-l-4 border-ink bg-paper">
+        <CollapseTab collapsed={collapsed} onToggle={onToggleCollapse} />
+      </aside>
+    );
+  }
+
   if (!annotation) {
     return (
-      <aside className="flex h-full w-72 shrink-0 flex-col overflow-y-auto border-l-4 border-ink bg-paper p-6">
-        <ClassPicker
-          classEntries={classEntries}
-          drawClassId={drawClassId}
-          onSelectDrawClass={onSelectDrawClass}
-          onAddClass={onAddClass}
-          addingClass={addingClass}
-        />
-        <p className="text-xs font-bold uppercase tracking-widest text-ink/40">
-          No annotation selected
-        </p>
+      <aside className="flex h-full w-72 shrink-0 flex-col overflow-y-auto border-l-4 border-ink bg-paper">
+        <CollapseTab collapsed={collapsed} onToggle={onToggleCollapse} />
+        <div className="flex-1 p-6">
+          <ClassPicker
+            classEntries={classEntries}
+            drawClassId={drawClassId}
+            onSelectDrawClass={onSelectDrawClass}
+            onAddClass={onAddClass}
+            addingClass={addingClass}
+            pendingBox={pendingBox}
+            onCancelPending={onCancelPending}
+          />
+          <ClassCounts annotations={annotations} classEntries={classEntries} />
+          <p className="text-xs font-bold uppercase tracking-widest text-ink/40">
+            No annotation selected
+          </p>
+          <DeleteImageSection onDeleteImage={onDeleteImage} deletingImage={deletingImage} />
+        </div>
       </aside>
     );
   }
@@ -166,14 +323,19 @@ export function RightPanel({
   const color = classColor(colorIndex >= 0 ? colorIndex : annotation.class_id);
 
   return (
-    <aside className="flex h-full w-72 shrink-0 flex-col overflow-y-auto border-l-4 border-ink bg-paper p-6">
+    <aside className="flex h-full w-72 shrink-0 flex-col overflow-y-auto border-l-4 border-ink bg-paper">
+      <CollapseTab collapsed={collapsed} onToggle={onToggleCollapse} />
+      <div className="flex-1 p-6">
       <ClassPicker
         classEntries={classEntries}
         drawClassId={drawClassId}
         onSelectDrawClass={onSelectDrawClass}
         onAddClass={onAddClass}
         addingClass={addingClass}
+        pendingBox={pendingBox}
+        onCancelPending={onCancelPending}
       />
+      <ClassCounts annotations={annotations} classEntries={classEntries} />
 
       <div className="mb-4 flex items-center gap-2">
         <span className="h-3 w-3 shrink-0" style={{ backgroundColor: color }} />
@@ -279,6 +441,9 @@ export function RightPanel({
         >
           Delete
         </button>
+      </div>
+
+      <DeleteImageSection onDeleteImage={onDeleteImage} deletingImage={deletingImage} />
       </div>
     </aside>
   );

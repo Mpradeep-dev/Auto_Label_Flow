@@ -3,11 +3,17 @@ import type { Annotation } from "@/types";
 
 export type CanvasMode = "select" | "draw";
 
+type PendingBox = Pick<Annotation, "x1" | "y1" | "x2" | "y2">;
+
 interface AnnotationStoreState {
   annotations: Annotation[];
   selectedId: string | null;
   mode: CanvasMode;
   drawClassId: number;
+  // A box whose geometry is drawn but not yet persisted — class choice now
+  // happens AFTER drawing, not before, so the box sits here awaiting a
+  // class pick (or a cancel) instead of being written straight to the API.
+  pendingBox: PendingBox | null;
 
   setAnnotations: (annotations: Annotation[]) => void;
   selectAnnotation: (id: string | null) => void;
@@ -15,6 +21,7 @@ interface AnnotationStoreState {
   removeAnnotation: (id: string) => void;
   setMode: (mode: CanvasMode) => void;
   setDrawClassId: (classId: number) => void;
+  setPendingBox: (box: PendingBox | null) => void;
 }
 
 /**
@@ -28,8 +35,11 @@ export const useAnnotationStore = create<AnnotationStoreState>((set) => ({
   selectedId: null,
   mode: "select",
   drawClassId: 0,
+  pendingBox: null,
 
-  setAnnotations: (annotations) => set({ annotations }),
+  // Switching images (this fires on every image navigation) must not carry
+  // a half-drawn, unclassified box from the previous image along with it.
+  setAnnotations: (annotations) => set({ annotations, pendingBox: null }),
   selectAnnotation: (id) => set({ selectedId: id }),
   upsertAnnotation: (annotation) =>
     set((state) => {
@@ -48,4 +58,5 @@ export const useAnnotationStore = create<AnnotationStoreState>((set) => ({
   setMode: (mode) =>
     set((state) => ({ mode, selectedId: mode === "draw" ? null : state.selectedId })),
   setDrawClassId: (classId) => set({ drawClassId: classId }),
+  setPendingBox: (box) => set({ pendingBox: box }),
 }));

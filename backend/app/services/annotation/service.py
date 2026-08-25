@@ -20,6 +20,7 @@ from app.models.annotation import (
     ErrorReason,
 )
 from app.models.image import Image, ImageReviewStatus
+from app.models.project import Project
 
 
 class AnnotationNotFoundError(LookupError):
@@ -122,23 +123,54 @@ def create_annotation(
     return annotation
 
 
+def _resolve_class_id(project: Project, class_name: str) -> int:
+    """Class identity is resolved by NAME against the project's
+    `class_config` — same rule the Roboflow/COCO/CVAT importers use
+    (PLAN "class taxonomy is read from the model, never hardcoded"): a raw
+    id is only meaningful within whatever produced it (there, an external
+    export; here, one detector's own weights), never assumed to match this
+    project's own ids. A name already in class_config (matched
+    case/whitespace-insensitively, same as the frontend's "add class"
+    dedupe) reuses its id; a name the project has never seen is appended
+    under a fresh project-local id — otherwise a model that detects a class
+    outside the project's existing taxonomy (e.g. a "cone" class the
+    project was never told about) would produce AUTO boxes for a class the
+    draw-picker can never offer, since the picker only lists class_config."""
+    existing = list(project.class_config or [])
+    name_lower = class_name.strip().lower()
+    for entry in existing:
+        if entry["name"].strip().lower() == name_lower:
+            return entry["id"]
+    next_id = (max((entry["id"] for entry in existing), default=-1)) + 1
+    existing.append({"id": next_id, "name": class_name})
+    project.class_config = existing
+    return next_id
+
+
 def bulk_create_from_predictions(
     db: Session,
     *,
     image_id: uuid.UUID,
+    project_id: uuid.UUID,
     predictions: list[dict],
 ) -> list[Annotation]:
     """`predictions` items: {class_id, class_name, confidence, x1, y1, x2, y2}.
     Always source=AUTO — this is the one place model output enters the
     annotation table (PLAN section 27: "Every auto-generated annotation
-    must retain source=AUTO until a human approves or modifies it")."""
+    must retain source=AUTO until a human approves or modifies it").
+
+    `class_id` on each prediction is the detector's own index and gets
+    discarded in favor of `_resolve_class_id`, which maps `class_name` onto
+    (and if needed, extends) the project's own class_config."""
+    project = db.get(Project, project_id)
     created: list[Annotation] = []
     for pred in predictions:
+        class_id = _resolve_class_id(project, pred["class_name"]) if project is not None else pred["class_id"]
         created.append(
             create_annotation(
                 db,
                 image_id=image_id,
-                class_id=pred["class_id"],
+                class_id=class_id,
                 class_name=pred["class_name"],
                 x1=pred["x1"],
                 y1=pred["y1"],
