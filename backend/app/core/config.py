@@ -15,11 +15,27 @@ allowed to be unset — see `KaggleSettings.is_configured`.
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from typing import Literal
 
 from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Registering a model loads its weights file through Ultralytics/torch, which
+# is pickle-based and — by default — can execute arbitrary code embedded in a
+# malicious checkpoint (see audit finding SEC-01). The vendored ultralytics
+# build here has a first-class opt-in mitigation (`ULTRALYTICS_SAFE_LOAD`,
+# read once at import time by `ultralytics.utils`): it restricts checkpoint
+# loading to `torch.load(weights_only=True)` plus an allow-list of known
+# nn.Module classes, so a file that isn't a real YOLO checkpoint fails to
+# load instead of executing. This has to be set before `ultralytics` is
+# imported anywhere in the process — every module that touches it imports
+# `app.core.config` first (directly or transitively), so setting it here,
+# at the top of the most-upstream module, is the one place that's
+# guaranteed to run first regardless of entry point (uvicorn, the Celery
+# worker, or pytest).
+os.environ.setdefault("ULTRALYTICS_SAFE_LOAD", "1")
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 PROJECT_ROOT = BACKEND_DIR.parent
@@ -142,6 +158,15 @@ class Settings(BaseSettings):
     @property
     def kaggle_configured(self) -> bool:
         return bool(self.KAGGLE_USERNAME and self.KAGGLE_KEY)
+
+    # --- Modal (optional; unset means the provider registers as disabled) ---
+    MODAL_TOKEN_ID: str | None = None
+    MODAL_TOKEN_SECRET: str | None = None
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def modal_configured(self) -> bool:
+        return bool(self.MODAL_TOKEN_ID and self.MODAL_TOKEN_SECRET)
 
     # --- GPU / training ---
     TRAINING_DEVICE: str = "0"  # torch device string; "cpu" falls back cleanly

@@ -34,12 +34,75 @@ class KaggleNotConfiguredError(RuntimeError):
 
 _KERNEL_TEMPLATE = """\
 import subprocess
-subprocess.run(["pip", "install", "-q", "ultralytics=={ultralytics_version}"], check=True)
+
+ENABLE_GPU = {enable_gpu}
+
+if ENABLE_GPU:
+    # Confirmed live, twice: Kaggle's own pre-installed torch is NOT
+    # necessarily matched to whatever GPU it hands out. A run assigned a
+    # Tesla P100 (Pascal, compute capability 6.0) failed both times with
+    # "no kernel image is available for execution on the device" — the
+    # stock image's own torch was already 2.10.0+cu128 before any pip
+    # install ran, and PyPI's cu128 wheels dropped Pascal/Maxwell
+    # (sm_60/sm_50) support entirely starting with the 2.8 series. There's
+    # no API to request a specific GPU generation from Kaggle, so instead
+    # of trusting whatever's pre-installed (this app's previous fix —
+    # confirmed live NOT to help, since the baseline itself was already
+    # incompatible), pin explicitly to the last well-established
+    # torch/torchvision/CUDA combo confirmed to still build sm_60 into its
+    # gencode list. Deliberately not the newest such combo (2.6.0/0.21.0):
+    # that pairing has a known, still-open pip metadata bug where the
+    # torchvision 0.21.0 wheel declares Requires-Dist: torch>=2.8.0, which
+    # makes `pip install torch==2.6.0 torchvision==0.21.0` fail outright on
+    # a dependency conflict — 2.5.1/0.20.1 has no such report.
+    #
+    # `torch`/`torchvision` are deliberately not imported anywhere above
+    # this point: they're native-extension packages, and Python doesn't
+    # cleanly unload/reload a compiled .so a process already has mapped —
+    # importing the stock version first and reinstalling over it on disk
+    # would leave the process running inconsistent, already-loaded native
+    # code even though `torch.__version__` might report the new number.
+    # This subprocess is the ONLY thing that touches torch before the
+    # process's one and only `import torch` below.
+    subprocess.run(
+        [
+            "pip", "install", "-q",
+            "torch==2.5.1", "torchvision==0.20.1", "torchaudio==2.5.1",
+            "--index-url", "https://download.pytorch.org/whl/cu121",
+        ],
+        check=True,
+    )
+    with open("/tmp/torch_constraints.txt", "w") as f:
+        f.write("torch==2.5.1\\n")
+        f.write("torchvision==0.20.1\\n")
+        f.write("torchaudio==2.5.1\\n")
+    constraint_args = ["-c", "/tmp/torch_constraints.txt"]
+else:
+    # CPU-only: no CUDA arch to match, so just pin to whatever's already
+    # installed and let pip leave torch/torchvision alone entirely.
+    import torch
+    import torchvision
+
+    with open("/tmp/torch_constraints.txt", "w") as f:
+        f.write("torch==" + torch.__version__ + "\\n")
+        f.write("torchvision==" + torchvision.__version__ + "\\n")
+    constraint_args = ["-c", "/tmp/torch_constraints.txt"]
+
+subprocess.run(
+    ["pip", "install", "-q", "ultralytics=={ultralytics_version}"] + constraint_args,
+    check=True,
+)
+
+import torch
 from ultralytics import YOLO
 
-model = YOLO("{base_weights_filename}")
+print("torch", torch.__version__, "cuda available:", torch.cuda.is_available())
+if torch.cuda.is_available():
+    print("device:", torch.cuda.get_device_name(0), "capability:", torch.cuda.get_device_capability(0))
+
+model = YOLO("{base_weights_path}")
 model.train(
-    data="{data_yaml_filename}",
+    data="{data_yaml_path}",
     epochs={epochs},
     imgsz={image_size},
     batch={batch_size},
@@ -85,6 +148,29 @@ class KaggleTrainingProvider(TrainingProvider):
         return api
 
     def start_training(self, db: Session, job: TrainingJob) -> None:
+        # Dispatched, not run inline — mirrors LocalTrainingProvider's own
+        # start_training (train_local_model.delay(...)), which is what lets
+        # POST /training/jobs return immediately and the frontend's existing
+        # QUEUED/RUNNING polling (TrainingRunsPage.tsx's refetchInterval)
+        # show real progress. Before this, this method DID the actual work
+        # (dataset export/zip, upload, a readiness poll that alone can take
+        # up to 5 minutes, kernel push) synchronously inside the request —
+        # confirmed live to read as "just hangs, no update, then eventually
+        # fails" from the UI: the Start button's only state during all of
+        # that is a static "Starting…", and depending on how long the
+        # request took relative to any intermediate proxy/browser limits, a
+        # job that Kaggle-side ultimately succeeded could still show as a
+        # failure to the user who was watching the button, not the job list.
+        from app.workers.tasks.kaggle_training import start_kaggle_training_job
+
+        start_kaggle_training_job.delay(str(job.id))
+
+    def _push_kernel(self, db: Session, job: TrainingJob) -> None:
+        """The actual synchronous Kaggle work `start_training` used to do
+        inline — now run from `start_kaggle_training_job`'s own Celery task
+        instead, off the request thread. Left as a plain method (not the
+        `start_training` the `TrainingProvider` ABC expects) so nothing
+        outside `kaggle_training.py`'s task calls it directly by accident."""
         api = self._client()
 
         base_model = db.get(MLModel, job.base_model_id) if job.base_model_id else None
@@ -92,7 +178,11 @@ class KaggleTrainingProvider(TrainingProvider):
             raise ValueError("A base model is required to fine-tune from")
         version = db.get(DatasetVersion, job.dataset_version_id)
 
+        import shutil
         import tempfile
+        import time
+
+        import yaml
 
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp) / "dataset"
@@ -100,25 +190,89 @@ class KaggleTrainingProvider(TrainingProvider):
             data_yaml_path = write_yolo_dataset(db, version_id=version.id, root=root)
 
             dataset_slug = f"annotate-v{version.version_number}-{str(job.id)[:8]}"
+            # Where Kaggle actually mounts this dataset on the kernel's own
+            # filesystem, read-only, once attached via `dataset_sources`
+            # below. NOT `/kaggle/input/{slug}` — that's the older/simpler
+            # path documented in most Kaggle API examples, but a real
+            # kernel's own `find /kaggle/input` (added as a one-off
+            # diagnostic, then confirmed against 5 consecutive live runs)
+            # showed it actually nested under datasets/<username>/<slug>.
+            kaggle_input_dir = f"/kaggle/input/datasets/{settings.KAGGLE_USERNAME}/{dataset_slug}"
+
+            # write_yolo_dataset's own `path:` is the LOCAL build directory
+            # (`root`, here a throwaway tempdir) — correct for LOCAL
+            # training, which trains against that same filesystem, but
+            # meaningless once this folder is re-uploaded as a Kaggle
+            # dataset: Ultralytics would try to resolve images/train,
+            # images/val, etc. against a path that only ever existed on
+            # this machine. Rewritten to where it will actually live at
+            # train time.
+            data_yaml = yaml.safe_load(data_yaml_path.read_text(encoding="utf-8"))
+            data_yaml["path"] = kaggle_input_dir
+            data_yaml_path.write_text(yaml.safe_dump(data_yaml, sort_keys=False), encoding="utf-8")
+
+            # The base model's weights file has no other legitimate way to
+            # reach the kernel: `kernels_push` only uploads the kernel's
+            # own code_file, not arbitrary sibling files sitting in the
+            # local push directory — confirmed live, the previous approach
+            # (copying the weights next to train.py and referencing it by
+            # a bare relative filename) raised FileNotFoundError on
+            # Kaggle's side, since that file was never actually there.
+            # Bundling it into the SAME dataset already being attached via
+            # `dataset_sources` is the one mechanism Kaggle actually
+            # supports for getting an arbitrary file onto a kernel.
+            weights_filename = Path(base_model.weights_path).name
+            shutil.copyfile(base_model.weights_path, root / weights_filename)
+
             (root / "dataset-metadata.json").write_text(
                 json.dumps({"title": dataset_slug, "id": f"{settings.KAGGLE_USERNAME}/{dataset_slug}", "licenses": [{"name": "CC0-1.0"}]}),
                 encoding="utf-8",
             )
             api.dataset_create_new(folder=str(root), dir_mode="zip", quiet=True)
 
+            # dataset_create_new() returns as soon as Kaggle *accepts* the
+            # upload — it doesn't wait for Kaggle's own backend processing
+            # (indexing/virus-scan/etc.) to finish making the dataset's
+            # files actually mountable. Confirmed live: pushing the kernel
+            # immediately after this raised FileNotFoundError for a file
+            # that genuinely was in the uploaded folder, just not yet
+            # visible to a kernel attaching to it seconds later. Poll for
+            # "ready"; give up and push anyway after a bounded wait rather
+            # than hanging a job forever on a slow Kaggle-side process.
+            #
+            # The status check itself is best-effort, not a hard dependency:
+            # also confirmed live, `dataset_status` can 403 with "Permission
+            # datasets.get was denied" in the first moments after creation —
+            # its own propagation lag, not a real permissions problem (same
+            # account that just created it). Treat that identically to
+            # "not ready yet" rather than letting it abort the whole job.
+            # Confirmed live: `dataset_status` genuinely returns "ready" once
+            # Kaggle's processing finishes, and this app's own datasets
+            # (~20MB / ~200 images) took well over a minute to get there —
+            # a short poll budget just exhausts itself on the early
+            # datasets.get-403 window (see above) without ever seeing it.
+            # 5 minutes, 5s apart: enough headroom for a real dataset this
+            # size, still bounded so a genuinely stuck Kaggle-side process
+            # doesn't hang job creation forever.
+            dataset_ref = f"{settings.KAGGLE_USERNAME}/{dataset_slug}"
+            for _ in range(60):
+                try:
+                    if str(api.dataset_status(dataset_ref)).strip().lower() == "ready":
+                        break
+                except Exception:
+                    pass
+                time.sleep(5)
+
             kernel_dir = Path(tmp) / "kernel"
             kernel_dir.mkdir()
-            import shutil
-
-            shutil.copyfile(base_model.weights_path, kernel_dir / Path(base_model.weights_path).name)
-            shutil.copyfile(data_yaml_path, kernel_dir / "data.yaml")
 
             import ultralytics
 
             script = _KERNEL_TEMPLATE.format(
+                enable_gpu=job.enable_gpu,
                 ultralytics_version=ultralytics.__version__,
-                base_weights_filename=Path(base_model.weights_path).name,
-                data_yaml_filename="data.yaml",
+                base_weights_path=f"{kaggle_input_dir}/{weights_filename}",
+                data_yaml_path=f"{kaggle_input_dir}/data.yaml",
                 epochs=job.epochs,
                 image_size=job.image_size,
                 batch_size=job.batch_size,
@@ -137,7 +291,15 @@ class KaggleTrainingProvider(TrainingProvider):
                         "language": "python",
                         "kernel_type": "script",
                         "is_private": True,
-                        "enable_gpu": True,
+                        "enable_gpu": job.enable_gpu,
+                        # Kaggle kernels have NO internet access by default —
+                        # without this, the kernel's own `pip install
+                        # ultralytics` (see _KERNEL_TEMPLATE) fails immediately
+                        # with a DNS resolution error before training ever
+                        # starts. Confirmed live: exactly this failure, in a
+                        # real kernel's own logs, on a job that otherwise
+                        # looked like it was just "stuck."
+                        "enable_internet": True,
                         "dataset_sources": [f"{settings.KAGGLE_USERNAME}/{dataset_slug}"],
                     }
                 ),
@@ -145,8 +307,15 @@ class KaggleTrainingProvider(TrainingProvider):
             )
             api.kernels_push(str(kernel_dir))
 
+        import datetime as _datetime
+
         job.kaggle_kernel_ref = f"{settings.KAGGLE_USERNAME}/{kernel_slug}"
         job.status = TrainingJobStatus.RUNNING
+        # Set here, not left to get_status()'s own RUNNING-transition check
+        # below — the job is already RUNNING the moment the kernel push
+        # succeeds, so that check would never see a QUEUED->RUNNING edge to
+        # catch it on, and started_at would stay null forever.
+        job.started_at = _datetime.datetime.now(_datetime.timezone.utc)
         db.commit()
 
     def get_status(self, db: Session, job: TrainingJob) -> str:
@@ -162,6 +331,15 @@ class KaggleTrainingProvider(TrainingProvider):
             "queued": TrainingJobStatus.QUEUED,
         }.get(str(kaggle_status).lower(), TrainingJobStatus.RUNNING)
         if mapped != job.status:
+            import datetime as _datetime
+
+            now = _datetime.datetime.now(_datetime.timezone.utc)
+            if mapped == TrainingJobStatus.RUNNING and job.started_at is None:
+                job.started_at = now
+            elif mapped == TrainingJobStatus.COMPLETED:
+                job.completed_at = now
+            elif mapped == TrainingJobStatus.FAILED:
+                job.failed_at = now
             job.status = mapped
             db.commit()
         return job.status.value
@@ -188,8 +366,22 @@ class KaggleTrainingProvider(TrainingProvider):
         return candidates[0] if candidates else None
 
     def cancel_training(self, db: Session, job: TrainingJob) -> None:
-        # The Kaggle API has no kernel-cancel endpoint as of this writing;
-        # recording intent is the honest behaviour here rather than
-        # claiming a cancel that can't actually be issued remotely.
-        job.error = (job.error or "") + " [cancel requested by user; Kaggle API has no remote-stop endpoint]"
+        # The Kaggle API has no kernel-cancel endpoint as of this writing, so
+        # the remote kernel keeps running until Kaggle's own timeout — but
+        # this job's local status must still move off RUNNING/QUEUED, or
+        # the Cancel button visibly does nothing (it stayed RUNNING forever,
+        # the poll loop kept polling it, and a stuck kernel looked
+        # indistinguishable from a healthy one). CANCELLED here means "this
+        # app has given up tracking it," recorded honestly, not "the remote
+        # job was stopped."
+        import datetime as _datetime
+
+        job.status = TrainingJobStatus.CANCELLED
+        job.failed_at = _datetime.datetime.now(_datetime.timezone.utc)
+        job.error = (
+            (job.error + " " if job.error else "")
+            + "Cancelled locally by user request. Kaggle has no remote-stop API, so the kernel "
+            + "may keep running on Kaggle's side until it finishes or times out on its own — "
+            + "check kaggle.com/code if you need to confirm it actually stopped."
+        )
         db.commit()

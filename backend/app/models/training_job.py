@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, JSON, String
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, JSON, String
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -19,6 +19,7 @@ from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 class TrainingProviderType(str, PyEnum):
     LOCAL = "LOCAL"
     KAGGLE = "KAGGLE"
+    MODAL = "MODAL"
 
 
 class TrainingJobStatus(str, PyEnum):
@@ -57,7 +58,10 @@ class TrainingJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         Enum(TrainingProviderType, name="training_provider_type"), nullable=False
     )
     status: Mapped[TrainingJobStatus] = mapped_column(
-        Enum(TrainingJobStatus, name="training_job_status"), nullable=False, default=TrainingJobStatus.QUEUED
+        Enum(TrainingJobStatus, name="training_job_status"),
+        nullable=False,
+        default=TrainingJobStatus.QUEUED,
+        index=True,  # DB-05: the natural filter for "show running/queued jobs" UI polling
     )
 
     epochs: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
@@ -65,6 +69,13 @@ class TrainingJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     image_size: Mapped[int] = mapped_column(Integer, nullable=False, default=640)
     learning_rate: Mapped[float | None] = mapped_column(Float, nullable=True)
     device: Mapped[str] = mapped_column(String(20), nullable=False, default="cpu")
+    # KAGGLE-only (the LOCAL provider ignores this — it always uses whatever
+    # `device` resolves to, since it's your own machine). Kaggle accounts
+    # have a weekly GPU-hours quota; before this, kaggle_provider.py always
+    # requested a GPU kernel unconditionally, with no way to run a
+    # quota-free CPU kernel instead. Defaults True to match that prior
+    # always-on behavior for anyone who doesn't touch this.
+    enable_gpu: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     # Passthrough for any Ultralytics `YOLO.train()` keyword not already a
     # typed column above (optimizer, patience, dropout, augmentation knobs,
     # etc.) — Ultralytics has ~100 of these; a dedicated column per one
@@ -78,6 +89,7 @@ class TrainingJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     celery_task_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     kaggle_kernel_ref: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    modal_function_call_id: Mapped[str | None] = mapped_column(String(300), nullable=True)
     artifact_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     error: Mapped[str | None] = mapped_column(String(2000), nullable=True)
 

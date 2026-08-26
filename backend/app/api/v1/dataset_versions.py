@@ -15,7 +15,7 @@ from app.schemas.integration import RoboflowExportRequest, RoboflowJobRead
 from app.services.dataset.export_coco import ExportError as CocoExportError, export_coco
 from app.services.dataset.export_cvat import ExportError as CvatExportError, export_cvat
 from app.services.dataset.export_yolo import ExportError, export_yolo
-from app.services.dataset.versioning import NoApprovedImagesError, create_version
+from app.services.dataset.versioning import NoApprovedImagesError, VersionNumberConflictError, create_version
 from app.services.integrations.roboflow_connect import RoboflowNotConnectedError, get_client
 from app.services.storage.factory import get_storage
 from app.workers.tasks.roboflow import run_roboflow_export
@@ -68,6 +68,8 @@ def create_dataset_version(
         )
     except NoApprovedImagesError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except VersionNumberConflictError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return _to_read(version)
 
 

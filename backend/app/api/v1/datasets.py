@@ -21,6 +21,7 @@ from app.services.dataset.import_coco import CocoImportError, import_coco_zip
 from app.services.dataset.import_cvat import CvatImportError, import_cvat_zip
 from app.services.dataset.statistics import compute_dataset_statistics
 from app.services.integrations.roboflow_connect import RoboflowNotConnectedError, get_client
+from app.services.storage.factory import get_storage
 from app.workers.tasks.roboflow import run_roboflow_import
 
 router = APIRouter(tags=["datasets"])
@@ -193,5 +194,20 @@ def delete_dataset(dataset_id: uuid.UUID, db: Session = Depends(get_db)) -> None
     dataset = db.get(Dataset, dataset_id)
     if dataset is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Dataset not found")
+
+    # Gathered before the delete — cascade removes the Image/Video rows
+    # themselves, so their storage_keys have to be captured first. Audit
+    # finding BE-02: deleting a dataset used to cascade the DB rows but
+    # never touch the underlying files, silently orphaning every image and
+    # video frame on disk/MinIO forever with no reclaim path.
+    image_keys = list(db.scalars(select(Image.storage_key).where(Image.dataset_id == dataset_id)))
+    video_keys = list(db.scalars(select(Video.storage_key).where(Video.dataset_id == dataset_id)))
+
     db.delete(dataset)
     db.commit()
+
+    # After the DB delete succeeds, not before — a failed commit should
+    # never leave files deleted out from under rows that still exist.
+    storage = get_storage()
+    for key in image_keys + video_keys:
+        storage.delete(key)

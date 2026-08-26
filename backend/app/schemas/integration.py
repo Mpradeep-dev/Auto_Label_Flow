@@ -24,6 +24,11 @@ class KaggleConnectRequest(BaseModel):
     key: str = Field(min_length=1)
 
 
+class ModalConnectRequest(BaseModel):
+    token_id: str = Field(min_length=1)
+    token_secret: str = Field(min_length=1)
+
+
 class RoboflowConnectRequest(BaseModel):
     api_key: str = Field(min_length=1)
     default_workspace: str | None = None

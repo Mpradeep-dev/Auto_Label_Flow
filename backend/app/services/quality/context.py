@@ -14,7 +14,17 @@ from dataclasses import dataclass, field
 class AnnotationLike:
     """Duck-typed view of one box under evaluation — works for both a live
     `Annotation` ORM row and a plain dict, so rules don't import the model
-    layer directly."""
+    layer directly.
+
+    Bbox-only geometry, by design: a POLYGON annotation's x1..y2 here is its
+    bounding box (see app.models.annotation.ShapeType), not its true shape —
+    every rule's IoU/area math (`possible_duplicate.py`, `very_small_box.py`)
+    and the SORT tracker (`sort_tracker.py`/`temporal_pass.py`) are therefore
+    bbox-approximate for polygon annotations. This is a deliberate scope
+    decision from the polygon/SAM-mask feature, not a gap being tracked —
+    true polygon IoU/area would need this dataclass (and every rule that
+    reads width/height/cx/cy as if from a rectangle) to branch on shape_type,
+    which is out of scope for now."""
 
     id: str
     class_id: int

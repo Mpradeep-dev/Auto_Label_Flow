@@ -4,7 +4,14 @@ import { api, ApiError } from "@/services/api";
 import { SectionLabel } from "@/components/layout/SectionLabel";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
-import type { ModelKind, MLModel } from "@/types";
+import type { MLModel, ModelKind } from "@/types";
+
+type Framework = "ultralytics" | "yolo-world";
+
+const DEFAULT_FRAMEWORK_BY_KIND: Record<ModelKind, Framework> = {
+  DETECTOR: "ultralytics",
+  POSE: "ultralytics",
+};
 
 function stripExtension(filename: string): string {
   return filename.replace(/\.[^./\\]+$/, "");
@@ -17,14 +24,15 @@ function RegisterModelForm() {
   const [file, setFile] = useState<File | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const [kind, setKind] = useState<ModelKind>("DETECTOR");
+  const [framework, setFramework] = useState<Framework>("ultralytics");
   const fileInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
 
   const registerMutation = useMutation({
     mutationFn: () =>
       source === "url"
-        ? api.downloadModel({ name: name.trim(), url: url.trim(), kind })
-        : api.uploadModel(file as File, { name: name.trim(), kind }),
+        ? api.downloadModel({ name: name.trim(), url: url.trim(), kind, framework })
+        : api.uploadModel(file as File, { name: name.trim(), kind, framework }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["models"] });
       setName("");
@@ -63,7 +71,7 @@ function RegisterModelForm() {
           </button>
         ))}
       </div>
-      <div className="grid grid-cols-[1fr_auto] divide-x-2 divide-ink border-b-2 border-ink">
+      <div className="grid grid-cols-[1fr_auto_auto] divide-x-2 divide-ink border-b-2 border-ink">
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -72,11 +80,25 @@ function RegisterModelForm() {
         />
         <select
           value={kind}
-          onChange={(e) => setKind(e.target.value as ModelKind)}
+          onChange={(e) => {
+            const nextKind = e.target.value as ModelKind;
+            setKind(nextKind);
+            setFramework(DEFAULT_FRAMEWORK_BY_KIND[nextKind]);
+          }}
           className="bg-paper px-3 py-3 text-xs font-bold uppercase tracking-widest outline-none"
         >
           <option value="DETECTOR">Detector</option>
           <option value="POSE">Pose (auxiliary)</option>
+        </select>
+        <select
+          value={framework}
+          onChange={(e) => setFramework(e.target.value as Framework)}
+          disabled={kind !== "DETECTOR"}
+          title="YOLO-World is open-vocabulary: it detects whatever classes the current project is configured with, instead of a fixed set baked into the weights."
+          className="bg-paper px-3 py-3 text-xs font-bold uppercase tracking-widest outline-none disabled:opacity-40"
+        >
+          <option value="ultralytics">Ultralytics YOLO</option>
+          <option value="yolo-world">YOLO-World (open-vocab)</option>
         </select>
       </div>
 
@@ -261,10 +283,19 @@ function ModelCard({ model }: { model: MLModel }) {
     <div className="group relative border-b-2 border-r-2 border-ink p-8">
       <div className="mb-2 flex items-center justify-between pr-16">
         <p className="text-xl font-bold uppercase tracking-tight">{model.name}</p>
-        <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest bg-muted">{model.kind}</span>
+        <div className="flex gap-1">
+          {model.is_promptable && (
+            <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest bg-accent text-paper">
+              Open-vocab
+            </span>
+          )}
+          <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest bg-muted">{model.kind}</span>
+        </div>
       </div>
       <p className="tabular text-xs uppercase tracking-widest text-ink/50">
-        {model.class_config.map((c) => c.name).join(" · ") || "no classes"}
+        {model.is_promptable
+          ? "Detects whatever classes the project it runs against is configured with"
+          : model.class_config.map((c) => c.name).join(" · ") || "no classes"}
       </p>
       {model.base_model_id && (
         <p className="mt-1 text-[10px] uppercase tracking-widest text-ink/30">Fine-tuned from a base model</p>

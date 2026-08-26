@@ -21,7 +21,7 @@ from app.schemas.annotation import (
 from app.schemas.image import ImageRead
 from app.services.annotation import service as annotation_service
 from app.services.inference.detector import ModelLoadError
-from app.services.inference.registry import get_detection_model
+from app.services.inference.registry import get_detection_model, get_project_class_names
 from app.services.quality.filters import FilterConfig, filter_predictions
 from app.services.storage.factory import get_storage
 
@@ -44,31 +44,35 @@ def list_annotations(image_id: uuid.UUID, db: Session = Depends(get_db)) -> list
 @router.post("/annotations", response_model=AnnotationRead, status_code=status.HTTP_201_CREATED)
 def create_annotation(payload: AnnotationCreate, db: Session = Depends(get_db)) -> Annotation:
     _get_image_or_404(payload.image_id, db)
-    if payload.x2 <= payload.x1 or payload.y2 <= payload.y1:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "x2 must be > x1 and y2 must be > y1")
-
-    return annotation_service.create_annotation(
-        db,
-        image_id=payload.image_id,
-        class_id=payload.class_id,
-        class_name=payload.class_name,
-        x1=payload.x1,
-        y1=payload.y1,
-        x2=payload.x2,
-        y2=payload.y2,
-        confidence=payload.confidence,
-        source=AnnotationSource.HUMAN,
-    )
+    # Geometry-shape validation (bbox ordering, polygon point count/range)
+    # already ran in AnnotationCreate's model_validator.
+    try:
+        return annotation_service.create_annotation(
+            db,
+            image_id=payload.image_id,
+            class_id=payload.class_id,
+            class_name=payload.class_name,
+            shape_type=payload.shape_type,
+            points=[list(p) for p in payload.points] if payload.points else None,
+            x1=payload.x1,
+            y1=payload.y1,
+            x2=payload.x2,
+            y2=payload.y2,
+            confidence=payload.confidence,
+            source=AnnotationSource.HUMAN,
+        )
+    except annotation_service.InvalidGeometryError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
 
 @router.put("/annotations/{annotation_id}", response_model=AnnotationRead)
 def update_annotation(
     annotation_id: uuid.UUID, payload: AnnotationUpdate, db: Session = Depends(get_db)
 ) -> Annotation:
-    if (payload.x1 is not None and payload.x2 is not None and payload.x2 <= payload.x1) or (
-        payload.y1 is not None and payload.y2 is not None and payload.y2 <= payload.y1
-    ):
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "x2 must be > x1 and y2 must be > y1")
+    # Bbox-ordering / polygon-point-count validation already ran in
+    # AnnotationUpdate's model_validator; whether x1..y2 vs. points is
+    # actually valid for THIS annotation's shape_type is enforced by the
+    # service layer (it's the only place that knows the existing shape_type).
     try:
         return annotation_service.update_annotation(
             db,
@@ -79,10 +83,13 @@ def update_annotation(
             y1=payload.y1,
             x2=payload.x2,
             y2=payload.y2,
+            points=[list(p) for p in payload.points] if payload.points else None,
             confidence=payload.confidence,
         )
     except annotation_service.AnnotationNotFoundError:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Annotation not found")
+    except annotation_service.InvalidGeometryError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
 
 @router.delete("/annotations/{annotation_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -140,7 +147,8 @@ def auto_annotate_image(
     image = _get_image_or_404(image_id, db)
 
     try:
-        detector = get_detection_model(db, payload.model_id)
+        class_names = get_project_class_names(db, image.project_id)
+        detector = get_detection_model(db, payload.model_id, class_names=class_names)
     except ModelLoadError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 

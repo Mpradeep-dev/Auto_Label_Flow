@@ -68,12 +68,21 @@ export interface ImageListPage {
 
 export type AnnotationSourceType = "AUTO" | "HUMAN" | "CORRECTED";
 export type AnnotationReviewStatus = "PENDING" | "APPROVED" | "REJECTED";
+export type ShapeType = "BBOX" | "POLYGON";
 
 export interface Annotation {
   id: string;
   image_id: string;
   class_id: number;
   class_name: string;
+  shape_type: ShapeType;
+  // Normalized point ring, >=3 points; null for BBOX. Covers both
+  // hand-drawn polygons and SAM-derived masks — see backend
+  // app.models.annotation.ShapeType docstring for why masks aren't a
+  // separate representation.
+  points: [number, number][] | null;
+  // Always populated for every shape_type: the shape's own bbox for BBOX,
+  // the bounding box of `points` (server-computed) for POLYGON.
   x1: number;
   y1: number;
   x2: number;
@@ -157,7 +166,7 @@ export interface DatasetVersion {
   created_at: string;
 }
 
-export type TrainingProviderName = "LOCAL" | "KAGGLE";
+export type TrainingProviderName = "LOCAL" | "KAGGLE" | "MODAL";
 export type TrainingJobStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
 
 export interface TrainingJob {
@@ -173,6 +182,7 @@ export interface TrainingJob {
   image_size: number;
   learning_rate: number | null;
   device: string;
+  enable_gpu: boolean;
   extra_args: Record<string, unknown>;
   current_epoch: number;
   metrics: Record<string, number>;
@@ -286,11 +296,12 @@ export interface MLModel {
   metrics: Record<string, unknown>;
   base_model_id: string | null;
   is_active: boolean;
+  is_promptable: boolean;
   created_at: string;
   updated_at: string;
 }
 
-export type IntegrationProviderName = "KAGGLE" | "ROBOFLOW";
+export type IntegrationProviderName = "KAGGLE" | "ROBOFLOW" | "MODAL";
 
 export interface IntegrationStatus {
   provider: IntegrationProviderName;

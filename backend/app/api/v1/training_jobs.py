@@ -63,13 +63,30 @@ def create_training_job(payload: TrainingJobCreate, db: Session = Depends(get_db
         image_size=payload.image_size,
         learning_rate=payload.learning_rate,
         device=payload.device,
+        enable_gpu=payload.enable_gpu,
         extra_args=payload.extra_args,
     )
     db.add(job)
     db.commit()
     db.refresh(job)
 
-    provider.start_training(db, job)
+    # `start_training` does real synchronous work here (for Kaggle: writing
+    # the dataset export, zipping it, pushing a kernel) with no try/except
+    # around it before this fix — any failure (revoked credentials, a
+    # network error, a full disk) left the job permanently QUEUED with no
+    # `error` ever set, and leaked a raw traceback to the client since
+    # DEBUG=True by default (audit finding BE-01). Catch it, record a clean
+    # FAILED state the UI can actually show, and return a normal error
+    # response instead of an internals-exposing 500.
+    try:
+        provider.start_training(db, job)
+    except Exception as exc:
+        db.rollback()
+        job = db.get(TrainingJob, job.id)
+        job.status = TrainingJobStatus.FAILED
+        job.error = str(exc)[:2000]
+        db.commit()
+        raise HTTPException(status.HTTP_502_BAD_GATEWAY, f"Failed to start training: {exc}") from exc
     db.refresh(job)
     return job
 

@@ -10,14 +10,16 @@ function TestHarness({ handlers, enabled = true }: { handlers: ShortcutHandlers;
 
 function makeHandlers(overrides: Partial<ShortcutHandlers> = {}): ShortcutHandlers {
   return {
-    add: vi.fn(),
+    drawBbox: vi.fn(),
+    drawPolygon: vi.fn(),
     delete: vi.fn(),
-    edit: vi.fn(),
+    undo: vi.fn(),
     prev: vi.fn(),
     next: vi.fn(),
     approve: vi.fn(),
     save: vi.fn(),
     zoom: vi.fn(),
+    zoomOut: vi.fn(),
     fit: vi.fn(),
     setClassByIndex: vi.fn(),
     ...overrides,
@@ -25,11 +27,13 @@ function makeHandlers(overrides: Partial<ShortcutHandlers> = {}): ShortcutHandle
 }
 
 describe("useKeyboardShortcuts", () => {
-  it("dispatches A to add", async () => {
+  it("dispatches B to drawBbox and P to drawPolygon", async () => {
     const handlers = makeHandlers();
     render(<TestHarness handlers={handlers} />);
-    await userEvent.keyboard("a");
-    expect(handlers.add).toHaveBeenCalledTimes(1);
+    await userEvent.keyboard("b");
+    await userEvent.keyboard("p");
+    expect(handlers.drawBbox).toHaveBeenCalledTimes(1);
+    expect(handlers.drawPolygon).toHaveBeenCalledTimes(1);
   });
 
   it("dispatches D to delete and arrow keys to prev/next", async () => {
@@ -64,14 +68,35 @@ describe("useKeyboardShortcuts", () => {
     render(<TestHarness handlers={handlers} />);
     const input = screen.getByLabelText("text-field");
     input.focus();
-    await userEvent.keyboard("a");
-    expect(handlers.add).not.toHaveBeenCalled();
+    await userEvent.keyboard("b");
+    expect(handlers.drawBbox).not.toHaveBeenCalled();
   });
 
   it("does nothing when disabled", async () => {
     const handlers = makeHandlers();
     render(<TestHarness handlers={handlers} enabled={false} />);
-    await userEvent.keyboard("a");
-    expect(handlers.add).not.toHaveBeenCalled();
+    await userEvent.keyboard("b");
+    expect(handlers.drawBbox).not.toHaveBeenCalled();
+  });
+
+  // Regression coverage for audit findings FE-02 (no undo existed at all)
+  // and FE-16 (zoom-out had no keyboard binding, and the on-screen hint on
+  // the zoom-in button pointed at the wrong shortcut).
+  it("dispatches Ctrl+Z to undo, not to zoom", async () => {
+    const handlers = makeHandlers();
+    render(<TestHarness handlers={handlers} />);
+    await userEvent.keyboard("{Control>}z{/Control}");
+    expect(handlers.undo).toHaveBeenCalledTimes(1);
+    expect(handlers.zoom).not.toHaveBeenCalled();
+  });
+
+  it("dispatches plain Z to zoom in and Shift+Z to zoom out", async () => {
+    const handlers = makeHandlers();
+    render(<TestHarness handlers={handlers} />);
+    await userEvent.keyboard("z");
+    await userEvent.keyboard("{Shift>}Z{/Shift}");
+    expect(handlers.zoom).toHaveBeenCalledTimes(1);
+    expect(handlers.zoomOut).toHaveBeenCalledTimes(1);
+    expect(handlers.undo).not.toHaveBeenCalled();
   });
 });

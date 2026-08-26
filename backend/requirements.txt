@@ -47,6 +47,10 @@ PyYAML==6.0.3
 # Kaggle (optional at runtime; import is guarded)
 kaggle==1.6.17
 
+# Modal (optional at runtime; import is guarded — see
+# services/integrations/modal_connect.py)
+modal>=0.64.0
+
 # Roboflow (optional at runtime; import is guarded — see
 # services/integrations/roboflow_connect.py)
 roboflow==1.4.1

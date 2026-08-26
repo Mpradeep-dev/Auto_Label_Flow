@@ -7,6 +7,7 @@ import uuid
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -27,6 +28,24 @@ def create_inference_job(payload: InferenceJobCreate, db: Session = Depends(get_
     if dataset is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Dataset not found")
 
+    # Cheap pre-check for a clean, specific error message on the common
+    # case; the partial unique index below (`uq_inference_jobs_one_active_
+    # per_dataset`, see InferenceJob.__table_args__) is what actually
+    # closes the race for two truly concurrent requests — this check alone
+    # would still have a TOCTOU gap between two simultaneous callers.
+    existing = db.scalar(
+        select(InferenceJob).where(
+            InferenceJob.dataset_id == payload.dataset_id,
+            InferenceJob.status.in_([JobStatus.QUEUED, JobStatus.RUNNING]),
+        )
+    )
+    if existing is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"An inference job ({existing.id}) is already {existing.status.value.lower()} for this dataset — "
+            "wait for it to finish, or cancel it, before starting another.",
+        )
+
     job = InferenceJob(
         project_id=dataset.project_id,
         dataset_id=payload.dataset_id,
@@ -36,7 +55,14 @@ def create_inference_job(payload: InferenceJobCreate, db: Session = Depends(get_
         iou=payload.iou,
     )
     db.add(job)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Another inference job was just started for this dataset — wait for it to finish before starting another.",
+        ) from exc
     db.refresh(job)
 
     run_inference_batch.delay(str(job.id))

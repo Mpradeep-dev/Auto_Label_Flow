@@ -205,12 +205,18 @@ export function ReviewQueuePage() {
             {items.map((item) => {
               const dataset = datasetById.get(item.dataset_id);
               const unresolved = item.flags.filter((f) => !f.resolution);
+              // Carried through so AnnotatePage can browse in this same
+              // difficulty-ordered sequence instead of falling back to
+              // plain dataset upload order once you open an image — see
+              // `listAllReviewQueueImageIds`.
+              const annotateQuery = new URLSearchParams({ from: "review-queue", reviewStatus: tab });
+              if (flagType) annotateQuery.set("flagType", flagType);
               return (
                 <Link
                   key={item.image_id}
                   to={
                     dataset
-                      ? `/projects/${projectId}/datasets/${item.dataset_id}/images/${item.image_id}/annotate`
+                      ? `/projects/${projectId}/datasets/${item.dataset_id}/images/${item.image_id}/annotate?${annotateQuery.toString()}`
                       : "#"
                   }
                   className="group block border-4 border-plate bg-plate"

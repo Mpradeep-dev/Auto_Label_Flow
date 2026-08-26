@@ -113,6 +113,92 @@ function KaggleCard({ status }: { status: IntegrationStatus }) {
   );
 }
 
+function ModalCard({ status }: { status: IntegrationStatus }) {
+  const queryClient = useQueryClient();
+  const [tokenId, setTokenId] = useState("");
+  const [tokenSecret, setTokenSecret] = useState("");
+
+  const connectMutation = useMutation({
+    mutationFn: () => api.connectModal({ token_id: tokenId.trim(), token_secret: tokenSecret.trim() }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["integrations"] });
+      setTokenId("");
+      setTokenSecret("");
+    },
+  });
+  const disconnectMutation = useMutation({
+    mutationFn: () => api.disconnectModal(),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["integrations"] }),
+  });
+
+  return (
+    <div className="border-2 border-ink p-6">
+      <div className="mb-4 flex items-center justify-between">
+        <p className="text-lg font-bold uppercase tracking-tight">Modal</p>
+        <StatusPill status={status} />
+      </div>
+      <p className="mb-4 text-sm text-ink/60">
+        Powers the MODAL training provider — train on Modal's serverless GPU cloud with per-second billing.
+        $30/month free credits included. Local training always stays available regardless of this.
+      </p>
+
+      {status.connected ? (
+        <div className="flex items-center justify-between border-t border-ink/20 pt-4">
+          <p className="tabular text-xs uppercase tracking-widest text-ink/50">
+            Token: {status.identifier}
+            {status.verified_at && ` · verified ${new Date(status.verified_at).toLocaleString()}`}
+          </p>
+          <button
+            onClick={() => disconnectMutation.mutate()}
+            disabled={disconnectMutation.isPending}
+            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-orange hover:text-paper hover:border-orange disabled:opacity-40"
+          >
+            Disconnect
+          </button>
+        </div>
+      ) : (
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            if (tokenId.trim() && tokenSecret.trim()) connectMutation.mutate();
+          }}
+          className="space-y-3 border-t border-ink/20 pt-4"
+        >
+          <div className="flex flex-wrap gap-3">
+            <input
+              value={tokenId}
+              onChange={(e) => setTokenId(e.target.value)}
+              placeholder="TOKEN ID"
+              className="min-w-[200px] flex-1 border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
+            />
+            <input
+              value={tokenSecret}
+              onChange={(e) => setTokenSecret(e.target.value)}
+              type="password"
+              placeholder="TOKEN SECRET"
+              className="min-w-[200px] flex-1 border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
+            />
+            <button
+              type="submit"
+              disabled={!tokenId.trim() || !tokenSecret.trim() || connectMutation.isPending}
+              className="border-2 border-ink bg-ink px-6 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+            >
+              {connectMutation.isPending ? "Verifying…" : "Connect"}
+            </button>
+          </div>
+          <FieldError error={connectMutation.error} />
+          {status.last_error && !connectMutation.isError && (
+            <p className="text-xs text-accent">Last attempt failed: {status.last_error}</p>
+          )}
+          <p className="text-xs text-ink/40">
+            From modal.com/settings → API Tokens → Create new token. The credentials are stored on this server only.
+          </p>
+        </form>
+      )}
+    </div>
+  );
+}
+
 function RoboflowCard({ status }: { status: IntegrationStatus }) {
   const queryClient = useQueryClient();
   const [apiKey, setApiKey] = useState("");
@@ -204,6 +290,13 @@ export function IntegrationsSection({ sectionIndex = 2 }: { sectionIndex?: numbe
   const integrationsQuery = useQuery({ queryKey: ["integrations"], queryFn: () => api.listIntegrations() });
   const byProvider = Object.fromEntries((integrationsQuery.data ?? []).map((s) => [s.provider, s]));
   const kaggle = byProvider["KAGGLE"] ?? { provider: "KAGGLE", connected: false, identifier: null, verified_at: null, last_error: null };
+  const modal = byProvider["MODAL"] ?? {
+    provider: "MODAL",
+    connected: false,
+    identifier: null,
+    verified_at: null,
+    last_error: null,
+  };
   const roboflow = byProvider["ROBOFLOW"] ?? {
     provider: "ROBOFLOW",
     connected: false,
@@ -217,6 +310,7 @@ export function IntegrationsSection({ sectionIndex = 2 }: { sectionIndex?: numbe
       <SectionLabel index={sectionIndex}>Integrations</SectionLabel>
       <div className="grid max-w-5xl grid-cols-1 gap-6 lg:grid-cols-2">
         <KaggleCard status={kaggle} />
+        <ModalCard status={modal} />
         <RoboflowCard status={roboflow} />
       </div>
     </section>

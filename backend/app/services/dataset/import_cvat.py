@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import tempfile
 import uuid
-import xml.etree.ElementTree as ET
 import zipfile
 from pathlib import Path
 
@@ -19,16 +18,21 @@ import cv2
 from sqlalchemy.orm import Session
 
 from app.core.security import safe_storage_key
-from app.models.annotation import AnnotationSource
+from app.models.annotation import AnnotationSource, ShapeType
 from app.models.dataset import Dataset
 from app.models.image import Image, ImageSourceType
 from app.models.project import Project
 from app.services.annotation.service import create_annotation
+from app.services.dataset.import_safety import UnsafeArchiveError, UnsafeXmlError, parse_xml_safely, safe_extractall
 from app.services.storage.factory import get_storage
 
 
 class CvatImportError(RuntimeError):
     pass
+
+
+def _clamp01(value: float) -> float:
+    return max(0.0, min(1.0, value))
 
 
 def _find_annotations_xml(root: Path) -> Path:
@@ -89,10 +93,15 @@ def import_cvat_zip(
         extract_root = Path(tmp) / "extracted"
         extract_root.mkdir()
         with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(extract_root)
+            try:
+                safe_extractall(zf, extract_root)
+            except UnsafeArchiveError as exc:
+                raise CvatImportError(str(exc)) from exc
 
-        tree = ET.parse(_find_annotations_xml(extract_root))
-        xml_root = tree.getroot()
+        try:
+            xml_root = parse_xml_safely(_find_annotations_xml(extract_root))
+        except UnsafeXmlError as exc:
+            raise CvatImportError(str(exc)) from exc
 
         for image_el in xml_root.findall("image"):
             file_name = image_el.get("name")
@@ -137,10 +146,34 @@ def import_cvat_zip(
                     image_id=image.id,
                     class_id=class_id,
                     class_name=label,
-                    x1=xtl / width,
-                    y1=ytl / height,
-                    x2=xbr / width,
-                    y2=ybr / height,
+                    x1=_clamp01(xtl / width),
+                    y1=_clamp01(ytl / height),
+                    x2=_clamp01(xbr / width),
+                    y2=_clamp01(ybr / height),
+                    confidence=None,
+                    source=AnnotationSource.HUMAN,
+                    actor="cvat-import",
+                )
+
+            for polygon_el in image_el.findall("polygon"):
+                label = polygon_el.get("label")
+                points_attr = polygon_el.get("points")
+                if not label or not points_attr:
+                    continue
+                points: list[list[float]] = []
+                for pair in points_attr.split(";"):
+                    px_str, py_str = pair.split(",")
+                    points.append([_clamp01(float(px_str) / width), _clamp01(float(py_str) / height)])
+                if len(points) < 3:
+                    continue
+                class_id = _ensure_class_id(project, label)
+                create_annotation(
+                    db,
+                    image_id=image.id,
+                    class_id=class_id,
+                    class_name=label,
+                    shape_type=ShapeType.POLYGON,
+                    points=points,
                     confidence=None,
                     source=AnnotationSource.HUMAN,
                     actor="cvat-import",

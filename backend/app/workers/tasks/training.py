@@ -24,7 +24,7 @@ from app.models.ml_model import ModelKind
 from app.models.training_job import TrainingJob, TrainingJobEpoch, TrainingJobStatus
 from app.services.dataset.export_yolo import ExportError, write_yolo_dataset
 from app.services.inference.registry import register_model
-from app.workers.celery_app import celery_app
+from app.workers.celery_app import TRAINING_SOFT_TIME_LIMIT_S, TRAINING_TIME_LIMIT_S, celery_app
 from app.workers.progress import clear_cancel, is_cancel_requested
 from app.workers.training_progress import EpochProgress, set_training_progress
 
@@ -65,7 +65,12 @@ def _extract_epoch_metrics(trainer) -> dict:
     }
 
 
-@celery_app.task(bind=True, name="app.workers.tasks.training.train_local_model")
+@celery_app.task(
+    bind=True,
+    name="app.workers.tasks.training.train_local_model",
+    time_limit=TRAINING_TIME_LIMIT_S,
+    soft_time_limit=TRAINING_SOFT_TIME_LIMIT_S,
+)
 def train_local_model(self, training_job_id: str) -> None:
     db = SessionLocal()
     job = db.get(TrainingJob, uuid.UUID(training_job_id))
@@ -184,7 +189,12 @@ def train_local_model(self, training_job_id: str) -> None:
             name=f"{base_model.name}-retrained",
             weights_path=str(registered_path),
             kind=ModelKind.DETECTOR,
-            version=f"trained-from-{base_model.name}",
+            # Includes the job id, not just the base model's name — two
+            # training runs off the same base (an entirely normal part of
+            # the retrain loop: correct more data, retrain again) used to
+            # produce identical name+version pairs, which now collide with
+            # the (name, version) uniqueness added for DB-03.
+            version=f"trained-from-{base_model.name}-{str(job.id)[:8]}",
         )
         result_model.base_model_id = base_model.id
         # Seed the new model's dashboard metrics from its final training

@@ -86,3 +86,40 @@ def test_extract_frames_missing_video_404(real_client: TestClient) -> None:
         "/api/v1/videos/00000000-0000-0000-0000-000000000000/extract-frames", json={"interval": 5}
     )
     assert resp.status_code == 404
+
+
+def test_extract_frames_on_corrupt_video_fails_cleanly_not_silent_success(
+    real_client: TestClient, real_db_session, project_and_dataset, tmp_path: Path
+) -> None:
+    """Regression test for audit finding BE-18. Upload validation already
+    rejects an obviously-corrupt file at upload time (see
+    test_video_upload_rejects_bad_extension and api/v1/videos.py's own
+    isOpened() probe) — this exercises the extraction task's own guard
+    directly, for the case where the stored bytes are no longer a valid
+    video by the time extraction actually runs (e.g. clobbered storage).
+    Before this fix, that fell through to `compute_sample_indices(0, ...)`
+    returning no frames and the video being marked EXTRACTED with
+    `extracted_frame_count == 0` — a silent no-op reported as success."""
+    import uuid as _uuid
+
+    from app.models.video import Video
+    from app.services.storage.factory import get_storage
+    from app.workers.tasks.video import extract_video_frames
+
+    _, dataset_id = project_and_dataset
+    video_path = tmp_path / "clip.mp4"
+    _make_test_video(video_path, num_frames=40, fps=20.0, size=(64, 48))
+    with open(video_path, "rb") as f:
+        video = real_client.post(
+            f"/api/v1/datasets/{dataset_id}/videos", files={"file": ("clip.mp4", f, "video/mp4")}
+        ).json()
+
+    storage_key = real_db_session.get(Video, _uuid.UUID(video["id"])).storage_key
+    get_storage().upload_bytes(b"not actually a video anymore", storage_key, content_type="video/mp4")
+
+    with pytest.raises(ValueError, match="[Cc]ould not open|no frames"):
+        extract_video_frames(video["id"], interval=5)
+
+    refreshed = real_client.get(f"/api/v1/videos/{video['id']}").json()
+    assert refreshed["status"] == "FAILED"
+    assert refreshed["error"]

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/services/api";
+import { api, ApiError } from "@/services/api";
 import { SectionLabel } from "@/components/layout/SectionLabel";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
-import type { AnnotationImage } from "@/types";
+import type { AnnotationImage, ImageReviewStatus } from "@/types";
 
 const STATUS_LABEL: Record<string, string> = {
   PENDING: "Pending",
@@ -13,17 +13,21 @@ const STATUS_LABEL: Record<string, string> = {
   REJECTED: "Rejected",
 };
 
+type StatusTab = "ALL" | ImageReviewStatus;
+
 const PAGE_SIZE = 60;
 
 function ImageCard({
   image,
   projectId,
   datasetId,
+  annotateQuery,
   onDeleted,
 }: {
   image: AnnotationImage;
   projectId: string;
   datasetId: string;
+  annotateQuery: string;
   onDeleted: () => void;
 }) {
   const [confirming, setConfirming] = useState(false);
@@ -35,7 +39,10 @@ function ImageCard({
 
   return (
     <div className="group relative block border-4 border-plate bg-plate">
-      <Link to={`/projects/${projectId}/datasets/${datasetId}/images/${image.id}/annotate`} className="block">
+      <Link
+        to={`/projects/${projectId}/datasets/${datasetId}/images/${image.id}/annotate${annotateQuery}`}
+        className="block"
+      >
         <div className="aspect-video overflow-hidden">
           <img
             src={image.url}
@@ -109,15 +116,23 @@ export function ImagesPage() {
   const datasetId = datasetIdParam || pickedDatasetId;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(0);
+  const [failedUploads, setFailedUploads] = useState<{ name: string; message: string }[]>([]);
   const [dragActive, setDragActive] = useState(false);
   const [page, setPage] = useState(0);
+  // Split by review_status instead of one undifferentiated gallery — an
+  // approved image has nothing left to do, so mixing it back in with what's
+  // still pending made "did I actually finish this dataset?" impossible to
+  // answer from this page (same reasoning ReviewQueuePage's Pending/Approved
+  // split already uses; this just extends the same idea here, plus Rejected).
+  const [tab, setTab] = useState<StatusTab>("ALL");
   const queryClient = useQueryClient();
 
-  // A dataset switch (via the picker, or navigating to a different
-  // dataset-scoped route) invalidates whatever page we were on.
+  // A dataset or tab switch invalidates whatever page we were on — the old
+  // page index is meaningless (and can point past the end) against a
+  // different result set.
   useEffect(() => {
     setPage(0);
-  }, [datasetId]);
+  }, [datasetId, tab]);
 
   const datasetsQuery = useQuery({
     queryKey: ["datasets", projectId],
@@ -126,8 +141,28 @@ export function ImagesPage() {
   });
 
   const imagesQuery = useQuery({
-    queryKey: ["images", datasetId, page],
-    queryFn: () => api.listImages(datasetId!, PAGE_SIZE, page * PAGE_SIZE),
+    queryKey: ["images", datasetId, page, tab],
+    queryFn: () => api.listImages(datasetId!, PAGE_SIZE, page * PAGE_SIZE, tab === "ALL" ? undefined : tab),
+    enabled: !!datasetId,
+  });
+
+  // Every tab's total is fetched (not just the active one, `limit: 1` since
+  // only `total` is needed) so the tab bar shows live counts and switching
+  // feels instant instead of a blank "…" until you click it — same "fetch
+  // every tab for its count" pattern ReviewQueuePage already uses.
+  const pendingCountQuery = useQuery({
+    queryKey: ["images", datasetId, "count", "PENDING"],
+    queryFn: () => api.listImages(datasetId!, 1, 0, "PENDING"),
+    enabled: !!datasetId,
+  });
+  const approvedCountQuery = useQuery({
+    queryKey: ["images", datasetId, "count", "APPROVED"],
+    queryFn: () => api.listImages(datasetId!, 1, 0, "APPROVED"),
+    enabled: !!datasetId,
+  });
+  const rejectedCountQuery = useQuery({
+    queryKey: ["images", datasetId, "count", "REJECTED"],
+    queryFn: () => api.listImages(datasetId!, 1, 0, "REJECTED"),
     enabled: !!datasetId,
   });
 
@@ -139,15 +174,25 @@ export function ImagesPage() {
     if (!files || !datasetId) return;
     const list = Array.from(files);
     setUploading(list.length);
-    for (const file of list) {
-      try {
-        await uploadMutation.mutateAsync(file);
-      } catch (err) {
-        console.error("Upload failed", file.name, err);
-      } finally {
-        setUploading((n) => n - 1);
-      }
-    }
+    setFailedUploads([]);
+    // Uploaded concurrently (was a sequential `await` loop — N files meant
+    // N round trips back to back) and each failure is now collected
+    // instead of only `console.error`'d: a partial failure used to leave
+    // the page showing the files that succeeded with zero indication
+    // anything was missing (audit finding FE-04).
+    const failures: { name: string; message: string }[] = [];
+    await Promise.all(
+      list.map(async (file) => {
+        try {
+          await uploadMutation.mutateAsync(file);
+        } catch (err) {
+          failures.push({ name: file.name, message: err instanceof ApiError ? err.message : "Upload failed" });
+        } finally {
+          setUploading((n) => n - 1);
+        }
+      }),
+    );
+    setFailedUploads(failures);
     setPage(0);
     queryClient.invalidateQueries({ queryKey: ["images", datasetId] });
     queryClient.invalidateQueries({ queryKey: ["dataset-stats", datasetId] });
@@ -163,6 +208,19 @@ export function ImagesPage() {
   const images = imagesQuery.data?.items ?? [];
   const total = imagesQuery.data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const pendingTotal = pendingCountQuery.data?.total;
+  const approvedTotal = approvedCountQuery.data?.total;
+  const rejectedTotal = rejectedCountQuery.data?.total;
+  const allTotal =
+    pendingTotal != null && approvedTotal != null && rejectedTotal != null
+      ? pendingTotal + approvedTotal + rejectedTotal
+      : undefined;
+  // Carried into AnnotatePage so its Prev/Next/Filmstrip stay scoped to
+  // this same tab instead of falling back to the full, unfiltered dataset —
+  // same mechanism ReviewQueuePage's own tabs already use
+  // (`listAllReviewQueueImageIds`/`fromReviewQueue`), just for a plain
+  // status filter instead of a difficulty-ordered queue.
+  const annotateQuery = tab === "ALL" ? "" : `?from=images&reviewStatus=${tab}`;
 
   return (
     <div className="min-h-full px-8 py-12 sm:px-16 sm:py-20">
@@ -212,6 +270,29 @@ export function ImagesPage() {
         </div>
       </div>
 
+      {failedUploads.length > 0 && (
+        <div className="mb-8 border-2 border-accent bg-accent/5 px-4 py-3 text-xs">
+          <div className="flex items-start justify-between gap-4">
+            <p className="font-bold uppercase tracking-widest text-accent">
+              {failedUploads.length} file{failedUploads.length === 1 ? "" : "s"} failed to upload
+            </p>
+            <button
+              onClick={() => setFailedUploads([])}
+              className="font-bold uppercase tracking-widest text-ink/40 hover:text-ink"
+            >
+              Dismiss
+            </button>
+          </div>
+          <ul className="mt-2 space-y-1 text-ink/70">
+            {failedUploads.map((f, i) => (
+              <li key={i}>
+                <span className="font-semibold">{f.name}</span> — {f.message}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {!datasetId ? (
         <EmptyState
           title="Pick a dataset"
@@ -219,6 +300,27 @@ export function ImagesPage() {
         />
       ) : (
         <>
+          <div className="mb-6 flex border-2 border-ink">
+            {(
+              [
+                ["ALL", "All", allTotal],
+                ["PENDING", "Pending", pendingTotal],
+                ["APPROVED", "Approved", approvedTotal],
+                ["REJECTED", "Rejected", rejectedTotal],
+              ] as const
+            ).map(([value, label, count]) => (
+              <button
+                key={value}
+                onClick={() => setTab(value)}
+                className={`flex-1 border-r-2 border-ink px-4 py-3 text-xs font-bold uppercase tracking-widest last:border-r-0 ${
+                  tab === value ? "bg-ink text-paper" : "hover:bg-muted"
+                }`}
+              >
+                {label} <span className="tabular">{count ?? "…"}</span>
+              </button>
+            ))}
+          </div>
+
           <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
             {imagesQuery.isLoading &&
               Array.from({ length: 10 }).map((_, i) => <Skeleton key={i} className="aspect-video border-4 border-plate" />)}
@@ -228,6 +330,7 @@ export function ImagesPage() {
                 image={image}
                 projectId={projectId}
                 datasetId={datasetId}
+                annotateQuery={annotateQuery}
                 onDeleted={onImageDeleted}
               />
             ))}

@@ -21,6 +21,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from app.core.security import safe_storage_key
+from app.models.annotation import ShapeType
 from app.models.dataset import Dataset
 from app.models.dataset_version import DatasetVersion
 from app.services.dataset.version_data import VersionDataError, load_version_data, out_image_filename
@@ -75,6 +76,17 @@ def write_coco_dataset(db: Session, *, version_id: uuid.UUID, root: Path) -> Pat
             y = event.y1 * vi.image.height
             w = (event.x2 - event.x1) * vi.image.width
             h = (event.y2 - event.y1) * vi.image.height
+            # `area`/`bbox` always come from x1..y2 (the shape's bounding
+            # box for a POLYGON row too) — deliberately bbox-approximate,
+            # same scope decision as the quality-rule engine's geometry
+            # reads. `segmentation` is the one field that carries the true
+            # polygon geometry when there is one.
+            if event.shape_type == ShapeType.POLYGON and event.points:
+                segmentation = [
+                    [coord for px, py in event.points for coord in (round(px * vi.image.width, 2), round(py * vi.image.height, 2))]
+                ]
+            else:
+                segmentation = []
             coco_annotations.append(
                 {
                     "id": next_annotation_id,
@@ -83,7 +95,7 @@ def write_coco_dataset(db: Session, *, version_id: uuid.UUID, root: Path) -> Pat
                     "bbox": [round(x, 2), round(y, 2), round(w, 2), round(h, 2)],
                     "area": round(w * h, 2),
                     "iscrowd": 0,
-                    "segmentation": [],
+                    "segmentation": segmentation,
                 }
             )
             next_annotation_id += 1

@@ -15,10 +15,15 @@ from app.models.image import Image, ImageSourceType
 from app.models.video import Video, VideoStatus
 from app.services.storage.factory import get_storage
 from app.services.video.sampler import compute_sample_indices
-from app.workers.celery_app import celery_app
+from app.workers.celery_app import VIDEO_SOFT_TIME_LIMIT_S, VIDEO_TIME_LIMIT_S, celery_app
 
 
-@celery_app.task(bind=True, name="app.workers.tasks.video.extract_video_frames")
+@celery_app.task(
+    bind=True,
+    name="app.workers.tasks.video.extract_video_frames",
+    time_limit=VIDEO_TIME_LIMIT_S,
+    soft_time_limit=VIDEO_SOFT_TIME_LIMIT_S,
+)
 def extract_video_frames(self, video_id: str, interval: int | None = None, fps: float | None = None) -> None:
     db = SessionLocal()
     video = db.get(Video, uuid.UUID(video_id))
@@ -40,6 +45,17 @@ def extract_video_frames(self, video_id: str, interval: int | None = None, fps: 
         get_storage().download(video.storage_key, tmp_path)  # overwrites the empty temp file
 
         cap = cv2.VideoCapture(str(tmp_path))
+        if not cap.isOpened():
+            # Audit finding BE-18: without this check, a corrupt/unsupported
+            # file falls straight through to `compute_sample_indices(0, ...)`
+            # returning an empty index list, and the task marks the video
+            # EXTRACTED with 0 frames — a silent no-op reported as success,
+            # not the failure it actually is.
+            cap.release()
+            raise ValueError(
+                f"Could not open {video.original_filename!r} as a video — the file may be corrupt "
+                "or in an unsupported format."
+            )
         video_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -83,6 +99,15 @@ def extract_video_frames(self, video_id: str, interval: int | None = None, fps: 
             extracted += 1
 
         cap.release()
+
+        if indices and extracted == 0:
+            # The file opened, but every single sampled frame failed to
+            # decode — also a real failure, not a video that legitimately
+            # has zero usable frames (BE-18).
+            raise ValueError(
+                f"{video.original_filename!r} opened but no frames could be read from it — "
+                "the file is likely corrupt."
+            )
 
         video.status = VideoStatus.EXTRACTED
         video.extracted_frame_count = extracted

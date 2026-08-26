@@ -2,6 +2,7 @@ import { useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
+import { FieldError } from "@/components/layout/FieldError";
 import { SectionLabel } from "@/components/layout/SectionLabel";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -244,6 +245,7 @@ export function DatasetsPage() {
           {createMutation.isPending ? "Creating…" : "Create"}
         </button>
       </form>
+      {createMutation.isError && <FieldError error={createMutation.error} />}
 
       <div className="mb-12 flex flex-wrap gap-8">
         <FileImportSection projectId={projectId} />

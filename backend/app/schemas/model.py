@@ -47,5 +47,6 @@ class ModelRead(BaseModel):
     metrics: dict
     base_model_id: uuid.UUID | None
     is_active: bool
+    is_promptable: bool
     created_at: datetime
     updated_at: datetime

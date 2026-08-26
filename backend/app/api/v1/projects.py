@@ -9,8 +9,11 @@ from sqlalchemy.orm import Session
 
 from app.core.slugify import slugify
 from app.db.session import get_db
+from app.models.image import Image
 from app.models.project import Project
+from app.models.video import Video
 from app.schemas.project import ProjectCreate, ProjectRead, ProjectUpdate
+from app.services.storage.factory import get_storage
 
 router = APIRouter(prefix="/projects", tags=["projects"])
 
@@ -68,5 +71,15 @@ def delete_project(project_id: uuid.UUID, db: Session = Depends(get_db)) -> None
     project = db.get(Project, project_id)
     if project is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
+
+    # Same reasoning as datasets.py's delete_dataset (audit finding BE-02) —
+    # captured before the cascade delete removes the Image/Video rows.
+    image_keys = list(db.scalars(select(Image.storage_key).where(Image.project_id == project_id)))
+    video_keys = list(db.scalars(select(Video.storage_key).where(Video.project_id == project_id)))
+
     db.delete(project)
     db.commit()
+
+    storage = get_storage()
+    for key in image_keys + video_keys:
+        storage.delete(key)

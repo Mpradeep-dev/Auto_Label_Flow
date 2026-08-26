@@ -19,6 +19,7 @@ from app.models.annotation import (
     AnnotationSource,
     ErrorCategory,
     ErrorReason,
+    ShapeType,
 )
 from app.models.image import Image, ImageReviewStatus
 from app.services.annotation import service as annotation_service
@@ -217,3 +218,119 @@ def test_duplicate_creates_offset_human_copy(db_session: Session, image: Image) 
 
     all_annotations = annotation_service.list_annotations_for_image(db_session, image.id)
     assert len(all_annotations) == 2
+
+
+def test_create_polygon_derives_bbox_and_ignores_client_bbox(db_session: Session, image: Image) -> None:
+    ann = annotation_service.create_annotation(
+        db_session,
+        image_id=image.id,
+        class_id=1,
+        class_name="cone",
+        shape_type=ShapeType.POLYGON,
+        points=[[0.1, 0.1], [0.3, 0.1], [0.2, 0.4]],
+        confidence=None,
+        source=AnnotationSource.HUMAN,
+        # A caller-supplied bbox for a POLYGON must be ignored, not trusted —
+        # this is what keeps x1..y2 authoritative for bbox-approximate
+        # downstream consumers.
+        x1=0.9,
+        y1=0.9,
+        x2=0.95,
+        y2=0.95,
+    )
+    assert ann.shape_type == ShapeType.POLYGON
+    assert (ann.x1, ann.y1, ann.x2, ann.y2) == (0.1, 0.1, 0.3, 0.4)
+
+
+def test_create_polygon_rejects_too_few_points(db_session: Session, image: Image) -> None:
+    with pytest.raises(annotation_service.InvalidGeometryError):
+        annotation_service.create_annotation(
+            db_session,
+            image_id=image.id,
+            class_id=1,
+            class_name="cone",
+            shape_type=ShapeType.POLYGON,
+            points=[[0.1, 0.1], [0.3, 0.1]],
+            confidence=None,
+            source=AnnotationSource.HUMAN,
+        )
+
+
+def test_update_polygon_points_moves_auto_to_corrected_and_recomputes_bbox(
+    db_session: Session, image: Image
+) -> None:
+    ann = annotation_service.create_annotation(
+        db_session,
+        image_id=image.id,
+        class_id=1,
+        class_name="cone",
+        shape_type=ShapeType.POLYGON,
+        points=[[0.1, 0.1], [0.3, 0.1], [0.2, 0.4]],
+        confidence=0.8,
+        source=AnnotationSource.AUTO,
+    )
+    moved = annotation_service.update_annotation(
+        db_session, annotation_id=ann.id, points=[[0.0, 0.0], [0.5, 0.0], [0.25, 0.5]]
+    )
+    assert moved.source == AnnotationSource.CORRECTED
+    assert (moved.x1, moved.y1, moved.x2, moved.y2) == (0.0, 0.0, 0.5, 0.5)
+
+
+def test_update_rejects_bbox_edit_on_polygon(db_session: Session, image: Image) -> None:
+    ann = annotation_service.create_annotation(
+        db_session,
+        image_id=image.id,
+        class_id=1,
+        class_name="cone",
+        shape_type=ShapeType.POLYGON,
+        points=[[0.1, 0.1], [0.3, 0.1], [0.2, 0.4]],
+        confidence=None,
+        source=AnnotationSource.HUMAN,
+    )
+    with pytest.raises(annotation_service.InvalidGeometryError):
+        annotation_service.update_annotation(db_session, annotation_id=ann.id, x1=0.2)
+
+
+def test_update_rejects_points_edit_on_bbox(db_session: Session, image: Image) -> None:
+    ann = annotation_service.create_annotation(
+        db_session,
+        image_id=image.id,
+        class_id=1,
+        class_name="cone",
+        x1=0.1,
+        y1=0.1,
+        x2=0.2,
+        y2=0.2,
+        confidence=None,
+        source=AnnotationSource.HUMAN,
+    )
+    with pytest.raises(annotation_service.InvalidGeometryError):
+        annotation_service.update_annotation(
+            db_session, annotation_id=ann.id, points=[[0.0, 0.0], [0.5, 0.0], [0.25, 0.5]]
+        )
+
+
+def test_update_annotation_has_no_shape_type_parameter() -> None:
+    """shape_type is immutable after creation — enforced structurally, not
+    just by convention: update_annotation must not even accept it."""
+    import inspect
+
+    assert "shape_type" not in inspect.signature(annotation_service.update_annotation).parameters
+
+
+def test_duplicate_polygon_translates_every_vertex(db_session: Session, image: Image) -> None:
+    original = annotation_service.create_annotation(
+        db_session,
+        image_id=image.id,
+        class_id=1,
+        class_name="cone",
+        shape_type=ShapeType.POLYGON,
+        points=[[0.1, 0.1], [0.3, 0.1], [0.2, 0.4]],
+        confidence=0.7,
+        source=AnnotationSource.AUTO,
+    )
+    copy = annotation_service.duplicate_annotation(db_session, annotation_id=original.id)
+    assert copy.shape_type == ShapeType.POLYGON
+    flat_points = [coord for point in copy.points for coord in point]
+    assert flat_points == pytest.approx([0.12, 0.12, 0.32, 0.12, 0.22, 0.42])
+    assert copy.source == AnnotationSource.HUMAN

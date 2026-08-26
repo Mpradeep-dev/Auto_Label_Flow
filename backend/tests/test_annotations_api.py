@@ -64,11 +64,14 @@ def test_create_list_annotation(client: TestClient, image_id: str) -> None:
 
 
 def test_create_rejects_degenerate_box(client: TestClient, image_id: str) -> None:
+    # Bbox-ordering validation now lives in AnnotationCreate's model_validator
+    # (applies uniformly to BBOX and POLYGON payloads), so a violation is a
+    # request-schema failure -> 422, not a hand-rolled 400 in the route.
     resp = client.post(
         "/api/v1/annotations",
         json={"image_id": image_id, "class_id": 1, "class_name": "cone", "x1": 0.2, "y1": 0.1, "x2": 0.2, "y2": 0.2},
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 422
 
 
 def test_update_annotation_moves_source_to_corrected(client: TestClient, image_id: str) -> None:
@@ -80,6 +83,89 @@ def test_update_annotation_moves_source_to_corrected(client: TestClient, image_i
     updated = client.put(f"/api/v1/annotations/{ann['id']}", json={"x1": 0.15}).json()
     assert updated["source"] == "HUMAN"
     assert updated["x1"] == 0.15
+
+
+def test_create_polygon_derives_bbox(client: TestClient, image_id: str) -> None:
+    resp = client.post(
+        "/api/v1/annotations",
+        json={
+            "image_id": image_id,
+            "class_id": 1,
+            "class_name": "cone",
+            "shape_type": "POLYGON",
+            "points": [[0.1, 0.1], [0.3, 0.1], [0.2, 0.4]],
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    ann = resp.json()
+    assert ann["shape_type"] == "POLYGON"
+    assert ann["points"] == [[0.1, 0.1], [0.3, 0.1], [0.2, 0.4]]
+    assert (ann["x1"], ann["y1"], ann["x2"], ann["y2"]) == (0.1, 0.1, 0.3, 0.4)
+
+
+def test_create_polygon_rejects_too_few_points(client: TestClient, image_id: str) -> None:
+    resp = client.post(
+        "/api/v1/annotations",
+        json={
+            "image_id": image_id,
+            "class_id": 1,
+            "class_name": "cone",
+            "shape_type": "POLYGON",
+            "points": [[0.1, 0.1], [0.3, 0.1]],
+        },
+    )
+    assert resp.status_code == 422
+
+
+def test_update_polygon_points_recomputes_bbox_and_flips_corrected(client: TestClient, image_id: str) -> None:
+    # AUTO source only comes from a detector run — go through auto-annotate,
+    # then convert one prediction's shape isn't possible (shape_type is
+    # immutable), so instead: create a HUMAN polygon, confirm point edits
+    # recompute the bbox; the AUTO -> CORRECTED flip on points-only change is
+    # covered directly in test_annotation_service.py against a synthetic AUTO row.
+    ann = client.post(
+        "/api/v1/annotations",
+        json={
+            "image_id": image_id,
+            "class_id": 1,
+            "class_name": "cone",
+            "shape_type": "POLYGON",
+            "points": [[0.1, 0.1], [0.3, 0.1], [0.2, 0.4]],
+        },
+    ).json()
+    updated = client.put(
+        f"/api/v1/annotations/{ann['id']}",
+        json={"points": [[0.0, 0.0], [0.5, 0.0], [0.25, 0.5]]},
+    ).json()
+    assert updated["points"] == [[0.0, 0.0], [0.5, 0.0], [0.25, 0.5]]
+    assert (updated["x1"], updated["y1"], updated["x2"], updated["y2"]) == (0.0, 0.0, 0.5, 0.5)
+
+
+def test_update_rejects_bbox_fields_on_polygon(client: TestClient, image_id: str) -> None:
+    ann = client.post(
+        "/api/v1/annotations",
+        json={
+            "image_id": image_id,
+            "class_id": 1,
+            "class_name": "cone",
+            "shape_type": "POLYGON",
+            "points": [[0.1, 0.1], [0.3, 0.1], [0.2, 0.4]],
+        },
+    ).json()
+    resp = client.put(f"/api/v1/annotations/{ann['id']}", json={"x1": 0.2})
+    assert resp.status_code == 400
+
+
+def test_update_rejects_points_on_bbox(client: TestClient, image_id: str) -> None:
+    ann = client.post(
+        "/api/v1/annotations",
+        json={"image_id": image_id, "class_id": 1, "class_name": "cone", "x1": 0.1, "y1": 0.1, "x2": 0.2, "y2": 0.2},
+    ).json()
+    resp = client.put(
+        f"/api/v1/annotations/{ann['id']}",
+        json={"points": [[0.0, 0.0], [0.5, 0.0], [0.25, 0.5]]},
+    )
+    assert resp.status_code == 400
 
 
 def test_delete_annotation_with_error_reason(client: TestClient, image_id: str) -> None:

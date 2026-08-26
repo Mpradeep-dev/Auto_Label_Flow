@@ -39,7 +39,23 @@ export function Filmstrip({ images, currentId, onSelect }: Props) {
           }`}
           title={img.original_filename}
         >
-          <img src={img.url} alt="" className="h-full w-full object-cover" />
+          {/* This strip renders every image in the dataset as a real <button>
+              (3500+ for a video-frame dataset) — without lazy loading, all
+              of them fire their thumbnail request the instant this mounts,
+              flooding the browser's ~6-per-host connection limit so
+              whichever thumbnails are actually near the current position
+              sit queued behind hundreds of others and only resolve once
+              you scroll near them. `loading="lazy"` defers the fetch until
+              a thumbnail is actually near the (horizontally scrolling)
+              viewport, so scrolling here loads a handful of images at a
+              time instead of the whole dataset at once. */}
+          <img
+            src={img.url}
+            alt=""
+            loading="lazy"
+            decoding="async"
+            className="h-full w-full object-cover"
+          />
         </button>
       ))}
     </div>

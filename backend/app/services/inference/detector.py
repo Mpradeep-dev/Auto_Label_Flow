@@ -92,6 +92,14 @@ class DetectionModel(ABC):
         throughput — see UltralyticsDetectionModel.predict_batch."""
         return [self.predict(img, conf=conf, iou=iou, imgsz=imgsz) for img in images]
 
+    def set_classes(self, classes: list[str]) -> None:
+        """Re-embed the model's class prototypes from a text prompt list —
+        only meaningful for an open-vocabulary model (YOLO-World). A
+        closed-vocabulary adapter has a fixed taxonomy baked into its
+        weights, so calling this on one is a caller bug: fail loudly rather
+        than silently ignoring the requested classes."""
+        raise NotImplementedError(f"{type(self).__name__} does not support dynamic classes")
+
 
 class PoseModel(ABC):
     """Separate, optional interface for auxiliary keypoint models (e.g.

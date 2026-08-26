@@ -20,7 +20,7 @@ interface Props {
   onSelectDrawClass: (classId: number) => void;
   onAddClass: (name: string) => void;
   addingClass: boolean;
-  pendingBox: boolean;
+  pendingShape: boolean;
   onCancelPending: () => void;
   onDeleteImage: () => void;
   deletingImage: boolean;
@@ -72,7 +72,7 @@ function ClassPicker({
   onSelectDrawClass,
   onAddClass,
   addingClass,
-  pendingBox,
+  pendingShape,
   onCancelPending,
 }: {
   classEntries: ClassEntry[];
@@ -83,7 +83,7 @@ function ClassPicker({
   // When a box has just been drawn, this panel switches from "pick the
   // default for the NEXT box" to "classify THIS box" — same chip list,
   // different consequence for clicking one (see AnnotatePage).
-  pendingBox: boolean;
+  pendingShape: boolean;
   onCancelPending: () => void;
 }) {
   const [adding, setAdding] = useState(false);
@@ -107,13 +107,13 @@ function ClassPicker({
   }
 
   return (
-    <div className={`mb-6 border-b-2 pb-6 ${pendingBox ? "border-[#FFB000]" : "border-ink"}`}>
+    <div className={`mb-6 border-b-2 pb-6 ${pendingShape ? "border-[#FFB000]" : "border-ink"}`}>
       <p
         className={`mb-2 text-[10px] font-bold uppercase tracking-widest ${
-          pendingBox ? "text-[#FFB000]" : "text-ink/50"
+          pendingShape ? "text-[#FFB000]" : "text-ink/50"
         }`}
       >
-        {pendingBox ? "New box — pick a class" : "Drawing as — next box uses this class"}
+        {pendingShape ? "New shape — pick a class" : "Drawing as — next shape uses this class"}
       </p>
       <div className="flex flex-wrap gap-1.5">
         {classEntries.map((c, i) => (
@@ -121,7 +121,7 @@ function ClassPicker({
             key={c.id}
             onClick={() => onSelectDrawClass(c.id)}
             className={`flex items-center gap-1.5 border-2 px-2 py-1 text-xs font-semibold uppercase tracking-wide transition-colors duration-150 ${
-              !pendingBox && c.id === drawClassId
+              !pendingShape && c.id === drawClassId
                 ? "border-ink bg-ink text-paper"
                 : "border-ink/20 hover:border-ink"
             }`}
@@ -133,11 +133,11 @@ function ClassPicker({
         ))}
         {classEntries.length === 0 && (
           <p className="text-xs text-ink/50">
-            {pendingBox ? "No classes yet — add one below to classify this box." : "No classes yet — add one below to start drawing."}
+            {pendingShape ? "No classes yet — add one below to classify this box." : "No classes yet — add one below to start drawing."}
           </p>
         )}
       </div>
-      {pendingBox && (
+      {pendingShape && (
         <button
           onClick={onCancelPending}
           className="mt-2 text-[10px] font-bold uppercase tracking-widest text-ink/50 underline decoration-1 underline-offset-2 hover:text-accent"
@@ -280,7 +280,7 @@ export function RightPanel({
   onSelectDrawClass,
   onAddClass,
   addingClass,
-  pendingBox,
+  pendingShape,
   onCancelPending,
   onDeleteImage,
   deletingImage,
@@ -306,7 +306,7 @@ export function RightPanel({
             onSelectDrawClass={onSelectDrawClass}
             onAddClass={onAddClass}
             addingClass={addingClass}
-            pendingBox={pendingBox}
+            pendingShape={pendingShape}
             onCancelPending={onCancelPending}
           />
           <ClassCounts annotations={annotations} classEntries={classEntries} />
@@ -332,7 +332,7 @@ export function RightPanel({
         onSelectDrawClass={onSelectDrawClass}
         onAddClass={onAddClass}
         addingClass={addingClass}
-        pendingBox={pendingBox}
+        pendingShape={pendingShape}
         onCancelPending={onCancelPending}
       />
       <ClassCounts annotations={annotations} classEntries={classEntries} />
@@ -365,18 +365,29 @@ export function RightPanel({
         </span>
       </Field>
 
-      <Field label="X1">
-        <CoordInput value={annotation.x1} onCommit={(v) => onEditCoords({ ...annotation, x1: v })} />
-      </Field>
-      <Field label="Y1">
-        <CoordInput value={annotation.y1} onCommit={(v) => onEditCoords({ ...annotation, y1: v })} />
-      </Field>
-      <Field label="X2">
-        <CoordInput value={annotation.x2} onCommit={(v) => onEditCoords({ ...annotation, x2: v })} />
-      </Field>
-      <Field label="Y2">
-        <CoordInput value={annotation.y2} onCommit={(v) => onEditCoords({ ...annotation, y2: v })} />
-      </Field>
+      {annotation.shape_type === "BBOX" ? (
+        <>
+          <Field label="X1">
+            <CoordInput value={annotation.x1} onCommit={(v) => onEditCoords({ ...annotation, x1: v })} />
+          </Field>
+          <Field label="Y1">
+            <CoordInput value={annotation.y1} onCommit={(v) => onEditCoords({ ...annotation, y1: v })} />
+          </Field>
+          <Field label="X2">
+            <CoordInput value={annotation.x2} onCommit={(v) => onEditCoords({ ...annotation, x2: v })} />
+          </Field>
+          <Field label="Y2">
+            <CoordInput value={annotation.y2} onCommit={(v) => onEditCoords({ ...annotation, y2: v })} />
+          </Field>
+        </>
+      ) : (
+        // A polygon's geometry is edited by dragging its vertices on the
+        // canvas, not by typing numbers — numeric bbox editing doesn't mean
+        // anything for a shape with more than 4 degrees of freedom.
+        <Field label="Points">
+          <span className="tabular text-xs">{annotation.points?.length ?? 0}</span>
+        </Field>
+      )}
 
       <Field label="Source">
         <span

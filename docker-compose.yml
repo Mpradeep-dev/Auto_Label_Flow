@@ -45,7 +45,7 @@ services:
   backend:
     build:
       context: ./backend
-    # Optional: picks up Kaggle credentials / other local overrides if
+    # Optional: picks up Kaggle/Modal credentials / other local overrides if
     # backend/.env exists, but `docker compose up` must work without it —
     # every value the containers actually need has a default below or in
     # Settings (see backend/app/core/config.py).
@@ -102,7 +102,7 @@ services:
   worker:
     build:
       context: ./backend
-    # Optional: picks up Kaggle credentials / other local overrides if
+    # Optional: picks up Kaggle/Modal credentials / other local overrides if
     # backend/.env exists, but `docker compose up` must work without it —
     # every value the containers actually need has a default below or in
     # Settings (see backend/app/core/config.py).
@@ -140,7 +140,13 @@ services:
     # this single worker processes both, still serializing GPU work with
     # itself since there's only one process. A production deploy would run
     # `-Q gpu -c 1` and `-Q default -c 4` as two separate services/replicas.
-    command: celery -A app.workers.celery_app worker -Q gpu,default -c 1 --loglevel=info
+    # -B embeds Celery Beat in this same process, so the reconcile-stale-jobs
+    # sweep (REL-01 — fails jobs a crashed/killed worker left stuck at
+    # QUEUED/RUNNING) actually runs; a production deploy with multiple
+    # worker replicas would need beat split out as its own single instance
+    # instead (running it embedded in more than one replica double-schedules
+    # every periodic task).
+    command: celery -A app.workers.celery_app worker -B -Q gpu,default -c 1 --loglevel=info --schedule=/tmp/celerybeat-schedule
 
   frontend:
     build:

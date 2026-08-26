@@ -15,7 +15,7 @@ from fastapi.testclient import TestClient
 from PIL import Image as PILImage
 from sqlalchemy.orm import Session
 
-from app.models.annotation import AnnotationSource
+from app.models.annotation import AnnotationSource, ShapeType
 from app.models.dataset import Dataset
 from app.models.image import Image, ImageReviewStatus
 from app.models.project import Project
@@ -94,6 +94,132 @@ def versioned_image(db_session: Session, dataset: Dataset):
     )
     version = create_version(db_session, dataset_id=dataset.id, train_ratio=1.0, val_ratio=0.0, test_ratio=0.0)
     return image, version
+
+
+@pytest.fixture()
+def versioned_polygon_image(db_session: Session, dataset: Dataset):
+    """One approved image with a triangle polygon: [[0.1,0.1],[0.5,0.1],
+    [0.3,0.6]] out of 100x80, alongside a plain bbox annotation — so export
+    exercises both shape types in the same version, pinned into a version."""
+    image = _make_approved_image(db_session, dataset)
+    annotation_service.create_annotation(
+        db_session,
+        image_id=image.id,
+        class_id=1,
+        class_name="cone",
+        shape_type=ShapeType.POLYGON,
+        points=[[0.1, 0.1], [0.5, 0.1], [0.3, 0.6]],
+        confidence=0.9,
+        source=AnnotationSource.AUTO,
+    )
+    annotation_service.create_annotation(
+        db_session,
+        image_id=image.id,
+        class_id=0,
+        class_name="ball",
+        x1=0.05,
+        y1=0.05,
+        x2=0.15,
+        y2=0.15,
+        confidence=0.8,
+        source=AnnotationSource.AUTO,
+    )
+    version = create_version(db_session, dataset_id=dataset.id, train_ratio=1.0, val_ratio=0.0, test_ratio=0.0)
+    return image, version
+
+
+def test_export_coco_populates_segmentation_for_polygon(db_session: Session, versioned_polygon_image) -> None:
+    _, version = versioned_polygon_image
+    key = export_coco(db_session, version_id=version.id)
+    zip_bytes = get_storage().read_bytes(key)
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        coco = json.loads(zf.read("annotations/instances_default.json"))
+        assert len(coco["annotations"]) == 2
+
+        cone_category_id = next(c["id"] for c in coco["categories"] if c["name"] == "cone")
+        ball_category_id = next(c["id"] for c in coco["categories"] if c["name"] == "ball")
+        polygon_ann = next(a for a in coco["annotations"] if a["category_id"] == cone_category_id)
+        bbox_ann = next(a for a in coco["annotations"] if a["category_id"] == ball_category_id)
+
+        # Polygon: [[0.1,0.1],[0.5,0.1],[0.3,0.6]] over 100x80 ->
+        # [[10,8, 50,8, 30,48]]
+        assert polygon_ann["segmentation"] == [[10.0, 8.0, 50.0, 8.0, 30.0, 48.0]]
+        # bbox derived from the polygon's own bounding box (0.1,0.1,0.5,0.6)
+        x, y, w, h = polygon_ann["bbox"]
+        assert (x, y, w, h) == pytest.approx((10, 8, 40, 40), abs=0.1)
+
+        # A BBOX annotation's segmentation stays [] — unchanged behavior.
+        assert bbox_ann["segmentation"] == []
+
+
+def test_export_cvat_xml_emits_polygon_element(db_session: Session, versioned_polygon_image) -> None:
+    _, version = versioned_polygon_image
+    key = export_cvat(db_session, version_id=version.id)
+    zip_bytes = get_storage().read_bytes(key)
+    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as zf:
+        root = ET.fromstring(zf.read("annotations.xml"))
+        image_el = root.find("image")
+        assert image_el is not None
+
+        polygon_el = image_el.find("polygon")
+        assert polygon_el is not None
+        assert polygon_el.get("label") == "cone"
+        points = [tuple(map(float, pair.split(","))) for pair in polygon_el.get("points").split(";")]
+        assert points == pytest.approx([(10.0, 8.0), (50.0, 8.0), (30.0, 48.0)])
+
+        box_el = image_el.find("box")
+        assert box_el is not None
+        assert box_el.get("label") == "ball"
+
+
+def test_coco_round_trip_preserves_polygon(db_session: Session, project: Project, versioned_polygon_image, tmp_path) -> None:
+    _, version = versioned_polygon_image
+    key = export_coco(db_session, version_id=version.id)
+    zip_path = tmp_path / "export.zip"
+    zip_path.write_bytes(get_storage().read_bytes(key))
+
+    new_project = Project(name=f"p4-{uuid.uuid4().hex[:8]}", slug=f"p4-{uuid.uuid4().hex[:8]}", class_config=[])
+    db_session.add(new_project)
+    db_session.commit()
+    db_session.refresh(new_project)
+
+    new_dataset = import_coco_zip(db_session, project_id=new_project.id, zip_path=zip_path, dataset_name=None)
+    images = list(db_session.query(Image).filter(Image.dataset_id == new_dataset.id))
+    annotations = annotation_service.list_annotations_for_image(db_session, images[0].id)
+    assert len(annotations) == 2
+
+    polygon_ann = next(a for a in annotations if a.class_name == "cone")
+    bbox_ann = next(a for a in annotations if a.class_name == "ball")
+    assert polygon_ann.shape_type == ShapeType.POLYGON
+    flat = [c for p in polygon_ann.points for c in p]
+    assert flat == pytest.approx([0.1, 0.1, 0.5, 0.1, 0.3, 0.6], abs=0.01)
+    assert (polygon_ann.x1, polygon_ann.y1, polygon_ann.x2, polygon_ann.y2) == pytest.approx(
+        (0.1, 0.1, 0.5, 0.6), abs=0.01
+    )
+    assert bbox_ann.shape_type == ShapeType.BBOX
+    assert bbox_ann.points is None
+
+
+def test_cvat_xml_round_trip_preserves_polygon(db_session: Session, project: Project, versioned_polygon_image, tmp_path) -> None:
+    _, version = versioned_polygon_image
+    key = export_cvat(db_session, version_id=version.id)
+    zip_path = tmp_path / "export.zip"
+    zip_path.write_bytes(get_storage().read_bytes(key))
+
+    new_project = Project(name=f"p5-{uuid.uuid4().hex[:8]}", slug=f"p5-{uuid.uuid4().hex[:8]}", class_config=[])
+    db_session.add(new_project)
+    db_session.commit()
+    db_session.refresh(new_project)
+
+    new_dataset = import_cvat_zip(db_session, project_id=new_project.id, zip_path=zip_path, dataset_name=None)
+    images = list(db_session.query(Image).filter(Image.dataset_id == new_dataset.id))
+    annotations = annotation_service.list_annotations_for_image(db_session, images[0].id)
+    assert len(annotations) == 2
+
+    polygon_ann = next(a for a in annotations if a.class_name == "cone")
+    assert polygon_ann.shape_type == ShapeType.POLYGON
+    flat = [c for p in polygon_ann.points for c in p]
+    assert flat == pytest.approx([0.1, 0.1, 0.5, 0.1, 0.3, 0.6], abs=0.01)
 
 
 def test_export_coco_bbox_is_pixel_space_and_correct(db_session: Session, versioned_image) -> None:

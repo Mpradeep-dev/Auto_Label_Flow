@@ -13,6 +13,11 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
+    // The vendored react-bits Antigravity.jsx is untyped upstream source —
+    // allowJs (without checkJs) lets it compile without pulling its `any`s
+    // into strict checking elsewhere.
+    "allowJs": true,
+
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,

@@ -1,8 +1,10 @@
 """CVAT-XML ("CVAT for images 1.1") export — the other format CVAT's own
 UI imports directly (Task > Upload annotations > format "CVAT 1.1"), and
 literally the format CVAT itself produces when you export a task that way.
-Bounding boxes only (`<box>`) — this app doesn't have polygon/polyline
-annotations to emit as CVAT's `<polygon>`/`<polyline>` yet.
+Emits `<box>` for BBOX annotations and `<polygon>` for POLYGON ones (hand-
+drawn polygons and SAM-derived masks alike — both are stored as a point
+ring, see app.models.annotation.ShapeType). Polylines aren't a geometry
+this app has, so `<polyline>` is never emitted.
 """
 from __future__ import annotations
 
@@ -15,6 +17,7 @@ from pathlib import Path
 from sqlalchemy.orm import Session
 
 from app.core.security import safe_storage_key
+from app.models.annotation import ShapeType
 from app.models.dataset import Dataset
 from app.models.dataset_version import DatasetVersion
 from app.services.dataset.version_data import VersionDataError, load_version_data, out_image_filename
@@ -69,23 +72,39 @@ def write_cvat_dataset(db: Session, *, version_id: uuid.UUID, root: Path) -> Pat
             },
         )
         for event in vi.events:
-            xtl = event.x1 * vi.image.width
-            ytl = event.y1 * vi.image.height
-            xbr = event.x2 * vi.image.width
-            ybr = event.y2 * vi.image.height
-            ET.SubElement(
-                image_el,
-                "box",
-                {
-                    "label": data.class_names.get(event.class_id, str(event.class_id)),
-                    "xtl": f"{xtl:.2f}",
-                    "ytl": f"{ytl:.2f}",
-                    "xbr": f"{xbr:.2f}",
-                    "ybr": f"{ybr:.2f}",
-                    "occluded": "0",
-                    "z_order": "0",
-                },
-            )
+            label = data.class_names.get(event.class_id, str(event.class_id))
+            if event.shape_type == ShapeType.POLYGON and event.points:
+                points_attr = ";".join(
+                    f"{px * vi.image.width:.2f},{py * vi.image.height:.2f}" for px, py in event.points
+                )
+                ET.SubElement(
+                    image_el,
+                    "polygon",
+                    {
+                        "label": label,
+                        "points": points_attr,
+                        "occluded": "0",
+                        "z_order": "0",
+                    },
+                )
+            else:
+                xtl = event.x1 * vi.image.width
+                ytl = event.y1 * vi.image.height
+                xbr = event.x2 * vi.image.width
+                ybr = event.y2 * vi.image.height
+                ET.SubElement(
+                    image_el,
+                    "box",
+                    {
+                        "label": label,
+                        "xtl": f"{xtl:.2f}",
+                        "ytl": f"{ytl:.2f}",
+                        "xbr": f"{xbr:.2f}",
+                        "ybr": f"{ybr:.2f}",
+                        "occluded": "0",
+                        "z_order": "0",
+                    },
+                )
 
     ET.indent(root_el, space="  ")
     xml_bytes = ET.tostring(root_el, encoding="utf-8", xml_declaration=True)

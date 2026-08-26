@@ -7,10 +7,12 @@ import type {
   DatasetStats,
   ErrorAnalysis,
   ImageListPage,
+  ImageReviewStatus,
   DatasetVersion,
   InferenceJob,
   IntegrationStatus,
   MLModel,
+  ModelKind,
   Project,
   ReviewQueuePage,
   RoboflowJob,
@@ -74,23 +76,35 @@ export const api = {
   deleteDataset: (id: string) => request<void>(`/datasets/${id}`, { method: "DELETE" }),
 
   // --- Images ---
-  listImages: (datasetId: string, limit = 50, offset = 0) =>
-    request<ImageListPage>(`/datasets/${datasetId}/images?limit=${limit}&offset=${offset}`),
+  listImages: (datasetId: string, limit = 50, offset = 0, reviewStatus?: ImageReviewStatus) =>
+    request<ImageListPage>(
+      `/datasets/${datasetId}/images?limit=${limit}&offset=${offset}${reviewStatus ? `&review_status=${reviewStatus}` : ""}`,
+    ),
   // The backend caps a single page at 200 regardless of the limit
   // requested — a dataset with more images than that (video frame
   // extraction routinely produces this) needs every page merged for
   // callers that require the complete ordered list, not one page of it
   // (AnnotatePage's prev/next navigation and filmstrip; ImagesPage's own
   // paginated gallery uses listImages directly instead — it only ever
-  // needs one page at a time).
-  listAllImages: async (datasetId: string): Promise<AnnotationImage[]> => {
+  // needs one page at a time). Optional reviewStatus scopes it to one
+  // status-filtered tab, e.g. AnnotatePage browsing a Pending/Approved
+  // filter carried over from ImagesPage's own tabs.
+  listAllImages: async (datasetId: string, reviewStatus?: ImageReviewStatus): Promise<AnnotationImage[]> => {
     const pageSize = 200;
-    const first = await request<ImageListPage>(`/datasets/${datasetId}/images?limit=${pageSize}&offset=0`);
+    const statusQs = reviewStatus ? `&review_status=${reviewStatus}` : "";
+    const first = await request<ImageListPage>(`/datasets/${datasetId}/images?limit=${pageSize}&offset=0${statusQs}`);
     const items = [...first.items];
-    for (let offset = pageSize; offset < first.total; offset += pageSize) {
-      const page = await request<ImageListPage>(`/datasets/${datasetId}/images?limit=${pageSize}&offset=${offset}`);
-      items.push(...page.items);
-    }
+    // Remaining pages don't depend on each other — fetching them in
+    // parallel instead of one-at-a-time cuts wall-clock time roughly by the
+    // page count on a large dataset (was the dominant cost on a
+    // multi-thousand-image dataset: ~18 sequential round trips before this
+    // ever resolved).
+    const offsets: number[] = [];
+    for (let offset = pageSize; offset < first.total; offset += pageSize) offsets.push(offset);
+    const rest = await Promise.all(
+      offsets.map((offset) => request<ImageListPage>(`/datasets/${datasetId}/images?limit=${pageSize}&offset=${offset}${statusQs}`)),
+    );
+    for (const page of rest) items.push(...page.items);
     return items;
   },
   getImage: (id: string) => request<AnnotationImage>(`/images/${id}`),
@@ -103,19 +117,31 @@ export const api = {
 
   // --- Annotations ---
   listAnnotations: (imageId: string) => request<Annotation[]>(`/images/${imageId}/annotations`),
-  createAnnotation: (data: {
-    image_id: string;
-    class_id: number;
-    class_name: string;
-    x1: number;
-    y1: number;
-    x2: number;
-    y2: number;
-    confidence?: number | null;
-  }) => request<Annotation>("/annotations", { method: "POST", body: JSON.stringify(data) }),
+  createAnnotation: (
+    data:
+      | {
+          image_id: string;
+          class_id: number;
+          class_name: string;
+          shape_type?: "BBOX";
+          x1: number;
+          y1: number;
+          x2: number;
+          y2: number;
+          confidence?: number | null;
+        }
+      | {
+          image_id: string;
+          class_id: number;
+          class_name: string;
+          shape_type: "POLYGON";
+          points: [number, number][];
+          confidence?: number | null;
+        },
+  ) => request<Annotation>("/annotations", { method: "POST", body: JSON.stringify(data) }),
   updateAnnotation: (
     id: string,
-    data: Partial<Pick<Annotation, "class_id" | "class_name" | "x1" | "y1" | "x2" | "y2" | "confidence">>,
+    data: Partial<Pick<Annotation, "class_id" | "class_name" | "x1" | "y1" | "x2" | "y2" | "points" | "confidence">>,
   ) => request<Annotation>(`/annotations/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteAnnotation: (id: string, data?: { error_category?: string; error_reason?: string }) =>
     request<void>(`/annotations/${id}`, {
@@ -133,16 +159,30 @@ export const api = {
 
   // --- Models ---
   listModels: () => request<MLModel[]>("/models"),
-  registerModel: (data: { name: string; weights_path: string; kind: "DETECTOR" | "POSE"; version?: string }) =>
-    request<MLModel>("/models", { method: "POST", body: JSON.stringify(data) }),
-  downloadModel: (data: { name: string; url: string; kind: "DETECTOR" | "POSE"; version?: string }) =>
-    request<MLModel>("/models/download", { method: "POST", body: JSON.stringify(data) }),
-  uploadModel: (file: File, data: { name: string; kind: "DETECTOR" | "POSE"; version?: string }) => {
+  registerModel: (data: {
+    name: string;
+    weights_path: string;
+    kind: ModelKind;
+    version?: string;
+    framework?: string;
+  }) => request<MLModel>("/models", { method: "POST", body: JSON.stringify(data) }),
+  downloadModel: (data: {
+    name: string;
+    url: string;
+    kind: ModelKind;
+    version?: string;
+    framework?: string;
+  }) => request<MLModel>("/models/download", { method: "POST", body: JSON.stringify(data) }),
+  uploadModel: (
+    file: File,
+    data: { name: string; kind: ModelKind; version?: string; framework?: string },
+  ) => {
     const form = new FormData();
     form.append("file", file);
     form.append("name", data.name);
     form.append("kind", data.kind);
     if (data.version) form.append("version", data.version);
+    if (data.framework) form.append("framework", data.framework);
     return request<MLModel>("/models/upload", { method: "POST", body: form });
   },
   renameModel: (id: string, name: string) =>
@@ -216,6 +256,7 @@ export const api = {
     image_size?: number;
     learning_rate?: number;
     device?: string;
+    enable_gpu?: boolean;
     extra_args?: Record<string, unknown>;
   }) => request<TrainingJob>("/training/jobs", { method: "POST", body: JSON.stringify(data) }),
   cancelTrainingJob: (id: string) => request<TrainingJob>(`/training/jobs/${id}/cancel`, { method: "POST" }),
@@ -248,6 +289,29 @@ export const api = {
     if (params.offset) query.set("offset", String(params.offset));
     return request<ReviewQueuePage>(`/review/queue?${query.toString()}`);
   },
+  // Mirrors listAllImages above: when AnnotatePage is entered from the
+  // Review Queue, its prev/next/filmstrip need the *complete*
+  // difficulty-ordered id list for that queue, not one 60-item page of it —
+  // otherwise stepping past the page boundary would silently fall back to
+  // plain dataset upload order, which is the "review order changes once you
+  // open an image" bug this exists to avoid.
+  listAllReviewQueueImageIds: async (params: {
+    project_id: string;
+    dataset_id?: string;
+    flag_type?: string;
+    review_status?: "PENDING" | "APPROVED" | "REJECTED";
+  }): Promise<string[]> => {
+    const pageSize = 200;
+    const first = await api.getReviewQueue({ ...params, limit: pageSize, offset: 0 });
+    const ids = first.items.map((item) => item.image_id);
+    // See listAllImages above — independent pages fetched in parallel
+    // instead of sequentially.
+    const offsets: number[] = [];
+    for (let offset = pageSize; offset < first.total; offset += pageSize) offsets.push(offset);
+    const rest = await Promise.all(offsets.map((offset) => api.getReviewQueue({ ...params, limit: pageSize, offset })));
+    for (const page of rest) ids.push(...page.items.map((item) => item.image_id));
+    return ids;
+  },
 
   // --- Dashboards ---
   getDatasetStatistics: (datasetId: string) => request<DatasetStatistics>(`/datasets/${datasetId}/statistics`),
@@ -255,11 +319,14 @@ export const api = {
   updateModelMetrics: (modelId: string, metrics: Record<string, number>) =>
     request<MLModel>(`/models/${modelId}/metrics`, { method: "PUT", body: JSON.stringify({ metrics }) }),
 
-  // --- Integrations (Settings page: Kaggle + Roboflow connect) ---
+  // --- Integrations (Settings page: Kaggle + Modal + Roboflow connect) ---
   listIntegrations: () => request<IntegrationStatus[]>("/integrations"),
   connectKaggle: (data: { username: string; key: string }) =>
     request<IntegrationStatus>("/integrations/kaggle", { method: "POST", body: JSON.stringify(data) }),
   disconnectKaggle: () => request<void>("/integrations/kaggle", { method: "DELETE" }),
+  connectModal: (data: { token_id: string; token_secret: string }) =>
+    request<IntegrationStatus>("/integrations/modal", { method: "POST", body: JSON.stringify(data) }),
+  disconnectModal: () => request<void>("/integrations/modal", { method: "DELETE" }),
   connectRoboflow: (data: { api_key: string; default_workspace?: string }) =>
     request<IntegrationStatus>("/integrations/roboflow", { method: "POST", body: JSON.stringify(data) }),
   disconnectRoboflow: () => request<void>("/integrations/roboflow", { method: "DELETE" }),

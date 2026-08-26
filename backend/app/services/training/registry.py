@@ -6,18 +6,20 @@ from __future__ import annotations
 
 from app.services.training.kaggle_provider import KaggleTrainingProvider
 from app.services.training.local_provider import LocalTrainingProvider
+from app.services.training.modal_provider import ModalTrainingProvider
 from app.services.training.provider import TrainingProvider
 
 _PROVIDERS: dict[str, TrainingProvider] = {
     "LOCAL": LocalTrainingProvider(),
     "KAGGLE": KaggleTrainingProvider(),
+    "MODAL": ModalTrainingProvider(),
 }
 
 
 def get_available_providers() -> list[str]:
-    """Providers ready to actually run right now. KAGGLE is omitted
-    whenever credentials aren't set — this is how 'Kaggle is optional'
-    (PLAN "Do not make Kaggle mandatory") is enforced in practice."""
+    """Providers ready to actually run right now. KAGGLE and MODAL are
+    omitted whenever credentials aren't set — this is how optional
+    integrations are enforced in practice."""
     return [name for name, provider in _PROVIDERS.items() if provider.is_configured]
 
 
