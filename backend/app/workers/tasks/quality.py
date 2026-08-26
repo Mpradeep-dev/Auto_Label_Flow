@@ -6,6 +6,7 @@ ISOLATED_DETECTION/TEMPORAL_ANOMALY have track data; standalone images
 skip straight to per-image analysis."""
 from __future__ import annotations
 
+import logging
 import uuid
 
 import cv2
@@ -20,7 +21,9 @@ from app.services.inference.pose_context import compute_and_store_pose_context
 from app.services.quality.run_analysis import analyze_image_quality
 from app.services.quality.temporal_pass import run_temporal_pass_for_video
 from app.services.storage.factory import get_storage
-from app.workers.celery_app import celery_app
+from app.workers.celery_app import QUALITY_SOFT_TIME_LIMIT_S, QUALITY_TIME_LIMIT_S, celery_app
+
+logger = logging.getLogger(__name__)
 
 
 def _ensure_pose_context(db, image: Image, project: Project) -> None:
@@ -39,8 +42,21 @@ def _ensure_pose_context(db, image: Image, project: Project) -> None:
     )
 
 
-@celery_app.task(name="app.workers.tasks.quality.run_quality_analysis")
+@celery_app.task(
+    name="app.workers.tasks.quality.run_quality_analysis",
+    time_limit=QUALITY_TIME_LIMIT_S,
+    soft_time_limit=QUALITY_SOFT_TIME_LIMIT_S,
+)
 def run_quality_analysis(dataset_id: str) -> dict:
+    # Audit finding BE-10: unlike inference/training/roboflow, quality
+    # analysis has no dedicated job row to mark FAILED — it's genuinely
+    # fire-and-forget from the API's point of view (analyze-quality just
+    # returns a task_id nothing currently polls). A real fix is tracking
+    # this the same way the other job types are (its own table), which is
+    # a bigger schema change than this pass takes on; in the meantime, a
+    # crash at least surfaces here instead of vanishing with zero trace —
+    # check worker logs for "quality analysis failed" if a dataset's
+    # analysis seems to have silently done nothing.
     db = SessionLocal()
     try:
         images = list(db.scalars(select(Image).where(Image.dataset_id == uuid.UUID(dataset_id))))
@@ -84,5 +100,8 @@ def run_quality_analysis(dataset_id: str) -> dict:
             analyzed += 1
 
         return {"analyzed": analyzed}
+    except Exception:
+        logger.exception("quality analysis failed for dataset_id=%s", dataset_id)
+        raise
     finally:
         db.close()

@@ -1,3 +1,5 @@
+export type ActiveTool = "select" | "bbox" | "polygon";
+
 interface Props {
   onPrev: () => void;
   onNext: () => void;
@@ -5,13 +7,14 @@ interface Props {
   onReject: () => void;
   onSave: () => void;
   onDeleteSelected: () => void;
-  onAdd: () => void;
+  onSelectBboxTool: () => void;
+  onSelectPolygonTool: () => void;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFit: () => void;
   onToggleShortcuts: () => void;
   hasSelection: boolean;
-  drawing: boolean;
+  activeTool: ActiveTool;
   position: string; // "N / total"
   reviewStatus: "PENDING" | "APPROVED" | "REJECTED";
   approving: boolean;
@@ -33,17 +36,20 @@ function ToolButton({
   onClick,
   disabled,
   active,
+  title,
 }: {
   label: string;
   shortcut?: string;
   onClick: () => void;
   disabled?: boolean;
   active?: boolean;
+  title?: string;
 }) {
   return (
     <button
       onClick={onClick}
       disabled={disabled}
+      title={title}
       className={`flex h-full items-center gap-1.5 border-r border-ink/20 px-3 text-xs font-bold uppercase tracking-widest transition-colors duration-150 ${
         active ? "bg-ink text-paper" : "hover:bg-orange"
       } disabled:cursor-not-allowed disabled:opacity-30`}
@@ -63,7 +69,13 @@ export function Toolbar(props: Props) {
       <div className="flex items-center border-r border-ink/20 px-3 text-xs font-bold text-ink/50 tabular">
         {props.position}
       </div>
-      <ToolButton label="Add" shortcut="A" onClick={props.onAdd} active={props.drawing} />
+      <ToolButton label="Box" shortcut="B" onClick={props.onSelectBboxTool} active={props.activeTool === "bbox"} />
+      <ToolButton
+        label="Polygon"
+        shortcut="P"
+        onClick={props.onSelectPolygonTool}
+        active={props.activeTool === "polygon"}
+      />
       <ToolButton label="Delete" shortcut="D" onClick={props.onDeleteSelected} disabled={!props.hasSelection} />
       <div className="flex-1" />
       {error ? (
@@ -79,8 +91,8 @@ export function Toolbar(props: Props) {
           {props.reviewStatus}
         </div>
       )}
-      <ToolButton label="−" shortcut="Zoom" onClick={props.onZoomOut} />
-      <ToolButton label="+" onClick={props.onZoomIn} />
+      <ToolButton label="−" shortcut="⇧Z" onClick={props.onZoomOut} />
+      <ToolButton label="+" shortcut="Z" onClick={props.onZoomIn} />
       <ToolButton label="Fit" shortcut="F" onClick={props.onFit} />
       <ToolButton label="?" onClick={props.onToggleShortcuts} />
       <div className="flex-1" />

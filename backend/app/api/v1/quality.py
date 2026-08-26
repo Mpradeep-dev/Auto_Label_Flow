@@ -10,6 +10,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.models.dataset import Dataset
 from app.models.image import Image, ImageReviewStatus
 from app.models.project import Project
 from app.models.quality import AnnotationFlag, FlagType
@@ -38,6 +39,8 @@ def _get_image_or_404(image_id: uuid.UUID, db: Session) -> Image:
 def analyze_image_quality_endpoint(image_id: uuid.UUID, db: Session = Depends(get_db)) -> list[AnnotationFlag]:
     image = _get_image_or_404(image_id, db)
     project = db.get(Project, image.project_id)
+    if project is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Project not found")
 
     if project.pose_model_id is not None:
         data = get_storage().read_bytes(image.storage_key)
@@ -71,7 +74,9 @@ def resolve_flag(flag_id: uuid.UUID, payload: FlagResolveRequest, db: Session = 
 
 
 @router.post("/datasets/{dataset_id}/analyze-quality", status_code=status.HTTP_202_ACCEPTED)
-def analyze_dataset_quality(dataset_id: uuid.UUID) -> dict:
+def analyze_dataset_quality(dataset_id: uuid.UUID, db: Session = Depends(get_db)) -> dict:
+    if db.get(Dataset, dataset_id) is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Dataset not found")
     result = run_quality_analysis.delay(str(dataset_id))
     return {"task_id": getattr(result, "id", None)}
 
@@ -93,6 +98,7 @@ def get_review_queue(
     difficulty — most-recently-approved-first there instead, so the queue
     reads as "here's what a human just cleared," not a frozen snapshot."""
     limit = max(1, min(limit, 200))
+    offset = max(0, offset)
 
     query = select(Image).where(Image.project_id == project_id)
     if dataset_id is not None:

@@ -8,6 +8,8 @@ function makeAnnotation(overrides: Partial<Annotation> = {}): Annotation {
     image_id: "img1",
     class_id: 1,
     class_name: "cone",
+    shape_type: "BBOX",
+    points: null,
     x1: 0.1,
     y1: 0.1,
     x2: 0.2,
@@ -61,9 +63,15 @@ describe("annotationStore", () => {
     expect(useAnnotationStore.getState().selectedId).toBe("a2");
   });
 
-  it("setMode('draw') clears the current selection", () => {
+  it("setMode('draw-bbox') clears the current selection", () => {
     useAnnotationStore.getState().selectAnnotation("a1");
-    useAnnotationStore.getState().setMode("draw");
+    useAnnotationStore.getState().setMode("draw-bbox");
+    expect(useAnnotationStore.getState().selectedId).toBeNull();
+  });
+
+  it("setMode('draw-polygon') clears the current selection", () => {
+    useAnnotationStore.getState().selectAnnotation("a1");
+    useAnnotationStore.getState().setMode("draw-polygon");
     expect(useAnnotationStore.getState().selectedId).toBeNull();
   });
 
@@ -71,5 +79,17 @@ describe("annotationStore", () => {
     useAnnotationStore.getState().selectAnnotation("a1");
     useAnnotationStore.getState().setMode("select");
     expect(useAnnotationStore.getState().selectedId).toBe("a1");
+  });
+
+  it("setMode clears any pending shape from a previous tool", () => {
+    useAnnotationStore.getState().setPendingShape({ shape_type: "BBOX", x1: 0.1, y1: 0.1, x2: 0.2, y2: 0.2 });
+    useAnnotationStore.getState().setMode("draw-polygon");
+    expect(useAnnotationStore.getState().pendingShape).toBeNull();
+  });
+
+  it("setPendingShape stores a polygon pending shape", () => {
+    const points: [number, number][] = [[0.1, 0.1], [0.3, 0.1], [0.2, 0.4]];
+    useAnnotationStore.getState().setPendingShape({ shape_type: "POLYGON", points });
+    expect(useAnnotationStore.getState().pendingShape).toEqual({ shape_type: "POLYGON", points });
   });
 });

@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app.core.security import UploadKind, safe_storage_key, stream_upload_to_temp, validate_extension
 from app.db.session import get_db
 from app.models.dataset import Dataset
-from app.models.image import Image
+from app.models.image import Image, ImageReviewStatus
 from app.schemas.image import ImageListPage, ImageRead
 from app.services.storage.factory import get_storage
 
@@ -86,20 +86,19 @@ def list_images(
     dataset_id: uuid.UUID,
     limit: int = 50,
     offset: int = 0,
+    review_status: ImageReviewStatus | None = None,
     db: Session = Depends(get_db),
 ) -> ImageListPage:
     _get_dataset_or_404(dataset_id, db)
     limit = max(1, min(limit, 200))
 
-    total = db.scalar(select(func.count()).select_from(Image).where(Image.dataset_id == dataset_id)) or 0
+    conditions = [Image.dataset_id == dataset_id]
+    if review_status is not None:
+        conditions.append(Image.review_status == review_status)
+
+    total = db.scalar(select(func.count()).select_from(Image).where(*conditions)) or 0
     rows = list(
-        db.scalars(
-            select(Image)
-            .where(Image.dataset_id == dataset_id)
-            .order_by(Image.created_at.asc())
-            .limit(limit)
-            .offset(offset)
-        )
+        db.scalars(select(Image).where(*conditions).order_by(Image.created_at.asc()).limit(limit).offset(offset))
     )
     return ImageListPage(items=[_to_read(row) for row in rows], total=total, limit=limit, offset=offset)
 

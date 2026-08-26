@@ -8,6 +8,12 @@ structure to any destination path. `export_yolo` wraps it for the
 API-facing zip-and-upload flow; `services/training/local_provider.py`
 calls it directly to get a plain on-disk folder for `YOLO(...).train()` —
 same labels, same guarantee, no zip round-trip needed for training.
+
+Bbox (classic YOLO detection) format only. A POLYGON annotation still
+exports fine here using its derived bounding box (x1..y2 stay populated
+for every shape_type) — true YOLO-seg polygon label format is out of
+scope for this export path; use the COCO or CVAT-XML export instead for
+full polygon fidelity.
 """
 from __future__ import annotations
 

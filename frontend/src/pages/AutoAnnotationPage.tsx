@@ -159,6 +159,17 @@ export function AutoAnnotationPage() {
   });
   const modelsQuery = useQuery({ queryKey: ["models"], queryFn: api.listModels });
   const detectorModels = (modelsQuery.data ?? []).filter((m) => m.kind === "DETECTOR");
+  const projectQuery = useQuery({
+    queryKey: ["project", projectId],
+    queryFn: () => api.getProject(projectId!),
+    enabled: !!projectId,
+  });
+  const selectedModel = detectorModels.find((m) => m.id === modelId);
+  // An open-vocabulary (YOLO-World) model has no classes of its own — it
+  // detects whatever the project is configured with, so it has nothing to
+  // run against until the project defines at least one class.
+  const blockedByEmptyClasses =
+    !!selectedModel?.is_promptable && (projectQuery.data?.class_config.length ?? 0) === 0;
 
   const running = progress != null && progress.status === "RUNNING";
   const finished = progress != null && progress.status !== "RUNNING";
@@ -290,7 +301,7 @@ export function AutoAnnotationPage() {
             <option value="">Select a detector…</option>
             {detectorModels.map((m) => (
               <option key={m.id} value={m.id}>
-                {m.name} ({m.class_config.map((c) => c.name).join(", ")})
+                {m.name} ({m.is_promptable ? "open-vocabulary — uses this project's classes" : m.class_config.map((c) => c.name).join(", ")})
               </option>
             ))}
           </select>
@@ -301,6 +312,12 @@ export function AutoAnnotationPage() {
                 Register one
               </Link>
               .
+            </p>
+          )}
+          {blockedByEmptyClasses && (
+            <p className="mt-2 text-xs text-accent">
+              This project has no classes defined yet, so this open-vocabulary model has nothing to
+              detect. Add classes to the project before running it.
             </p>
           )}
         </div>
@@ -327,7 +344,7 @@ export function AutoAnnotationPage() {
 
         <button
           onClick={run}
-          disabled={!datasetId || !modelId || submitting || running}
+          disabled={!datasetId || !modelId || submitting || running || blockedByEmptyClasses}
           className="w-full border-2 border-ink bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
         >
           {submitting

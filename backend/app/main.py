@@ -13,16 +13,17 @@ from app.core.config import settings
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
-    # Replays a previously-connected Kaggle account into the process
-    # environment (see services/integrations/kaggle_connect.py docstring)
-    # so a container restart doesn't silently lose the connection until
-    # someone notices Kaggle training stopped being offered.
+    # Replays previously-connected Kaggle and Modal accounts into the process
+    # environment (see services/integrations/kaggle_connect.py and
+    # modal_connect.py docstrings) so a container restart doesn't silently
+    # lose connections until someone notices training stopped being offered.
     from app.db.session import SessionLocal
-    from app.services.integrations import kaggle_connect
+    from app.services.integrations import kaggle_connect, modal_connect
 
     db = SessionLocal()
     try:
         kaggle_connect.load_on_startup(db)
+        modal_connect.load_on_startup(db)
     finally:
         db.close()
     yield

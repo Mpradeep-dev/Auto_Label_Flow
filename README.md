@@ -69,7 +69,8 @@ cp .env.example .env
 ./venv/Scripts/python -m uvicorn app.main:app --reload
 
 # separately, for background jobs (video extraction, auto-annotation, training, quality analysis):
-./venv/Scripts/python -m celery -A app.workers.celery_app worker -Q gpu,default -c 1 --pool=solo  # --pool=solo on Windows
+# -B embeds Celery Beat so the stale-job reconciliation sweep (REL-01) runs — see docker-compose.yml's worker command comment.
+./venv/Scripts/python -m celery -A app.workers.celery_app worker -B -Q gpu,default -c 1 --pool=solo  # --pool=solo on Windows
 ```
 
 ```bash

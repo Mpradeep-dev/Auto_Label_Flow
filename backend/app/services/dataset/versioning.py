@@ -7,6 +7,7 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.annotation import Annotation
@@ -23,6 +24,14 @@ from app.services.dataset.splitter import ImageGroupInfo, split_images
 
 class NoApprovedImagesError(ValueError):
     pass
+
+
+class VersionNumberConflictError(RuntimeError):
+    """Raised when two `create_version` calls for the same dataset race on
+    the next version number (audit finding DB-04) — the DB's own unique
+    constraint (`uq_dataset_version_number`) is what actually prevents the
+    duplicate, this just turns the resulting IntegrityError into something
+    the API layer can answer with a clean 409 instead of a raw 500."""
 
 
 def create_version(
@@ -97,6 +106,12 @@ def create_version(
         total_annotations += len(annotations)
 
     version.total_annotations = total_annotations
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError as exc:
+        db.rollback()
+        raise VersionNumberConflictError(
+            "Another version was created for this dataset at the same moment — try again."
+        ) from exc
     db.refresh(version)
     return version

@@ -118,6 +118,60 @@ def test_image_upload_list_get_delete(client: TestClient, unique_name: str) -> N
     assert client.get(f"/api/v1/images/{image['id']}").status_code == 404
 
 
+def test_list_images_filters_by_review_status(client: TestClient, unique_name: str) -> None:
+    project = client.post("/api/v1/projects", json={"name": unique_name}).json()
+    dataset = client.post(f"/api/v1/projects/{project['id']}/datasets", json={"name": "d"}).json()
+
+    pending = client.post(
+        f"/api/v1/datasets/{dataset['id']}/images",
+        files={"file": ("a.jpg", _make_jpeg_bytes(), "image/jpeg")},
+    ).json()
+    approved = client.post(
+        f"/api/v1/datasets/{dataset['id']}/images",
+        files={"file": ("b.jpg", _make_jpeg_bytes(), "image/jpeg")},
+    ).json()
+    client.post(f"/api/v1/images/{approved['id']}/approve")
+
+    all_page = client.get(f"/api/v1/datasets/{dataset['id']}/images").json()
+    assert all_page["total"] == 2
+
+    pending_page = client.get(f"/api/v1/datasets/{dataset['id']}/images?review_status=PENDING").json()
+    assert pending_page["total"] == 1
+    assert pending_page["items"][0]["id"] == pending["id"]
+
+    approved_page = client.get(f"/api/v1/datasets/{dataset['id']}/images?review_status=APPROVED").json()
+    assert approved_page["total"] == 1
+    assert approved_page["items"][0]["id"] == approved["id"]
+
+    rejected_page = client.get(f"/api/v1/datasets/{dataset['id']}/images?review_status=REJECTED").json()
+    assert rejected_page["total"] == 0
+
+
+def test_delete_dataset_removes_underlying_image_files(client: TestClient, db_session, unique_name: str) -> None:
+    """Regression test for audit finding BE-02: deleting a dataset used to
+    cascade the DB rows but never touch the files those rows pointed at,
+    silently orphaning every image on disk/MinIO forever."""
+    import uuid as _uuid
+
+    from app.models.image import Image
+    from app.services.storage.factory import get_storage
+
+    project = client.post("/api/v1/projects", json={"name": unique_name}).json()
+    dataset = client.post(f"/api/v1/projects/{project['id']}/datasets", json={"name": "d"}).json()
+    image = client.post(
+        f"/api/v1/datasets/{dataset['id']}/images",
+        files={"file": ("s.jpg", _make_jpeg_bytes(), "image/jpeg")},
+    ).json()
+
+    storage_key = db_session.get(Image, _uuid.UUID(image["id"])).storage_key
+    storage = get_storage()
+    assert storage.exists(storage_key)
+
+    resp = client.delete(f"/api/v1/datasets/{dataset['id']}")
+    assert resp.status_code == 204
+    assert not storage.exists(storage_key)
+
+
 def test_image_upload_rejects_bad_extension(client: TestClient, unique_name: str) -> None:
     project = client.post("/api/v1/projects", json={"name": unique_name}).json()
     dataset = client.post(f"/api/v1/projects/{project['id']}/datasets", json={"name": "batch-1"}).json()

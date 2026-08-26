@@ -39,7 +39,10 @@ class RoboflowJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     kind: Mapped[RoboflowJobKind] = mapped_column(Enum(RoboflowJobKind, name="roboflow_job_kind"), nullable=False)
     status: Mapped[RoboflowJobStatus] = mapped_column(
-        Enum(RoboflowJobStatus, name="roboflow_job_status"), nullable=False, default=RoboflowJobStatus.QUEUED
+        Enum(RoboflowJobStatus, name="roboflow_job_status"),
+        nullable=False,
+        default=RoboflowJobStatus.QUEUED,
+        index=True,  # DB-05: the natural filter for "show running/queued jobs" UI polling
     )
 
     workspace: Mapped[str] = mapped_column(String(200), nullable=False)

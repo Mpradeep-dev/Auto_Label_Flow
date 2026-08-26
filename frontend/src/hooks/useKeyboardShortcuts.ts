@@ -1,14 +1,16 @@
 import { useEffect } from "react";
 
 export interface ShortcutHandlers {
-  add: () => void;
+  drawBbox: () => void;
+  drawPolygon: () => void;
   delete: () => void;
-  edit: () => void;
+  undo: () => void;
   prev: () => void;
   next: () => void;
   approve: () => void;
   save: () => void;
   zoom: () => void;
+  zoomOut: () => void;
   fit: () => void;
   /** class1..class9 map to a project's classes in list order — only the
    * classes that exist get a working shortcut. */
@@ -28,18 +30,27 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers, enabled: boolea
         return;
       }
 
+      // Ctrl (Windows/Linux) or Cmd (Mac) + Z is undo — checked before the
+      // plain-key switch below so it doesn't also trigger zoom-in, which
+      // bare "z" is bound to.
+      if ((e.ctrlKey || e.metaKey) && (e.key === "z" || e.key === "Z")) {
+        e.preventDefault();
+        handlers.undo();
+        return;
+      }
+
       switch (e.key) {
-        case "a":
-        case "A":
-          handlers.add();
+        case "b":
+        case "B":
+          handlers.drawBbox();
+          break;
+        case "p":
+        case "P":
+          handlers.drawPolygon();
           break;
         case "d":
         case "D":
           handlers.delete();
-          break;
-        case "e":
-        case "E":
-          handlers.edit();
           break;
         case "ArrowLeft":
           handlers.prev();
@@ -57,8 +68,12 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers, enabled: boolea
           handlers.save();
           break;
         case "z":
-        case "Z":
           handlers.zoom();
+          break;
+        case "Z":
+          // Shift+Z (Shift turns "z" into "Z") — plain Z above is zoom-in;
+          // previously there was no keyboard zoom-out at all.
+          handlers.zoomOut();
           break;
         case "f":
         case "F":

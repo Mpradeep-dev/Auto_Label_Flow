@@ -26,6 +26,7 @@ from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 class IntegrationProvider(str, PyEnum):
     KAGGLE = "KAGGLE"
     ROBOFLOW = "ROBOFLOW"
+    MODAL = "MODAL"
 
 
 class Integration(UUIDPrimaryKeyMixin, TimestampMixin, Base):

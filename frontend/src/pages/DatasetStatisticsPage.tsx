@@ -2,6 +2,8 @@ import { useParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/services/api";
 import { SectionLabel } from "@/components/layout/SectionLabel";
+import { EmptyState } from "@/components/layout/EmptyState";
+import { Skeleton } from "@/components/layout/Skeleton";
 
 function BigStat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
@@ -52,7 +54,30 @@ export function DatasetStatisticsPage() {
         Statistics
       </h1>
 
-      {stats && (
+      {/* Before this, a loading dataset, a failed fetch, and an empty
+          dataset all rendered the exact same thing as each other: nothing
+          below the header (audit finding FE-07). */}
+      {statsQuery.isLoading && (
+        <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => <Skeleton key={i} className="h-24 border-2 border-plate" />)}
+        </div>
+      )}
+
+      {statsQuery.isError && (
+        <EmptyState
+          title="Couldn't load statistics"
+          description="Something went wrong reaching the server — check your connection and try again."
+        />
+      )}
+
+      {stats && stats.total_images === 0 && (
+        <EmptyState
+          title="No images yet"
+          description="Statistics build up once this dataset has images — import some to see numbers here."
+        />
+      )}
+
+      {stats && stats.total_images > 0 && (
         <>
           <div className="mb-12 grid grid-cols-2 gap-4 sm:grid-cols-4">
             <BigStat label="Total images" value={String(stats.total_images)} />

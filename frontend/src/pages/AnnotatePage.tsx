@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
 import { AnnotationCanvas, type CanvasControls } from "@/components/annotation/AnnotationCanvas";
@@ -8,8 +8,23 @@ import { Toolbar } from "@/components/annotation/Toolbar";
 import { Filmstrip } from "@/components/annotation/Filmstrip";
 import { ShortcutHelp } from "@/components/annotation/ShortcutHelp";
 import { useAnnotationStore } from "@/store/annotationStore";
+import type { PendingShape } from "@/store/annotationStore";
 import { useKeyboardShortcuts } from "@/hooks/useKeyboardShortcuts";
-import type { Annotation, AnnotationFlag } from "@/types";
+import type { Annotation, AnnotationFlag, AnnotationImage } from "@/types";
+
+// Audit finding FE-02: there was no undo anywhere in the canvas — every
+// create/move/resize/reclass/delete persisted immediately with no history,
+// so a misclick had no recovery but manually redoing the work. A single
+// stack of the last N edits, reversed one at a time with Ctrl/Cmd+Z: a
+// created box is undone by deleting it, a delete by recreating it (new id
+// — undo doesn't need to be byte-identical, just to put the geometry/class
+// back), and a move/resize/reclass by reapplying the pre-edit field values.
+type UndoEntry =
+  | { type: "create"; annotationId: string }
+  | { type: "delete"; annotation: Annotation }
+  | { type: "update"; id: string; previous: Partial<Annotation> };
+
+const UNDO_STACK_LIMIT = 25;
 
 export function AnnotatePage() {
   const { projectId, datasetId, imageId } = useParams<{
@@ -18,6 +33,7 @@ export function AnnotatePage() {
     imageId: string;
   }>();
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const controlsRef = useRef<CanvasControls | null>(null);
   const [showShortcuts, setShowShortcuts] = useState(false);
@@ -32,6 +48,30 @@ export function AnnotatePage() {
   // succeeds at doing effectively nothing, which reads as "the button is
   // broken" rather than "there was nothing to save."
   const [justSaved, setJustSaved] = useState(false);
+  // Set briefly whenever navigation/approve/reject is blocked because a
+  // drawn shape hasn't been classified yet — see `guardPendingShape` below.
+  // Fixes the silent-data-loss bug where leaving the image used to discard
+  // an unclassified shape with zero warning (audit finding FE-01).
+  const [pendingShapeWarning, setPendingShapeWarning] = useState(false);
+  // Ref, not state — undo doesn't need a re-render on push, only on the
+  // rare undo() call itself, and a ref avoids fighting the mutations'
+  // own state updates within the same tick.
+  const undoStackRef = useRef<UndoEntry[]>([]);
+  // Set true for the duration of an undo's own mutate() call so its
+  // success handler doesn't push a fresh undo entry for the undo itself
+  // (which would make Ctrl+Z immediately re-doable as "undo the undo"
+  // rather than actually going back further).
+  const isUndoingRef = useRef(false);
+
+  useEffect(() => {
+    undoStackRef.current = [];
+  }, [imageId]);
+
+  function pushUndo(entry: UndoEntry) {
+    if (isUndoingRef.current) return;
+    undoStackRef.current.push(entry);
+    if (undoStackRef.current.length > UNDO_STACK_LIMIT) undoStackRef.current.shift();
+  }
 
   const setAnnotations = useAnnotationStore((s) => s.setAnnotations);
   const annotations = useAnnotationStore((s) => s.annotations);
@@ -41,8 +81,8 @@ export function AnnotatePage() {
   const setMode = useAnnotationStore((s) => s.setMode);
   const drawClassId = useAnnotationStore((s) => s.drawClassId);
   const setDrawClassId = useAnnotationStore((s) => s.setDrawClassId);
-  const pendingBox = useAnnotationStore((s) => s.pendingBox);
-  const setPendingBox = useAnnotationStore((s) => s.setPendingBox);
+  const pendingShape = useAnnotationStore((s) => s.pendingShape);
+  const setPendingShape = useAnnotationStore((s) => s.setPendingShape);
   const upsertAnnotation = useAnnotationStore((s) => s.upsertAnnotation);
   const removeAnnotationLocal = useAnnotationStore((s) => s.removeAnnotation);
 
@@ -77,10 +117,58 @@ export function AnnotatePage() {
     enabled: !!datasetId,
   });
   const images = imagesQuery.data ?? [];
-  const currentIndex = images.findIndex((i) => i.id === imageId);
-  const currentImage = currentIndex >= 0 ? images[currentIndex] : undefined;
-  const prevImage = currentIndex > 0 ? images[currentIndex - 1] : undefined;
-  const nextImage = currentIndex >= 0 && currentIndex < images.length - 1 ? images[currentIndex + 1] : undefined;
+
+  // Arrived from the Review Queue (?from=review-queue&reviewStatus=...) —
+  // that page browses PENDING images by difficulty_score DESC (or APPROVED
+  // by most-recently-approved), not the dataset's upload order `images`
+  // above is in. Without re-deriving that same order here, Prev/Next/the
+  // filmstrip would silently jump to plain upload order the moment you
+  // opened an image, which reads as "the review order changed" even though
+  // nothing on the server did.
+  const fromReviewQueue = searchParams.get("from") === "review-queue";
+  // Arrived from one of ImagesPage's own Pending/Approved/Rejected tabs
+  // (?from=images&reviewStatus=...) — same problem, plainer order: without
+  // this, opening an image from e.g. the Pending tab and hitting Next would
+  // silently start walking the FULL, unfiltered dataset instead of staying
+  // inside that tab's filtered set.
+  const fromImagesTab = searchParams.get("from") === "images";
+  const reviewStatusParam = searchParams.get("reviewStatus") as "PENDING" | "APPROVED" | "REJECTED" | null;
+  const flagTypeParam = searchParams.get("flagType");
+  const reviewOrderQuery = useQuery({
+    queryKey: ["review-queue-order", projectId, datasetId, reviewStatusParam, flagTypeParam],
+    queryFn: () =>
+      api.listAllReviewQueueImageIds({
+        project_id: projectId!,
+        dataset_id: datasetId,
+        review_status: reviewStatusParam ?? undefined,
+        flag_type: flagTypeParam ?? undefined,
+      }),
+    enabled: fromReviewQueue && !!projectId && !!datasetId,
+  });
+  const imagesTabQuery = useQuery({
+    queryKey: ["images", datasetId, "all", reviewStatusParam],
+    queryFn: () => api.listAllImages(datasetId!, reviewStatusParam ?? undefined),
+    enabled: fromImagesTab && !!datasetId && !!reviewStatusParam,
+  });
+
+  const orderedImages = useMemo(() => {
+    if (fromReviewQueue && reviewOrderQuery.data) {
+      const byId = new Map(images.map((img) => [img.id, img]));
+      return reviewOrderQuery.data.map((id) => byId.get(id)).filter((img): img is (typeof images)[number] => !!img);
+    }
+    if (fromImagesTab && imagesTabQuery.data) return imagesTabQuery.data;
+    return images;
+  }, [fromReviewQueue, reviewOrderQuery.data, fromImagesTab, imagesTabQuery.data, images]);
+
+  const currentIndex = orderedImages.findIndex((i) => i.id === imageId);
+  // Falls back to `images` if the current image isn't in the (still
+  // loading, or filtered-differently) review order yet — otherwise the
+  // very image you clicked into could momentarily fail to render.
+  const currentImage =
+    currentIndex >= 0 ? orderedImages[currentIndex] : images.find((i) => i.id === imageId);
+  const prevImage = currentIndex > 0 ? orderedImages[currentIndex - 1] : undefined;
+  const nextImage =
+    currentIndex >= 0 && currentIndex < orderedImages.length - 1 ? orderedImages[currentIndex + 1] : undefined;
 
   const annotationsQuery = useQuery({
     queryKey: ["annotations", imageId],
@@ -118,47 +206,85 @@ export function AnnotatePage() {
     }
   }, [prevImage, nextImage, queryClient]);
 
-  function goTo(id: string | undefined) {
-    if (!id) return;
-    navigate(`/projects/${projectId}/datasets/${datasetId}/images/${id}/annotate`);
+  // Returns true if it's safe to leave the current shape state (navigate,
+  // approve, reject, delete-image). Returns false — and flashes a warning
+  // instead — if a shape has been drawn but not yet classified, so that
+  // state can never be silently dropped: the user must either pick a class
+  // (RightPanel's class chips) or explicitly discard it (Cancel button /
+  // Escape) before anything here proceeds.
+  function guardPendingShape(): boolean {
+    if (!pendingShape) return true;
+    setPendingShapeWarning(true);
+    setTimeout(() => setPendingShapeWarning(false), 2600);
+    return false;
   }
 
-  // Class choice happens AFTER a box is drawn (see `pendingBox`): drawing
-  // just stages geometry, and this is the one place that turns a pending
-  // box + a chosen class into a real, persisted annotation.
+  function goTo(id: string | undefined) {
+    if (!id) return;
+    if (!guardPendingShape()) return;
+    // Preserve ?from=review-queue&... so stepping through Next/Prev/the
+    // filmstrip keeps browsing in review-queue order instead of reverting
+    // to dataset upload order after the first navigation.
+    const qs = searchParams.toString();
+    navigate(`/projects/${projectId}/datasets/${datasetId}/images/${id}/annotate${qs ? `?${qs}` : ""}`);
+  }
+
+  function shapeToCreatePayload(shape: PendingShape, classId: number, className: string) {
+    return shape.shape_type === "BBOX"
+      ? {
+          image_id: imageId!,
+          class_id: classId,
+          class_name: className,
+          shape_type: "BBOX" as const,
+          x1: shape.x1,
+          y1: shape.y1,
+          x2: shape.x2,
+          y2: shape.y2,
+        }
+      : {
+          image_id: imageId!,
+          class_id: classId,
+          class_name: className,
+          shape_type: "POLYGON" as const,
+          points: shape.points,
+        };
+  }
+
+  // Class choice happens AFTER a shape is drawn (see `pendingShape`):
+  // drawing just stages geometry, and this is the one place that turns a
+  // pending shape + a chosen class into a real, persisted annotation.
   const createMutation = useMutation({
     mutationFn: ({
-      box,
+      shape,
       classId,
       className,
     }: {
-      box: Pick<Annotation, "x1" | "y1" | "x2" | "y2">;
+      shape: PendingShape;
       classId: number;
       className: string;
-    }) =>
-      api.createAnnotation({
-        image_id: imageId!,
-        class_id: classId,
-        class_name: className,
-        ...box,
-      }),
+    }) => api.createAnnotation(shapeToCreatePayload(shape, classId, className)),
     onSuccess: (ann) => {
       upsertAnnotation(ann);
       selectAnnotation(ann.id);
-      setPendingBox(null);
+      setPendingShape(null);
       setDrawClassId(ann.class_id); // pre-highlight the same class for next time
+      pushUndo({ type: "create", annotationId: ann.id });
     },
   });
 
   // Picking a class in the right panel means one of two things depending on
-  // whether a box is waiting to be classified: with a pendingBox, it
-  // commits that box as a real annotation; otherwise it just sets the
-  // highlighted default for whenever the next box gets drawn.
+  // whether a shape is waiting to be classified: with a pendingShape, it
+  // commits that shape as a real annotation; otherwise it just sets the
+  // highlighted default for whenever the next shape gets drawn.
   function pickClass(classId: number) {
     const cls = classEntries.find((c) => c.id === classId);
     if (!cls) return;
-    if (pendingBox) createMutation.mutate({ box: pendingBox, classId: cls.id, className: cls.name });
-    else setDrawClassId(classId);
+    // Guard against a double-click firing two POSTs for the same pending
+    // shape (audit finding FE-09) — once the first create is in flight
+    // there is no pendingShape left to double-submit against a moment
+    // later, but the in-flight window itself needs an explicit guard.
+    if (pendingShape && !createMutation.isPending) createMutation.mutate({ shape: pendingShape, classId: cls.id, className: cls.name });
+    else if (!pendingShape) setDrawClassId(classId);
   }
 
   const addClassMutation = useMutation({
@@ -174,7 +300,7 @@ export function AnnotatePage() {
       queryClient.setQueryData(["project", projectId], project);
       const match = project.class_config.find((c) => c.name.trim().toLowerCase() === name.toLowerCase());
       if (!match) return;
-      if (pendingBox) createMutation.mutate({ box: pendingBox, classId: match.id, className: match.name });
+      if (pendingShape) createMutation.mutate({ shape: pendingShape, classId: match.id, className: match.name });
       else setDrawClassId(match.id);
     },
   });
@@ -194,13 +320,95 @@ export function AnnotatePage() {
     onSuccess: (ann) => {
       upsertAnnotation(ann);
       selectAnnotation(ann.id);
+      pushUndo({ type: "create", annotationId: ann.id });
     },
   });
 
+  // updateMutation/deleteMutation only get the record *after* the change —
+  // useless for undo, which needs the pre-edit state. These wrappers
+  // capture it from current local state before the mutation fires, and
+  // only commit it to the undo stack once the mutation actually succeeds
+  // (a failed edit shouldn't leave a stale undo entry for a change that
+  // never happened).
+  function commitUpdate(id: string, patch: Partial<Annotation>) {
+    const current = annotations.find((a) => a.id === id);
+    const previous: Partial<Annotation> = {};
+    if (current) {
+      for (const key of Object.keys(patch) as (keyof Annotation)[]) {
+        (previous as Record<string, unknown>)[key] = current[key];
+      }
+    }
+    updateMutation.mutate(
+      { id, patch },
+      { onSuccess: () => current && pushUndo({ type: "update", id, previous }) },
+    );
+  }
+
+  function commitDelete(id: string) {
+    const current = annotations.find((a) => a.id === id);
+    deleteMutation.mutate(id, {
+      onSuccess: () => current && pushUndo({ type: "delete", annotation: current }),
+    });
+  }
+
+  function undo() {
+    const entry = undoStackRef.current.pop();
+    if (!entry) return;
+    isUndoingRef.current = true;
+    const release = () => {
+      isUndoingRef.current = false;
+    };
+    if (entry.type === "create") {
+      deleteMutation.mutate(entry.annotationId, { onSettled: release });
+    } else if (entry.type === "delete") {
+      const a = entry.annotation;
+      const shape: PendingShape =
+        a.shape_type === "POLYGON" && a.points
+          ? { shape_type: "POLYGON", points: a.points }
+          : { shape_type: "BBOX", x1: a.x1, y1: a.y1, x2: a.x2, y2: a.y2 };
+      createMutation.mutate(
+        { shape, classId: a.class_id, className: a.class_name },
+        { onSettled: release },
+      );
+    } else {
+      updateMutation.mutate({ id: entry.id, patch: entry.previous }, { onSettled: release });
+    }
+  }
+
+  // Patches the "all images" cache AnnotatePage itself keeps (`imagesQuery`
+  // below, key ["images", datasetId, "all"]) in place, instead of
+  // invalidating it. On a large dataset `listAllImages` pages through the
+  // whole dataset (thousands of images, many round trips even parallelized)
+  // — approve/reject/delete only ever change ONE image's row, so
+  // invalidating that whole cached list here used to force a full dataset
+  // refetch on every single click, which is what made stepping through a
+  // big dataset feel slow. `refetchType: "none"` still marks the broader
+  // ["images", datasetId] prefix (e.g. ImagesPage's own paginated cache)
+  // stale so *those* pages pick up the change next time they're visited,
+  // without forcing an immediate refetch of anything right now.
+  function patchCachedImage(updated: AnnotationImage) {
+    queryClient.setQueryData<AnnotationImage[]>(["images", datasetId, "all"], (old) =>
+      old?.map((img) => (img.id === updated.id ? updated : img)),
+    );
+    // Browsing a status-filtered tab (?from=images&reviewStatus=...): once
+    // this image's status no longer matches that tab, it needs to actually
+    // drop out of the cached list here — not just have its field patched —
+    // or it keeps showing up in e.g. the Pending tab's Prev/Next/Filmstrip
+    // after being approved (the literal bug report this fixes).
+    if (fromImagesTab && reviewStatusParam) {
+      queryClient.setQueryData<AnnotationImage[]>(["images", datasetId, "all", reviewStatusParam], (old) =>
+        updated.review_status === reviewStatusParam
+          ? old?.map((img) => (img.id === updated.id ? updated : img))
+          : old?.filter((img) => img.id !== updated.id),
+      );
+    }
+    queryClient.invalidateQueries({ queryKey: ["images", datasetId], refetchType: "none" });
+  }
+
   const approveMutation = useMutation({
     mutationFn: () => api.approveImage(imageId!),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["images", datasetId] });
+    onSuccess: (updatedImage) => {
+      patchCachedImage(updatedImage);
       queryClient.invalidateQueries({ queryKey: ["annotations", imageId] });
       // The Review Queue's PENDING/APPROVED tabs cache for 30s (default
       // staleTime) — without this, approving here and switching straight
@@ -215,8 +423,8 @@ export function AnnotatePage() {
   });
   const rejectMutation = useMutation({
     mutationFn: () => api.rejectImage(imageId!),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["images", datasetId] });
+    onSuccess: (updatedImage) => {
+      patchCachedImage(updatedImage);
       queryClient.invalidateQueries({ queryKey: ["review-queue"] });
     },
   });
@@ -224,7 +432,15 @@ export function AnnotatePage() {
   const deleteImageMutation = useMutation({
     mutationFn: () => api.deleteImage(imageId!),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["images", datasetId] });
+      queryClient.setQueryData<AnnotationImage[]>(["images", datasetId, "all"], (old) =>
+        old?.filter((img) => img.id !== imageId),
+      );
+      if (fromImagesTab && reviewStatusParam) {
+        queryClient.setQueryData<AnnotationImage[]>(["images", datasetId, "all", reviewStatusParam], (old) =>
+          old?.filter((img) => img.id !== imageId),
+        );
+      }
+      queryClient.invalidateQueries({ queryKey: ["images", datasetId], refetchType: "none" });
       queryClient.invalidateQueries({ queryKey: ["dataset-stats", datasetId] });
       // Land on whatever's next in the sequence rather than a 404 on the
       // image we just removed; if this was the only/last image, there's
@@ -243,7 +459,24 @@ export function AnnotatePage() {
 
   const selected = useMemo(() => annotations.find((a) => a.id === selectedId) ?? null, [annotations, selectedId]);
 
+  function handleApprove() {
+    if (!guardPendingShape()) return;
+    approveMutation.mutate();
+  }
+  function handleReject() {
+    if (!guardPendingShape()) return;
+    rejectMutation.mutate();
+  }
+  function handleDeleteImage() {
+    if (!guardPendingShape()) return;
+    deleteImageMutation.mutate();
+  }
+
   function handleSave() {
+    // Every real edit already persists immediately via its own mutation —
+    // the one thing NOT yet persisted is a pendingShape, so flashing
+    // "Saved" while one exists would be a false signal (audit finding FE-10).
+    if (!guardPendingShape()) return;
     queryClient.invalidateQueries({ queryKey: ["annotations", imageId] });
     setJustSaved(true);
     setTimeout(() => setJustSaved(false), 1200);
@@ -251,39 +484,46 @@ export function AnnotatePage() {
 
   useKeyboardShortcuts(
     {
-      add: () => setMode(mode === "draw" ? "select" : "draw"),
-      delete: () => selected && deleteMutation.mutate(selected.id),
-      edit: () => {}, // right panel coordinate fields are always live-editable; nothing to focus-toggle
+      drawBbox: () => setMode(mode === "draw-bbox" ? "select" : "draw-bbox"),
+      drawPolygon: () => setMode(mode === "draw-polygon" ? "select" : "draw-polygon"),
+      delete: () => selected && commitDelete(selected.id),
+      undo,
       prev: () => goTo(prevImage?.id),
       next: () => goTo(nextImage?.id),
-      approve: () => approveMutation.mutate(),
+      approve: handleApprove,
       save: handleSave,
       zoom: () => controlsRef.current?.zoomIn(),
+      zoomOut: () => controlsRef.current?.zoomOut(),
       fit: () => controlsRef.current?.fit(),
       setClassByIndex: (index) => {
         const cls = classEntries[index];
         if (!cls) return;
-        // A pendingBox takes priority: a digit key is the fast path to
-        // classify the box that's actually waiting right now.
-        if (pendingBox) createMutation.mutate({ box: pendingBox, classId: cls.id, className: cls.name });
-        else if (selected) updateMutation.mutate({ id: selected.id, patch: { class_id: cls.id, class_name: cls.name } });
+        // A pendingShape takes priority: a digit key is the fast path to
+        // classify the shape that's actually waiting right now.
+        if (pendingShape) createMutation.mutate({ shape: pendingShape, classId: cls.id, className: cls.name });
+        else if (selected) commitUpdate(selected.id, { class_id: cls.id, class_name: cls.name });
         else setDrawClassId(cls.id);
       },
     },
     !!imageId,
   );
 
-  // Escape discards a pending box instead of persisting it — the one
-  // keyboard shortcut here that isn't in the shared declarative map, since
-  // it's specific to this transient staging state, not a global action.
+  // Escape discards a pending shape instead of persisting it — the one
+  // keyboard shortcut here that isn't in the shared
+  // declarative map, since it's specific to this transient staging state,
+  // not a global action. (An in-progress, not-yet-closed polygon ring has
+  // its own, earlier Escape handling inside AnnotationCanvas — this only
+  // fires once a shape has actually finished drawing and is awaiting a
+  // class pick.)
   useEffect(() => {
-    if (!pendingBox) return;
+    if (!pendingShape) return;
     function onKeyDown(e: KeyboardEvent) {
-      if (e.key === "Escape") setPendingBox(null);
+      if (e.key !== "Escape") return;
+      setPendingShape(null);
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [pendingBox, setPendingBox]);
+  }, [pendingShape, setPendingShape]);
 
   if (!projectId || !datasetId || !imageId) return null;
 
@@ -301,12 +541,19 @@ export function AnnotatePage() {
             imageHeight={currentImage.height}
             classEntries={classEntries}
             controlsRef={controlsRef}
-            onCommitMove={(id, patch) => updateMutation.mutate({ id, patch })}
-            onBoxDrawn={(box) => setPendingBox(box)}
-            pendingBox={pendingBox}
+            onCommitMove={(id, patch) => commitUpdate(id, patch)}
+            onCommitPolygonMove={(id, points) => commitUpdate(id, { points })}
+            onBoxDrawn={(box) => setPendingShape({ shape_type: "BBOX", ...box })}
+            onPolygonDrawn={(points) => setPendingShape({ shape_type: "POLYGON", points })}
+            pendingShape={pendingShape}
             flagsByAnnotationId={flagsByAnnotationId}
           />
           {showShortcuts && <ShortcutHelp onClose={() => setShowShortcuts(false)} />}
+          {pendingShapeWarning && (
+            <p className="absolute left-4 top-4 border-2 border-accent bg-paper px-3 py-2 text-xs font-bold text-accent">
+              Pick a class for the shape you just drew, or press Esc to discard it, before moving on.
+            </p>
+          )}
           {createMutation.isError && (
             <p className="absolute left-4 top-4 border-2 border-accent bg-paper px-3 py-2 text-xs font-bold text-accent">
               {(createMutation.error as Error).message}
@@ -319,29 +566,31 @@ export function AnnotatePage() {
           classEntries={classEntries}
           flags={selected ? (flagsByAnnotationId[selected.id] ?? []) : []}
           onChangeClass={(classId, className) =>
-            selected && updateMutation.mutate({ id: selected.id, patch: { class_id: classId, class_name: className } })
+            selected && commitUpdate(selected.id, { class_id: classId, class_name: className })
           }
-          onEditCoords={(patch) => selected && updateMutation.mutate({ id: selected.id, patch })}
-          onDelete={() => selected && deleteMutation.mutate(selected.id)}
+          onEditCoords={(patch) => selected && commitUpdate(selected.id, patch)}
+          onDelete={() => selected && commitDelete(selected.id)}
           onDuplicate={() => selected && duplicateMutation.mutate(selected.id)}
           onResolveFlag={(flagId, resolution) => resolveFlagMutation.mutate({ flagId, resolution })}
           drawClassId={drawClassId}
           onSelectDrawClass={pickClass}
           onAddClass={(name) => addClassMutation.mutate(name)}
           addingClass={addClassMutation.isPending}
-          pendingBox={!!pendingBox}
-          onCancelPending={() => setPendingBox(null)}
-          onDeleteImage={() => deleteImageMutation.mutate()}
+          pendingShape={!!pendingShape}
+          onCancelPending={() => setPendingShape(null)}
+          onDeleteImage={handleDeleteImage}
           deletingImage={deleteImageMutation.isPending}
           collapsed={rightPanelCollapsed}
           onToggleCollapse={() => setRightPanelCollapsed((v) => !v)}
         />
       </div>
-      <Filmstrip images={images} currentId={imageId} onSelect={goTo} />
+      <Filmstrip images={orderedImages} currentId={imageId} onSelect={goTo} />
       <Toolbar
-        position={`${currentIndex + 1} / ${images.length}`}
+        position={`${currentIndex + 1} / ${orderedImages.length}`}
         hasSelection={!!selected}
-        drawing={mode === "draw"}
+        activeTool={
+          mode === "draw-bbox" ? "bbox" : mode === "draw-polygon" ? "polygon" : "select"
+        }
         reviewStatus={currentImage.review_status}
         approving={approveMutation.isPending}
         rejecting={rejectMutation.isPending}
@@ -349,12 +598,13 @@ export function AnnotatePage() {
         rejectError={rejectMutation.isError ? (rejectMutation.error as Error).message || "Reject failed" : null}
         onPrev={() => goTo(prevImage?.id)}
         onNext={() => goTo(nextImage?.id)}
-        onApprove={() => approveMutation.mutate()}
-        onReject={() => rejectMutation.mutate()}
+        onApprove={handleApprove}
+        onReject={handleReject}
         onSave={handleSave}
         justSaved={justSaved}
-        onDeleteSelected={() => selected && deleteMutation.mutate(selected.id)}
-        onAdd={() => setMode(mode === "draw" ? "select" : "draw")}
+        onDeleteSelected={() => selected && commitDelete(selected.id)}
+        onSelectBboxTool={() => setMode(mode === "draw-bbox" ? "select" : "draw-bbox")}
+        onSelectPolygonTool={() => setMode(mode === "draw-polygon" ? "select" : "draw-polygon")}
         onZoomIn={() => controlsRef.current?.zoomIn()}
         onZoomOut={() => controlsRef.current?.zoomOut()}
         onFit={() => controlsRef.current?.fit()}

@@ -132,8 +132,10 @@ function VersionRow({
   onExport,
   onExportCoco,
   onExportCvat,
+  yoloPending,
   cocoPending,
   cvatPending,
+  exportError,
 }: {
   version: DatasetVersion;
   projectId: string;
@@ -141,8 +143,10 @@ function VersionRow({
   onExport: (id: string) => void;
   onExportCoco: (id: string) => void;
   onExportCvat: (id: string) => void;
+  yoloPending: boolean;
   cocoPending: boolean;
   cvatPending: boolean;
+  exportError: string | null;
 }) {
   return (
     <div className="border-b-2 border-ink p-6">
@@ -159,13 +163,15 @@ function VersionRow({
         {version.used_frame_level_fallback && " · frame-level fallback (too few source videos to group)"}
       </p>
       {version.error && <p className="mt-2 text-xs text-accent">{version.error}</p>}
+      {exportError && <p className="mt-2 text-xs text-accent">{exportError}</p>}
       <div className="mt-3 flex flex-wrap gap-3">
         {version.status === "DRAFT" && (
           <button
             onClick={() => onExport(version.id)}
-            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-paper"
+            disabled={yoloPending}
+            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-paper disabled:opacity-40"
           >
-            Export YOLO
+            {yoloPending ? "Exporting…" : "Export YOLO"}
           </button>
         )}
         {version.status === "EXPORTED" && version.download_url && (
@@ -333,8 +339,20 @@ export function ExportPage() {
                 onExport={(id) => exportMutation.mutate(id)}
                 onExportCoco={(id) => exportCocoMutation.mutate(id)}
                 onExportCvat={(id) => exportCvatMutation.mutate(id)}
+                yoloPending={exportMutation.isPending && exportMutation.variables === v.id}
                 cocoPending={exportCocoMutation.isPending && exportCocoMutation.variables === v.id}
                 cvatPending={exportCvatMutation.isPending && exportCvatMutation.variables === v.id}
+                exportError={
+                  (exportMutation.isError && exportMutation.variables === v.id
+                    ? (exportMutation.error as Error).message
+                    : null) ??
+                  (exportCocoMutation.isError && exportCocoMutation.variables === v.id
+                    ? (exportCocoMutation.error as Error).message
+                    : null) ??
+                  (exportCvatMutation.isError && exportCvatMutation.variables === v.id
+                    ? (exportCvatMutation.error as Error).message
+                    : null)
+                }
               />
             ))}
             {versionsQuery.data?.length === 0 && (

@@ -1,5 +1,16 @@
 import { NavLink, useParams } from "react-router-dom";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+
+// Below this, the sidebar's expanded 224px eats more than half a phone-width
+// viewport, squeezing the actual page content (the annotation canvas, in
+// the worst case) into an unusable sliver (audit finding FE-05). Treated as
+// a hard floor, not a soft preference — same precedent as AnnotatePage
+// forcing its right panel collapsed below 1024px.
+const NARROW_BREAKPOINT_PX = 640;
+
+function isNarrowViewport(): boolean {
+  return typeof window !== "undefined" && window.innerWidth < NARROW_BREAKPOINT_PX;
+}
 
 // Every sidebar entry the spec calls for, grouped so related items read as
 // related instead of one flat undifferentiated list. Entries that need a
@@ -154,16 +165,29 @@ export function Sidebar({
 const SIDEBAR_COLLAPSED_KEY = "sidebar-collapsed";
 
 export function useSidebarCollapsed(): [boolean, () => void] {
-  const [collapsed, setCollapsed] = useState(() => {
+  const [manualCollapsed, setManualCollapsed] = useState(() => {
     try {
       return localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === "true";
     } catch {
       return false;
     }
   });
+  // Tracked separately from the persisted preference above and reactive to
+  // resize (not just checked once at mount) — narrowing the window after
+  // load used to leave the full-width sidebar in place with nothing
+  // reflowing to compensate.
+  const [narrow, setNarrow] = useState(isNarrowViewport);
+
+  useEffect(() => {
+    function onResize() {
+      setNarrow(isNarrowViewport());
+    }
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   const toggle = () => {
-    setCollapsed((c) => {
+    setManualCollapsed((c) => {
       const next = !c;
       try {
         localStorage.setItem(SIDEBAR_COLLAPSED_KEY, String(next));
@@ -174,5 +198,5 @@ export function useSidebarCollapsed(): [boolean, () => void] {
     });
   };
 
-  return [collapsed, toggle];
+  return [manualCollapsed || narrow, toggle];
 }

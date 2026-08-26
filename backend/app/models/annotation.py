@@ -16,11 +16,21 @@ from __future__ import annotations
 import uuid
 from enum import Enum as PyEnum
 
-from sqlalchemy import Enum, Float, ForeignKey, Integer, String
+from sqlalchemy import JSON, Enum, Float, ForeignKey, Integer, String
 from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+
+
+class ShapeType(str, PyEnum):
+    """BBOX is the original (and still default) geometry. POLYGON covers
+    hand-drawn polygons, stored as a point ring — never a separate
+    raster/RLE representation, since the canvas is SVG-based and a vector
+    path is what it already edits."""
+
+    BBOX = "BBOX"
+    POLYGON = "POLYGON"
 
 
 class AnnotationSource(str, PyEnum):
@@ -90,6 +100,18 @@ class AnnotationEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     class_id: Mapped[int] = mapped_column(Integer, nullable=False)
     class_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    shape_type: Mapped[ShapeType] = mapped_column(
+        Enum(ShapeType, name="annotation_shape_type"), nullable=False, default=ShapeType.BBOX
+    )
+    # [[x,y], ...] normalized ring, >=3 points; NULL for BBOX rows.
+    points: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    # Always populated for every shape_type: the shape's own bbox for BBOX
+    # rows, the bounding box of `points` (server-computed, never
+    # client-trusted — see services/annotation/service.py::_bbox_from_points)
+    # for POLYGON rows. This is what keeps the quality-rule engine, the SORT
+    # tracker, and every exporter's bbox path working unmodified for polygon
+    # annotations, at bbox-approximation fidelity — a deliberate scope
+    # decision, not an oversight.
     x1: Mapped[float] = mapped_column(Float, nullable=False)
     y1: Mapped[float] = mapped_column(Float, nullable=False)
     x2: Mapped[float] = mapped_column(Float, nullable=False)
@@ -118,6 +140,10 @@ class Annotation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
     class_id: Mapped[int] = mapped_column(Integer, nullable=False)
     class_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    shape_type: Mapped[ShapeType] = mapped_column(
+        Enum(ShapeType, name="annotation_shape_type"), nullable=False, default=ShapeType.BBOX
+    )
+    points: Mapped[list | None] = mapped_column(JSON, nullable=True)
     x1: Mapped[float] = mapped_column(Float, nullable=False)
     y1: Mapped[float] = mapped_column(Float, nullable=False)
     x2: Mapped[float] = mapped_column(Float, nullable=False)

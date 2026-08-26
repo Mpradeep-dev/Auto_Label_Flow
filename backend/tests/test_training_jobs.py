@@ -5,13 +5,11 @@ RTX 5060 — not something the automated suite can require). Uses
 same reasoning as the video/inference-batch tests."""
 from __future__ import annotations
 
-import io
 import uuid
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
-from PIL import Image as PILImage
 from sqlalchemy.orm import Session
 
 from app.services.inference import registry
@@ -78,40 +76,6 @@ def _patch_training(monkeypatch):
     monkeypatch.setattr(ultralytics, "YOLO", _FakeYOLO)
     yield
     registry.clear_cache()
-
-
-def _jpeg_bytes() -> bytes:
-    img = PILImage.new("RGB", (64, 48), color=(80, 80, 80))
-    buf = io.BytesIO()
-    img.save(buf, format="JPEG")
-    return buf.getvalue()
-
-
-@pytest.fixture()
-def version_and_base_model(real_client: TestClient, unique_name: str, tmp_path) -> tuple[str, str, str]:
-    project = real_client.post("/api/v1/projects", json={"name": unique_name}).json()
-    real_client.patch(
-        f"/api/v1/projects/{project['id']}",
-        json={"class_config": [{"id": 0, "name": "ball"}, {"id": 1, "name": "cone"}, {"id": 2, "name": "cone_1"}]},
-    )
-    dataset = real_client.post(f"/api/v1/projects/{project['id']}/datasets", json={"name": "d"}).json()
-
-    image = real_client.post(
-        f"/api/v1/datasets/{dataset['id']}/images", files={"file": ("f.jpg", _jpeg_bytes(), "image/jpeg")}
-    ).json()
-    real_client.post(f"/api/v1/images/{image['id']}/approve")
-    real_client.post(
-        "/api/v1/annotations",
-        json={"image_id": image["id"], "class_id": 1, "class_name": "cone", "x1": 0.1, "y1": 0.1, "x2": 0.3, "y2": 0.3},
-    )
-    version = real_client.post(f"/api/v1/datasets/{dataset['id']}/versions", json={}).json()
-
-    weights = tmp_path / "detect_v1.pt"
-    base_model = real_client.post(
-        "/api/v1/models", json={"name": "detect_v1", "weights_path": str(weights), "kind": "DETECTOR"}
-    ).json()
-
-    return project["id"], version["id"], base_model["id"]
 
 
 def test_training_job_completes_and_registers_new_model(

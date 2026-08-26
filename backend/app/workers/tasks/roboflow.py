@@ -13,7 +13,7 @@ from app.db.session import SessionLocal
 from app.models.roboflow_job import RoboflowJob, RoboflowJobStatus
 from app.services.integrations.roboflow_export import push_version_to_roboflow
 from app.services.integrations.roboflow_import import import_roboflow_project, import_roboflow_raw_project
-from app.workers.celery_app import celery_app
+from app.workers.celery_app import ROBOFLOW_SOFT_TIME_LIMIT_S, ROBOFLOW_TIME_LIMIT_S, celery_app
 from app.workers.progress import ThrottledProgressWriter, clear_cancel, is_cancel_requested
 
 _DB_CHECKPOINT_EVERY = 5  # commit the durable job row every N items, not every single one
@@ -33,7 +33,12 @@ def _make_progress_cb(job: RoboflowJob, db, writer: ThrottledProgressWriter):
     return cb
 
 
-@celery_app.task(bind=True, name="app.workers.tasks.roboflow.run_roboflow_import")
+@celery_app.task(
+    bind=True,
+    name="app.workers.tasks.roboflow.run_roboflow_import",
+    time_limit=ROBOFLOW_TIME_LIMIT_S,
+    soft_time_limit=ROBOFLOW_SOFT_TIME_LIMIT_S,
+)
 def run_roboflow_import(self, job_id: str) -> None:
     db = SessionLocal()
     job = db.get(RoboflowJob, uuid.UUID(job_id))
@@ -100,7 +105,12 @@ def run_roboflow_import(self, job_id: str) -> None:
         db.close()
 
 
-@celery_app.task(bind=True, name="app.workers.tasks.roboflow.run_roboflow_export")
+@celery_app.task(
+    bind=True,
+    name="app.workers.tasks.roboflow.run_roboflow_export",
+    time_limit=ROBOFLOW_TIME_LIMIT_S,
+    soft_time_limit=ROBOFLOW_SOFT_TIME_LIMIT_S,
+)
 def run_roboflow_export(self, job_id: str) -> None:
     db = SessionLocal()
     job = db.get(RoboflowJob, uuid.UUID(job_id))

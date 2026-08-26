@@ -54,7 +54,9 @@ function JobDetail({ job }: { job: TrainingJob }) {
       <div className="mb-4 flex items-center justify-between">
         <div>
           <p className="text-sm font-bold uppercase tracking-widest text-ink/50">
-            {current.provider} · device {current.device}
+            {current.provider === "LOCAL"
+              ? `LOCAL · device ${current.device}`
+              : `KAGGLE · ${current.enable_gpu ? "GPU" : "CPU only"}`}
           </p>
           <p className="tabular text-2xl font-black">
             Epoch {current.current_epoch} / {current.epochs}
@@ -79,12 +81,25 @@ function JobDetail({ job }: { job: TrainingJob }) {
       {current.error && <p className="mb-4 text-xs text-accent">{current.error}</p>}
 
       {(current.status === "RUNNING" || current.status === "QUEUED") && (
-        <button
-          onClick={() => cancelMutation.mutate()}
-          className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-accent hover:text-paper hover:border-accent"
-        >
-          Cancel
-        </button>
+        <div>
+          <button
+            onClick={() => cancelMutation.mutate()}
+            disabled={cancelMutation.isPending}
+            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-accent hover:text-paper hover:border-accent disabled:opacity-40"
+          >
+            {cancelMutation.isPending ? "Cancelling…" : "Cancel"}
+          </button>
+          {/* Kaggle has no remote-stop API — this only stops this app from
+              tracking the job. Said up front, not just in the error text
+              cancelling leaves behind, since a Kaggle run can keep billing
+              against your GPU quota after you've clicked away. */}
+          {current.provider === "KAGGLE" && (
+            <p className="mt-2 text-[10px] text-ink/40">
+              Kaggle has no remote-stop API — this stops tracking it here, but the kernel may keep
+              running on kaggle.com until it finishes on its own.
+            </p>
+          )}
+        </div>
       )}
       {current.status === "COMPLETED" && current.result_model_id && (
         <p className="text-xs text-ink/60">
@@ -146,11 +161,22 @@ export function TrainingRunsPage() {
   const [versionId, setVersionId] = useState(() => searchParams.get("versionId") ?? "");
   const [baseModelId, setBaseModelId] = useState("");
   const [provider, setProvider] = useState<TrainingProviderName>("LOCAL");
-  const [epochs, setEpochs] = useState(100);
-  const [batchSize, setBatchSize] = useState(8);
-  const [imageSize, setImageSize] = useState(640);
+  // Held as free-typed strings, not numbers: a controlled <input type="number">
+  // that coerces on every keystroke (parseInt(e.target.value) || fallback)
+  // can never actually be edited — the instant you clear the field to type
+  // a new value, parseInt("") is NaN, `NaN || fallback` snaps it straight
+  // back to the fallback, and the field looks "stuck"/hardcoded. Parsing
+  // only happens once, at submit time (see createMutation below).
+  const [epochsInput, setEpochsInput] = useState("100");
+  const [batchSizeInput, setBatchSizeInput] = useState("8");
+  const [imageSizeInput, setImageSizeInput] = useState("640");
   const [learningRate, setLearningRate] = useState("");
   const [device, setDevice] = useState("0");
+  // KAGGLE-only — the LOCAL provider ignores this (it trains on whatever
+  // `device` above resolves to on this machine). Kaggle accounts have a
+  // weekly GPU-hours quota; this is the on/off switch for spending it on a
+  // given run instead of a free CPU kernel.
+  const [enableGpu, setEnableGpu] = useState(true);
   // Free-form passthrough for any other Ultralytics `YOLO.train()` kwarg
   // (optimizer, patience, dropout, augmentation knobs, ...) — the backend
   // has a typed column per the handful of settings above, but Ultralytics
@@ -204,15 +230,20 @@ export function TrainingRunsPage() {
           throw new Error("Advanced parameters isn't valid JSON — fix it or clear the box.");
         }
       }
+      // Parsed here, once, instead of on every keystroke — clamped to a
+      // sane floor and falling back to the field's own default only if
+      // what's typed doesn't parse at all (an actually-empty/non-numeric
+      // field), not on every intermediate edit.
       return api.createTrainingJob({
         dataset_version_id: versionId,
         base_model_id: baseModelId,
         provider,
-        epochs,
-        batch_size: batchSize,
-        image_size: imageSize,
+        epochs: Math.max(1, parseInt(epochsInput, 10) || 100),
+        batch_size: Math.max(1, parseInt(batchSizeInput, 10) || 8),
+        image_size: Math.max(32, parseInt(imageSizeInput, 10) || 640),
         learning_rate: learningRate.trim() ? parseFloat(learningRate) : undefined,
         device: device.trim() || undefined,
+        enable_gpu: enableGpu,
         extra_args,
       });
     },
@@ -242,6 +273,7 @@ export function TrainingRunsPage() {
 
   const gpu = providersQuery.data?.gpu;
   const kaggleAvailable = providersQuery.data?.available.includes("KAGGLE") ?? false;
+  const modalAvailable = providersQuery.data?.available.includes("MODAL") ?? false;
   const jobs = jobsQuery.data ?? [];
   const activeJob = jobs.find((j) => j.id === selectedJobId) ?? jobs[0];
 
@@ -293,12 +325,12 @@ export function TrainingRunsPage() {
 
       <div className="mb-8 max-w-3xl space-y-4 border-2 border-ink p-6">
         <div className="flex gap-6">
-          {(["LOCAL", "KAGGLE"] as const).map((p) => (
+          {(["LOCAL", "KAGGLE", "MODAL"] as const).map((p) => (
             <label key={p} className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest">
               <input
                 type="radio"
                 checked={provider === p}
-                disabled={p === "KAGGLE" && !kaggleAvailable}
+                disabled={(p === "KAGGLE" && !kaggleAvailable) || (p === "MODAL" && !modalAvailable)}
                 onChange={() => setProvider(p)}
                 className="accent-accent"
               />
@@ -306,6 +338,11 @@ export function TrainingRunsPage() {
               {p === "KAGGLE" && !kaggleAvailable && (
                 <span className="text-[9px] font-normal normal-case text-ink/40">
                   (disabled — no Kaggle credentials configured)
+                </span>
+              )}
+              {p === "MODAL" && !modalAvailable && (
+                <span className="text-[9px] font-normal normal-case text-ink/40">
+                  (disabled — no Modal credentials configured)
                 </span>
               )}
             </label>
@@ -389,8 +426,8 @@ export function TrainingRunsPage() {
             <input
               type="number"
               min={1}
-              value={epochs}
-              onChange={(e) => setEpochs(parseInt(e.target.value) || 1)}
+              value={epochsInput}
+              onChange={(e) => setEpochsInput(e.target.value)}
               className="tabular mt-1 w-full border border-ink/30 px-2 py-1 text-sm"
             />
           </label>
@@ -399,8 +436,8 @@ export function TrainingRunsPage() {
             <input
               type="number"
               min={1}
-              value={batchSize}
-              onChange={(e) => setBatchSize(parseInt(e.target.value) || 1)}
+              value={batchSizeInput}
+              onChange={(e) => setBatchSizeInput(e.target.value)}
               className="tabular mt-1 w-full border border-ink/30 px-2 py-1 text-sm"
             />
           </label>
@@ -410,8 +447,8 @@ export function TrainingRunsPage() {
               type="number"
               min={32}
               step={32}
-              value={imageSize}
-              onChange={(e) => setImageSize(parseInt(e.target.value) || 640)}
+              value={imageSizeInput}
+              onChange={(e) => setImageSizeInput(e.target.value)}
               className="tabular mt-1 w-full border border-ink/30 px-2 py-1 text-sm"
             />
           </label>
@@ -430,15 +467,55 @@ export function TrainingRunsPage() {
               className="tabular mt-1 w-full border border-ink/30 px-2 py-1 text-sm placeholder:normal-case placeholder:text-ink/30"
             />
           </label>
-          <label className="text-[10px] font-bold uppercase tracking-widest text-ink/50">
-            Device
-            <input
-              value={device}
-              onChange={(e) => setDevice(e.target.value)}
-              placeholder="0, 0,1, or cpu"
-              className="tabular mt-1 w-full border border-ink/30 px-2 py-1 text-sm placeholder:normal-case placeholder:text-ink/30"
-            />
-          </label>
+          {/* Device is a LOCAL-only concept (a torch device string for
+              this machine) — the Kaggle/Modal providers ignore it entirely and
+              always request their own kernel hardware, so showing it there
+              was misleading (it looked configurable but did nothing). The
+              actual Kaggle-side hardware lever is enable_gpu below: Kaggle
+              accounts have a weekly GPU-hours quota, so being able to run a
+              quota-free CPU kernel instead matters in a way Device never
+              did for this provider. Modal similarly offers GPU type selection. */}
+          {provider === "LOCAL" ? (
+            <label className="text-[10px] font-bold uppercase tracking-widest text-ink/50">
+              Device
+              <input
+                value={device}
+                onChange={(e) => setDevice(e.target.value)}
+                placeholder="0, 0,1, or cpu"
+                className="tabular mt-1 w-full border border-ink/30 px-2 py-1 text-sm placeholder:normal-case placeholder:text-ink/30"
+              />
+            </label>
+          ) : provider === "MODAL" ? (
+            <label className="text-[10px] font-bold uppercase tracking-widest text-ink/50">
+              Modal GPU
+              <div className="mt-1 flex items-center gap-2 border border-ink/30 px-2 py-1.5">
+                <input
+                  type="checkbox"
+                  checked={enableGpu}
+                  onChange={(e) => setEnableGpu(e.target.checked)}
+                  className="accent-accent"
+                />
+                <span className="text-xs font-semibold normal-case text-ink">
+                  {enableGpu ? "Use GPU (A10G default)" : "CPU only — free tier usage"}
+                </span>
+              </div>
+            </label>
+          ) : (
+            <label className="text-[10px] font-bold uppercase tracking-widest text-ink/50">
+              Kaggle GPU
+              <div className="mt-1 flex items-center gap-2 border border-ink/30 px-2 py-1.5">
+                <input
+                  type="checkbox"
+                  checked={enableGpu}
+                  onChange={(e) => setEnableGpu(e.target.checked)}
+                  className="accent-accent"
+                />
+                <span className="text-xs font-semibold normal-case text-ink">
+                  {enableGpu ? "Use GPU kernel" : "CPU only — saves your weekly GPU quota"}
+                </span>
+              </div>
+            </label>
+          )}
         </div>
 
         <div>
@@ -474,7 +551,7 @@ export function TrainingRunsPage() {
           disabled={!versionId || !baseModelId || !!extraArgsError || createMutation.isPending}
           className="w-full border-2 border-ink bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
         >
-          {createMutation.isPending ? "Starting…" : `Start ${provider === "LOCAL" ? "local" : "Kaggle"} training`}
+          {createMutation.isPending ? "Starting…" : `Start ${provider === "LOCAL" ? "local" : provider === "KAGGLE" ? "Kaggle" : "Modal"} training`}
         </button>
         {createMutation.isError && (
           <p className="text-xs text-accent">{(createMutation.error as Error).message}</p>

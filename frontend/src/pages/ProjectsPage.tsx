@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, ApiError } from "@/services/api";
+import { api } from "@/services/api";
+import { FieldError } from "@/components/layout/FieldError";
 import { SectionLabel } from "@/components/layout/SectionLabel";
 import type { Project } from "@/types";
 
@@ -49,11 +50,7 @@ function RenameProjectPanel({ project, onCancel }: { project: Project; onCancel:
           Cancel
         </button>
       </div>
-      {renameMutation.isError && (
-        <p className="mt-2 text-xs text-accent">
-          {renameMutation.error instanceof ApiError ? renameMutation.error.message : "Save failed"}
-        </p>
-      )}
+      {renameMutation.isError && <FieldError error={renameMutation.error} />}
     </div>
   );
 }
@@ -100,11 +97,7 @@ function DeleteProjectPanel({ project, onCancel }: { project: Project; onCancel:
           Cancel
         </button>
       </div>
-      {deleteMutation.isError && (
-        <p className="mt-2 text-xs text-accent">
-          {deleteMutation.error instanceof ApiError ? deleteMutation.error.message : "Delete failed"}
-        </p>
-      )}
+      {deleteMutation.isError && <FieldError error={deleteMutation.error} />}
     </div>
   );
 }
@@ -242,6 +235,7 @@ export function ProjectsPage() {
           {createMutation.isPending ? "Creating…" : "Create"}
         </button>
       </form>
+      {createMutation.isError && <FieldError error={createMutation.error} />}
 
       {projectsQuery.isLoading && <p className="text-sm text-ink/50">Loading…</p>}
 

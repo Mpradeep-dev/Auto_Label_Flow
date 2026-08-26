@@ -18,13 +18,15 @@ from app.models.roboflow_job import RoboflowJob, RoboflowJobKind
 from app.schemas.integration import (
     IntegrationStatus,
     KaggleConnectRequest,
+    ModalConnectRequest,
     RoboflowConnectRequest,
     RoboflowJobRead,
     RoboflowProjectSummary,
     RoboflowVersionSummary,
 )
-from app.services.integrations import kaggle_connect, roboflow_browse, roboflow_connect
+from app.services.integrations import kaggle_connect, modal_connect, roboflow_browse, roboflow_connect
 from app.services.integrations.kaggle_connect import KaggleVerificationError
+from app.services.integrations.modal_connect import ModalVerificationError
 from app.services.integrations.roboflow_connect import RoboflowNotConnectedError, RoboflowVerificationError
 from app.workers.progress import get_progress, request_cancel
 
@@ -33,7 +35,7 @@ router = APIRouter(prefix="/integrations", tags=["integrations"])
 
 @router.get("", response_model=list[IntegrationStatus])
 def list_integrations(db: Session = Depends(get_db)) -> list[IntegrationStatus]:
-    return [kaggle_connect.get_status(db), roboflow_connect.get_status(db)]
+    return [kaggle_connect.get_status(db), modal_connect.get_status(db), roboflow_connect.get_status(db)]
 
 
 @router.post("/kaggle", response_model=IntegrationStatus)
@@ -51,6 +53,23 @@ def connect_kaggle(payload: KaggleConnectRequest, db: Session = Depends(get_db))
 @router.delete("/kaggle", status_code=status.HTTP_204_NO_CONTENT)
 def disconnect_kaggle(db: Session = Depends(get_db)) -> None:
     kaggle_connect.disconnect(db)
+
+
+@router.post("/modal", response_model=IntegrationStatus)
+def connect_modal(payload: ModalConnectRequest, db: Session = Depends(get_db)) -> IntegrationStatus:
+    try:
+        return modal_connect.connect(db, token_id=payload.token_id, token_secret=payload.token_secret)
+    except ModalVerificationError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except ImportError as exc:
+        raise HTTPException(
+            status.HTTP_501_NOT_IMPLEMENTED, "The `modal` package is not installed on this server"
+        ) from exc
+
+
+@router.delete("/modal", status_code=status.HTTP_204_NO_CONTENT)
+def disconnect_modal(db: Session = Depends(get_db)) -> None:
+    modal_connect.disconnect(db)
 
 
 @router.post("/roboflow", response_model=IntegrationStatus)

@@ -17,8 +17,10 @@ from app.schemas.model import ModelDownloadRequest, ModelRead, ModelRegisterRequ
 from app.schemas.prediction import PredictResponse, PredictionOut
 from app.services.inference.detector import ModelLoadError
 from app.services.inference.registry import (
+    ModelInUseError,
     delete_model,
     get_detection_model,
+    get_project_class_names,
     register_model,
     register_model_from_upload,
     register_model_from_url,
@@ -119,7 +121,10 @@ def remove_model(model_id: uuid.UUID, db: Session = Depends(get_db)) -> None:
     model = db.get(MLModel, model_id)
     if model is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Model not found")
-    delete_model(db, model)
+    try:
+        delete_model(db, model)
+    except ModelInUseError as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
 
 
 @router.put("/{model_id}/metrics", response_model=ModelRead)
@@ -155,7 +160,8 @@ def predict(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Image not found")
 
     try:
-        detector = get_detection_model(db, model_id)
+        class_names = get_project_class_names(db, image.project_id)
+        detector = get_detection_model(db, model_id, class_names=class_names)
     except ModelLoadError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 

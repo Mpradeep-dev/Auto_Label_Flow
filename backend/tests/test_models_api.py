@@ -30,10 +30,30 @@ class _FakeDetectionModel:
         ]
 
 
+class _FakeYoloWorldDetectionModel:
+    def __init__(self, weights_path: str) -> None:
+        self._class_names: dict[int, str] = {0: "person"}
+
+    @property
+    def class_names(self) -> dict[int, str]:
+        return self._class_names
+
+    def set_classes(self, classes: list[str]) -> None:
+        self._class_names = dict(enumerate(classes))
+
+    def predict(self, image, conf=0.20, iou=0.70, imgsz=640) -> list[Detection]:
+        return [
+            Detection(
+                class_id=0, class_name=self._class_names[0], confidence=0.9, x1=0.1, y1=0.1, x2=0.2, y2=0.2
+            )
+        ]
+
+
 @pytest.fixture(autouse=True)
 def _patch_detector(monkeypatch):
     registry.clear_cache()
     monkeypatch.setattr(registry, "UltralyticsDetectionModel", _FakeDetectionModel)
+    monkeypatch.setattr(registry, "YoloWorldDetectionModel", _FakeYoloWorldDetectionModel)
     yield
     registry.clear_cache()
 
@@ -90,6 +110,40 @@ def test_predict_endpoint_returns_filtered_detections(client: TestClient, tmp_pa
     cone = next(p for p in body["predictions"] if p["class_name"] == "cone")
     assert cone["confidence"] == 0.72  # kept the higher-confidence duplicate
     assert all(p["source"] == "auto" for p in body["predictions"])
+
+
+def test_register_yolo_world_model_via_api(client: TestClient, tmp_path: Path) -> None:
+    weights = tmp_path / "yolo_world.pt"
+    resp = client.post(
+        "/api/v1/models",
+        json={"name": "yw_v1", "weights_path": str(weights), "kind": "DETECTOR", "framework": "yolo-world"},
+    )
+    assert resp.status_code == 201, resp.text
+    model = resp.json()
+    assert model["is_promptable"] is True
+    assert model["framework"] == "yolo-world"
+
+
+def test_predict_yolo_world_uses_project_class_names(client: TestClient, tmp_path: Path, unique_name: str) -> None:
+    project = client.post("/api/v1/projects", json={"name": unique_name}).json()
+    client.patch(
+        f"/api/v1/projects/{project['id']}",
+        json={"class_config": [{"id": 0, "name": "forklift"}]},
+    )
+    dataset = client.post(f"/api/v1/projects/{project['id']}/datasets", json={"name": "d"}).json()
+    image_id = _upload_test_image(client, dataset["id"])
+
+    weights = tmp_path / "yolo_world.pt"
+    model = client.post(
+        "/api/v1/models",
+        json={"name": "yw_v1", "weights_path": str(weights), "kind": "DETECTOR", "framework": "yolo-world"},
+    ).json()
+
+    resp = client.post(f"/api/v1/models/{model['id']}/predict?image_id={image_id}")
+    assert resp.status_code == 200, resp.text
+    predictions = resp.json()["predictions"]
+    assert len(predictions) == 1
+    assert predictions[0]["class_name"] == "forklift"  # project's class, not the checkpoint's default "person"
 
 
 def test_predict_unknown_model_404(client: TestClient, unique_name: str) -> None:

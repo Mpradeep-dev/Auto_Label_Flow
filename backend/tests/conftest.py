@@ -106,3 +106,51 @@ def real_client(real_db_session: Session) -> Generator[TestClient, None, None]:
     with TestClient(app) as test_client:
         yield test_client
     app.dependency_overrides.clear()
+
+
+def _jpeg_bytes() -> bytes:
+    from io import BytesIO
+
+    from PIL import Image as PILImage
+
+    img = PILImage.new("RGB", (64, 48), color=(80, 80, 80))
+    buf = BytesIO()
+    img.save(buf, format="JPEG")
+    return buf.getvalue()
+
+
+@pytest.fixture()
+def version_and_base_model(real_client: TestClient, unique_name: str, tmp_path) -> tuple[str, str, str]:
+    """A real project/dataset/approved-annotated-image/dataset-version plus
+    a registered (fake-weights) base model — the minimum a training job
+    needs to be created. Shared by test_training_jobs.py (LOCAL) and
+    test_kaggle_training_poll.py (KAGGLE), which both just need a valid
+    dataset_version_id/base_model_id and don't care how they got made."""
+    project = real_client.post("/api/v1/projects", json={"name": unique_name}).json()
+    real_client.patch(
+        f"/api/v1/projects/{project['id']}",
+        json={"class_config": [{"id": 0, "name": "ball"}, {"id": 1, "name": "cone"}, {"id": 2, "name": "cone_1"}]},
+    )
+    dataset = real_client.post(f"/api/v1/projects/{project['id']}/datasets", json={"name": "d"}).json()
+
+    image = real_client.post(
+        f"/api/v1/datasets/{dataset['id']}/images", files={"file": ("f.jpg", _jpeg_bytes(), "image/jpeg")}
+    ).json()
+    real_client.post(f"/api/v1/images/{image['id']}/approve")
+    real_client.post(
+        "/api/v1/annotations",
+        json={"image_id": image["id"], "class_id": 1, "class_name": "cone", "x1": 0.1, "y1": 0.1, "x2": 0.3, "y2": 0.3},
+    )
+    version = real_client.post(f"/api/v1/datasets/{dataset['id']}/versions", json={}).json()
+
+    weights = tmp_path / "detect_v1.pt"
+    # Unique per fixture call — real_client commits for real across a
+    # shared test-session database, and this fixture is reused by many
+    # tests; a fixed name relied on `models` having no (name, version)
+    # uniqueness (audit finding DB-03, now enforced).
+    base_model = real_client.post(
+        "/api/v1/models",
+        json={"name": f"detect-{uuid.uuid4().hex[:8]}", "weights_path": str(weights), "kind": "DETECTOR"},
+    ).json()
+
+    return project["id"], version["id"], base_model["id"]

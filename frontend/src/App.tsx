@@ -1,5 +1,6 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
+import { ProjectGuard } from "@/components/layout/ProjectGuard";
 import { ProjectsPage } from "@/pages/ProjectsPage";
 import { PipelineHome } from "@/pages/PipelineHome";
 import { DatasetsPage } from "@/pages/DatasetsPage";
@@ -24,28 +25,25 @@ export default function App() {
         <Route path="/projects" element={<ProjectsPage />} />
         <Route path="/settings" element={<IntegrationsPage />} />
         <Route path="/help" element={<HelpPage />} />
-        <Route path="/projects/:projectId" element={<PipelineHome />} />
-        <Route path="/projects/:projectId/datasets" element={<DatasetsPage />} />
-        <Route
-          path="/projects/:projectId/datasets/:datasetId/images"
-          element={<ImagesPage />}
-        />
-        <Route
-          path="/projects/:projectId/datasets/:datasetId/images/:imageId/annotate"
-          element={<AnnotatePage />}
-        />
-        <Route
-          path="/projects/:projectId/datasets/:datasetId/statistics"
-          element={<DatasetStatisticsPage />}
-        />
-        <Route path="/projects/:projectId/images" element={<ImagesPage />} />
-        <Route path="/projects/:projectId/videos" element={<VideosPage />} />
-        <Route path="/projects/:projectId/auto-annotation" element={<AutoAnnotationPage />} />
-        <Route path="/projects/:projectId/review" element={<ReviewQueuePage />} />
-        <Route path="/projects/:projectId/models" element={<ModelsPage />} />
-        <Route path="/projects/:projectId/training" element={<TrainingRunsPage />} />
-        <Route path="/projects/:projectId/export" element={<ExportPage />} />
-        <Route path="/projects/:projectId/settings" element={<SettingsPage />} />
+        {/* Every child here can assume the project exists — ProjectGuard
+            fetches it once at this boundary and shows a real not-found/error
+            state instead of each page independently ignoring a 404
+            (audit finding FE-03). */}
+        <Route path="/projects/:projectId" element={<ProjectGuard />}>
+          <Route index element={<PipelineHome />} />
+          <Route path="datasets" element={<DatasetsPage />} />
+          <Route path="datasets/:datasetId/images" element={<ImagesPage />} />
+          <Route path="datasets/:datasetId/images/:imageId/annotate" element={<AnnotatePage />} />
+          <Route path="datasets/:datasetId/statistics" element={<DatasetStatisticsPage />} />
+          <Route path="images" element={<ImagesPage />} />
+          <Route path="videos" element={<VideosPage />} />
+          <Route path="auto-annotation" element={<AutoAnnotationPage />} />
+          <Route path="review" element={<ReviewQueuePage />} />
+          <Route path="models" element={<ModelsPage />} />
+          <Route path="training" element={<TrainingRunsPage />} />
+          <Route path="export" element={<ExportPage />} />
+          <Route path="settings" element={<SettingsPage />} />
+        </Route>
         <Route path="*" element={<Navigate to="/projects" replace />} />
       </Route>
     </Routes>

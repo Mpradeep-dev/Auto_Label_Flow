@@ -14,19 +14,25 @@ from sqlalchemy import select
 
 from app.db.session import SessionLocal
 from app.models.annotation import AnnotationSource
+from app.models.dataset import Dataset
 from app.models.image import Image
 from app.models.inference_job import InferenceJob, JobStatus
 from app.services.annotation import service as annotation_service
-from app.services.inference.registry import get_detection_model
+from app.services.inference.registry import get_detection_model, get_project_class_names
 from app.services.quality.filters import FilterConfig, filter_predictions
 from app.services.storage.factory import get_storage
-from app.workers.celery_app import celery_app
+from app.workers.celery_app import INFERENCE_SOFT_TIME_LIMIT_S, INFERENCE_TIME_LIMIT_S, celery_app
 from app.workers.progress import ThrottledProgressWriter, clear_cancel, is_cancel_requested
 
 _DB_CHECKPOINT_EVERY = 5  # commit the durable job row every N images, not every single one
 
 
-@celery_app.task(bind=True, name="app.workers.tasks.inference.run_inference_batch")
+@celery_app.task(
+    bind=True,
+    name="app.workers.tasks.inference.run_inference_batch",
+    time_limit=INFERENCE_TIME_LIMIT_S,
+    soft_time_limit=INFERENCE_SOFT_TIME_LIMIT_S,
+)
 def run_inference_batch(self, job_id: str) -> None:
     db = SessionLocal()
     job = db.get(InferenceJob, uuid.UUID(job_id))
@@ -44,7 +50,9 @@ def run_inference_batch(self, job_id: str) -> None:
         db.commit()
 
         writer = ThrottledProgressWriter(job_id, len(images))
-        detector = get_detection_model(db, job.model_id)  # loaded once, reused for the whole batch
+        dataset = db.get(Dataset, job.dataset_id)
+        class_names = get_project_class_names(db, dataset.project_id) if dataset is not None else None
+        detector = get_detection_model(db, job.model_id, class_names=class_names)  # loaded once, reused for the whole batch
         storage = get_storage()
 
         for i, image in enumerate(images):

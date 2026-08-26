@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { api } from "@/services/api";
+import { api, ApiError } from "@/services/api";
 import { SectionLabel } from "@/components/layout/SectionLabel";
 import type { VideoRecord } from "@/types";
 
@@ -118,6 +118,11 @@ export function VideosPage() {
   const [interval, setInterval_] = useState(5);
   const [uploading, setUploading] = useState(false);
   const [folderProgress, setFolderProgress] = useState<{ done: number; total: number } | null>(null);
+  // Upload/extraction failures used to only reach `finally` and reset
+  // loading state with zero indication anything went wrong (audit finding
+  // FE-04) — this surfaces what failed and why instead.
+  const [uploadErrors, setUploadErrors] = useState<{ name: string; message: string }[]>([]);
+  const [extractAllError, setExtractAllError] = useState<string | null>(null);
   const [datasetId, setDatasetId] = useState(() => {
     if (!projectId) return "";
     try {
@@ -174,15 +179,32 @@ export function VideosPage() {
   // Kicks off extraction for every not-yet-queued video sequentially —
   // extract-frames just enqueues a worker task, so this returns as fast as
   // the requests round-trip and the rows then poll their own progress.
+  // Continues past a single video's failure rather than aborting the rest
+  // of the batch silently (audit finding FE-13) — one bad video used to
+  // stop every video after it in the list from being queued at all, with
+  // no indication that had happened.
   const extractAllMutation = useMutation({
     mutationFn: async () => {
       const targets = (videosQuery.data ?? []).filter((v) => v.status === "UPLOADED" && !queuedIds.has(v.id));
+      const failed: string[] = [];
       for (const v of targets) {
-        await api.extractFrames(v.id, { interval });
-        markQueued([v.id]);
+        try {
+          await api.extractFrames(v.id, { interval });
+          markQueued([v.id]);
+        } catch (err) {
+          failed.push(`${v.original_filename}: ${err instanceof ApiError ? err.message : "failed to queue"}`);
+        }
       }
+      if (failed.length > 0) throw new Error(failed.join("; "));
     },
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["videos", datasetId] }),
+    onSuccess: () => {
+      setExtractAllError(null);
+      queryClient.invalidateQueries({ queryKey: ["videos", datasetId] });
+    },
+    onError: (err) => {
+      setExtractAllError((err as Error).message);
+      queryClient.invalidateQueries({ queryKey: ["videos", datasetId] });
+    },
   });
 
   const deleteMutation = useMutation({
@@ -193,9 +215,12 @@ export function VideosPage() {
   async function handleFile(file: File | null) {
     if (!file || !datasetId) return;
     setUploading(true);
+    setUploadErrors([]);
     try {
       await api.uploadVideo(datasetId, file);
       queryClient.invalidateQueries({ queryKey: ["videos", datasetId] });
+    } catch (err) {
+      setUploadErrors([{ name: file.name, message: err instanceof ApiError ? err.message : "Upload failed" }]);
     } finally {
       setUploading(false);
     }
@@ -204,21 +229,31 @@ export function VideosPage() {
   // Browsers hand a folder pick over as a flat FileList (no real "upload a
   // directory" request exists), so we filter it down to video files and
   // upload them one at a time through the same single-file endpoint,
-  // invalidating once at the end rather than after every file.
+  // invalidating once at the end rather than after every file. Continues
+  // past a single file's failure instead of aborting the rest of the
+  // folder silently (audit finding FE-04) — one bad file used to stop
+  // every file after it in the picked folder from uploading at all.
   async function handleFolder(fileList: FileList | null) {
     if (!fileList || !datasetId) return;
     const files = Array.from(fileList).filter(isVideoFile);
     if (files.length === 0) return;
 
     setFolderProgress({ done: 0, total: files.length });
+    setUploadErrors([]);
+    const failures: { name: string; message: string }[] = [];
     try {
       for (const file of files) {
-        await api.uploadVideo(datasetId, file);
+        try {
+          await api.uploadVideo(datasetId, file);
+        } catch (err) {
+          failures.push({ name: file.name, message: err instanceof ApiError ? err.message : "Upload failed" });
+        }
         setFolderProgress((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev));
       }
     } finally {
       queryClient.invalidateQueries({ queryKey: ["videos", datasetId] });
       setFolderProgress(null);
+      setUploadErrors(failures);
     }
   }
 
@@ -302,6 +337,35 @@ export function VideosPage() {
       </div>
 
       {!datasetId && <p className="text-sm text-ink/50">Select a dataset above to see or upload its videos.</p>}
+
+      {(uploadErrors.length > 0 || extractAllError) && (
+        <div className="mb-8 max-w-4xl border-2 border-accent bg-accent/5 px-4 py-3 text-xs">
+          <div className="flex items-start justify-between gap-4">
+            <p className="font-bold uppercase tracking-widest text-accent">
+              {uploadErrors.length > 0
+                ? `${uploadErrors.length} file${uploadErrors.length === 1 ? "" : "s"} failed to upload`
+                : "Some videos failed to queue for extraction"}
+            </p>
+            <button
+              onClick={() => {
+                setUploadErrors([]);
+                setExtractAllError(null);
+              }}
+              className="font-bold uppercase tracking-widest text-ink/40 hover:text-ink"
+            >
+              Dismiss
+            </button>
+          </div>
+          <ul className="mt-2 space-y-1 text-ink/70">
+            {uploadErrors.map((f, i) => (
+              <li key={i}>
+                <span className="font-semibold">{f.name}</span> — {f.message}
+              </li>
+            ))}
+            {extractAllError && <li>{extractAllError}</li>}
+          </ul>
+        </div>
+      )}
 
       <div className="max-w-4xl border-t-2 border-ink">
         {(videosQuery.data ?? []).map((video) => (
