@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AppShell } from "@/components/layout/AppShell";
 import { ProjectGuard } from "@/components/layout/ProjectGuard";
+import { LandingPage } from "@/pages/LandingPage";
 import { ProjectsPage } from "@/pages/ProjectsPage";
 import { PipelineHome } from "@/pages/PipelineHome";
 import { DatasetsPage } from "@/pages/DatasetsPage";
@@ -20,8 +21,8 @@ import { HelpPage } from "@/pages/HelpPage";
 export default function App() {
   return (
     <Routes>
+      <Route path="/" element={<LandingPage />} />
       <Route element={<AppShell />}>
-        <Route path="/" element={<Navigate to="/projects" replace />} />
         <Route path="/projects" element={<ProjectsPage />} />
         <Route path="/settings" element={<IntegrationsPage />} />
         <Route path="/help" element={<HelpPage />} />
