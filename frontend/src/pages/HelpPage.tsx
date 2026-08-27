@@ -214,7 +214,7 @@ export function HelpPage() {
         Full technical reference (stack, local dev setup, API layout) lives in the repo's{" "}
         <code className="text-ink/60">README.md</code> and <code className="text-ink/60">docs/WORKFLOW.md</code>.
         Start a walkthrough any time from{" "}
-        <Link to="/projects" className="underline hover:text-accent">
+        <Link to="/projects" className="underline hover:text-orange">
           Projects →
         </Link>
       </p>

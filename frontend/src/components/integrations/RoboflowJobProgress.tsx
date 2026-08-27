@@ -89,7 +89,7 @@ export function RoboflowJobProgress({
           <button
             onClick={cancel}
             disabled={cancelling}
-            className="shrink-0 border border-ink px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:bg-accent hover:text-paper hover:border-accent disabled:opacity-40"
+            className="shrink-0 border border-ink px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:bg-orange hover:text-paper hover:border-orange disabled:opacity-40"
           >
             {cancelling ? "Cancelling…" : "Cancel"}
           </button>

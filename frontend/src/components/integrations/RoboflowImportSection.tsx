@@ -140,7 +140,7 @@ export function RoboflowImportSection({ projectId }: { projectId: string }) {
         <button
           onClick={() => importMutation.mutate()}
           disabled={!workspace || !project || (!usingRaw && version === "") || running}
-          className="w-full border-2 border-ink bg-ink py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
+          className="w-full border-2 border-ink bg-ink py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
         >
           {running ? `Importing… ${job?.processed_items ?? 0} / ${job?.total_items ?? 0}` : "Import"}
         </button>

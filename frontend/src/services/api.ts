@@ -250,6 +250,7 @@ export const api = {
   createTrainingJob: (data: {
     dataset_version_id: string;
     base_model_id: string;
+    result_model_name?: string;
     provider?: string;
     epochs?: number;
     batch_size?: number;

@@ -37,7 +37,7 @@ function StageRow({ index, stage }: { index: number; stage: Stage }) {
       {stage.to && stage.state !== "blocked" && (
         <Link
           to={stage.to}
-          className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors duration-150 hover:bg-ink hover:text-paper"
+          className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors duration-150 hover:border-orange hover:bg-orange hover:text-paper"
         >
           {stage.state === "done" || stage.state === "in_progress" ? "Continue →" : "Start →"}
         </Link>

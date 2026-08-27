@@ -151,7 +151,7 @@ export function ReviewQueuePage() {
           <button
             onClick={() => analyzeMutation.mutate()}
             disabled={!datasetId || analyzeMutation.isPending}
-            className="border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
+            className="border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
           >
             {analyzeMutation.isPending ? "Queued…" : "Run quality analysis"}
           </button>
@@ -188,7 +188,7 @@ export function ReviewQueuePage() {
                 key={value}
                 onClick={() => setTab(value)}
                 className={`flex-1 border-r-2 border-ink px-4 py-3 text-xs font-bold uppercase tracking-widest last:border-r-0 ${
-                  tab === value ? "bg-ink text-paper" : "hover:bg-muted"
+                  tab === value ? "bg-ink text-paper" : "hover:bg-orange hover:text-paper"
                 }`}
               >
                 {label} <span className="tabular">{total ?? "…"}</span>
@@ -262,7 +262,7 @@ export function ReviewQueuePage() {
               <button
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={page === 0}
-                className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-muted disabled:opacity-30"
+                className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper disabled:opacity-30"
               >
                 ← Prev
               </button>
@@ -272,7 +272,7 @@ export function ReviewQueuePage() {
               <button
                 onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
                 disabled={page >= totalPages - 1}
-                className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-muted disabled:opacity-30"
+                className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper disabled:opacity-30"
               >
                 Next →
               </button>

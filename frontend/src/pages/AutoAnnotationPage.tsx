@@ -91,7 +91,7 @@ function HistorySection({
                 j.id === activeJobId ? "bg-muted" : ""
               }`}
             >
-              <button onClick={() => onSelect(j)} className="flex-1 text-left hover:text-accent">
+              <button onClick={() => onSelect(j)} className="flex-1 text-left hover:text-orange">
                 <span className="text-xs font-semibold">
                   {dataset?.name ?? "Unknown dataset"} · {model?.name ?? "Unknown model"}
                 </span>
@@ -107,7 +107,7 @@ function HistorySection({
                 <button
                   onClick={() => cancelMutation.mutate(j.id)}
                   disabled={cancelMutation.isPending}
-                  className="border border-ink/30 px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:border-accent hover:text-accent disabled:opacity-40"
+                  className="border border-ink/30 px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:border-orange hover:text-orange disabled:opacity-40"
                 >
                   Cancel
                 </button>
@@ -345,7 +345,7 @@ export function AutoAnnotationPage() {
         <button
           onClick={run}
           disabled={!datasetId || !modelId || submitting || running || blockedByEmptyClasses}
-          className="w-full border-2 border-ink bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
+          className="w-full border-2 border-ink bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
         >
           {submitting
             ? "Starting…"

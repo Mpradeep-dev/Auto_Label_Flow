@@ -93,7 +93,7 @@ export function Sidebar({
 
       <button
         onClick={onToggle}
-        className="flex h-12 shrink-0 items-center justify-center border-b-4 border-ink text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-paper"
+        className="flex h-12 shrink-0 items-center justify-center border-b-4 border-ink text-xs font-bold uppercase tracking-widest hover:bg-orange hover:text-paper"
         aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
       >
         {collapsed ? "»" : "« Collapse"}

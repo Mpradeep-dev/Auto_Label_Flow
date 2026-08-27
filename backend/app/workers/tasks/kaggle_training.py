@@ -42,9 +42,10 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.db.session import SessionLocal
 from app.models.ml_model import MLModel, ModelKind
-from app.models.training_job import TrainingJob, TrainingJobStatus, TrainingProviderType
+from app.models.training_job import TrainingJob, TrainingJobEpoch, TrainingJobStatus, TrainingProviderType
 from app.services.inference.registry import register_model
 from app.services.training.kaggle_provider import KaggleTrainingProvider
+from app.services.training.ultralytics_log_parser import parse_ultralytics_epochs
 from app.workers.celery_app import (
     KAGGLE_START_SOFT_TIME_LIMIT_S,
     KAGGLE_START_TIME_LIMIT_S,
@@ -103,7 +104,7 @@ def _finalize_completed_job(db: Session, provider: KaggleTrainingProvider, job: 
 
         result_model = register_model(
             db,
-            name=f"{base_model.name}-retrained",
+            name=job.result_model_name or f"{base_model.name}-retrained",
             weights_path=str(registered_path),
             kind=ModelKind.DETECTOR,
             # Same collision-avoidance reasoning as train_local_model's own
@@ -123,6 +124,48 @@ def _finalize_completed_job(db: Session, provider: KaggleTrainingProvider, job: 
         job.error = f"Failed to register the Kaggle training result: {exc}"[:2000]
         job.failed_at = datetime.now(timezone.utc)
         db.commit()
+
+
+def _sync_epoch_progress(db: Session, provider: KaggleTrainingProvider, job: TrainingJob) -> None:
+    """Best-effort live progress for a RUNNING Kaggle job: pull the kernel's
+    console log and regex out any epoch rows LOCAL training would otherwise
+    get from Ultralytics' `on_fit_epoch_end` callback directly (see
+    ultralytics_log_parser.py for why this is inherently best-effort, not
+    guaranteed). Never raises — a parse miss just means no new rows this
+    poll, not a failed job; the caller doesn't need its own try/except."""
+    try:
+        log_text = provider.get_logs(db, job)
+    except Exception:
+        return  # log not fetchable yet (e.g. kernel just started) — try again next poll
+
+    try:
+        epochs = parse_ultralytics_epochs(log_text)
+    except Exception:
+        return  # a log format this parser doesn't recognize — degrade to no epoch history, not a crash
+
+    new_epochs = [e for e in epochs if e["epoch"] > job.current_epoch]
+    if not new_epochs:
+        return
+
+    for e in new_epochs:
+        db.add(
+            TrainingJobEpoch(
+                training_job_id=job.id,
+                epoch=e["epoch"],
+                box_loss=e["box_loss"],
+                cls_loss=e["cls_loss"],
+                dfl_loss=e["dfl_loss"],
+                precision=e["precision"],
+                recall=e["recall"],
+                map50=e["map50"],
+                map50_95=e["map50_95"],
+                recorded_at=datetime.now(timezone.utc),
+            )
+        )
+    latest = new_epochs[-1]
+    job.current_epoch = latest["epoch"]
+    job.metrics = {k: v for k, v in latest.items() if k != "epoch" and v is not None}
+    db.commit()
 
 
 @celery_app.task(name="app.workers.tasks.kaggle_training.poll_kaggle_training_jobs")
@@ -160,6 +203,8 @@ def poll_kaggle_training_jobs() -> dict[str, int]:
             if status == TrainingJobStatus.COMPLETED.value and job.result_model_id is None:
                 _finalize_completed_job(db, provider, job)
                 counts["completed"] += 1
+            elif status == TrainingJobStatus.RUNNING.value:
+                _sync_epoch_progress(db, provider, job)
             elif status == TrainingJobStatus.FAILED.value and not job.error:
                 try:
                     job.error = provider.get_logs(db, job)[-2000:]

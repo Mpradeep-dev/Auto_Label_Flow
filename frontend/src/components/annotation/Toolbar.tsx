@@ -101,7 +101,7 @@ export function Toolbar(props: Props) {
       <button
         onClick={props.onApprove}
         disabled={props.approving}
-        className="flex h-full items-center gap-1.5 bg-ink px-4 text-xs font-bold uppercase tracking-widest text-paper transition-colors duration-150 hover:bg-accent disabled:cursor-not-allowed disabled:opacity-60"
+        className="flex h-full items-center gap-1.5 bg-ink px-4 text-xs font-bold uppercase tracking-widest text-paper transition-colors duration-150 hover:bg-orange disabled:cursor-not-allowed disabled:opacity-60"
       >
         {props.approving ? "Approving…" : "Approve"} <span className="text-[9px] font-normal text-paper/50">Space</span>
       </button>
