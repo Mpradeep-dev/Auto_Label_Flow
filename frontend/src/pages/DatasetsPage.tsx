@@ -30,13 +30,13 @@ function DeleteDatasetPanel({ dataset, onCancel }: { dataset: Dataset; onCancel:
         <button
           onClick={() => deleteMutation.mutate()}
           disabled={deleteMutation.isPending}
-          className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-ink hover:border-ink disabled:opacity-40"
+          className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:border-orange hover:bg-orange disabled:opacity-40"
         >
           {deleteMutation.isPending ? "Deleting…" : "Delete permanently"}
         </button>
         <button
           onClick={onCancel}
-          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-muted"
+          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
         >
           Cancel
         </button>
@@ -65,7 +65,7 @@ function DatasetCard({ dataset }: { dataset: Dataset }) {
   }
 
   return (
-    <div className="group relative border-b-2 border-r-2 border-ink p-8 transition-colors duration-150 hover:bg-ink hover:text-paper">
+    <div className="group relative border-b-2 border-r-2 border-ink p-8 transition-colors duration-150 hover:bg-orange hover:text-paper">
       <Link to={`/projects/${dataset.project_id}/datasets/${dataset.id}/images`} className="block pr-16">
         <p className="text-2xl font-bold uppercase tracking-tight">{dataset.name}</p>
         <p className="mt-2 tabular text-xs uppercase tracking-widest text-ink/50 group-hover:text-paper/60">
@@ -80,7 +80,7 @@ function DatasetCard({ dataset }: { dataset: Dataset }) {
       </Link>
       <button
         onClick={() => setConfirming(true)}
-        className="absolute right-4 top-4 border border-ink/30 px-2 py-1 text-[10px] font-bold uppercase tracking-widest opacity-0 hover:border-accent hover:text-accent group-hover:opacity-100 group-hover:border-paper/40 group-hover:text-paper group-hover:hover:border-accent group-hover:hover:text-accent"
+        className="absolute right-4 top-4 border border-ink/30 px-2 py-1 text-[10px] font-bold uppercase tracking-widest opacity-0 hover:border-ink hover:bg-paper hover:text-ink group-hover:opacity-100 group-hover:border-paper/40 group-hover:text-paper group-hover:hover:border-ink group-hover:hover:bg-paper group-hover:hover:text-ink"
       >
         Delete
       </button>
@@ -155,7 +155,7 @@ function FileImportSection({ projectId }: { projectId: string }) {
             pickFile(e.dataTransfer.files?.[0] ?? null);
           }}
           className={`flex w-full flex-col items-center justify-center gap-1 border-2 border-dashed px-4 py-8 text-center transition-colors duration-150 ${
-            dragActive ? "border-accent bg-muted" : "border-ink/40 hover:border-ink hover:bg-muted"
+            dragActive ? "border-accent bg-muted" : "border-ink/40 hover:border-orange hover:bg-orange/10"
           }`}
         >
           {file ? (
@@ -182,7 +182,7 @@ function FileImportSection({ projectId }: { projectId: string }) {
         <button
           onClick={() => importMutation.mutate()}
           disabled={!file || importMutation.isPending}
-          className="w-full border-2 border-ink bg-ink py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
+          className="w-full border-2 border-ink bg-ink py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
         >
           {importMutation.isPending ? "Importing…" : "Import"}
         </button>
@@ -240,7 +240,7 @@ export function DatasetsPage() {
         <button
           type="submit"
           disabled={!name.trim() || createMutation.isPending}
-          className="border-l-2 border-ink bg-ink px-6 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
+          className="border-l-2 border-ink bg-ink px-6 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
         >
           {createMutation.isPending ? "Creating…" : "Create"}
         </button>
@@ -272,13 +272,13 @@ export function DatasetsPage() {
           >
             <button
               onClick={() => nameInputRef.current?.focus()}
-              className="border-2 border-ink bg-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent"
+              className="border-2 border-ink bg-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange"
             >
               Create a dataset
             </button>
             <button
               onClick={() => roboflowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })}
-              className="border-2 border-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest hover:bg-muted"
+              className="border-2 border-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
             >
               Import from Roboflow
             </button>

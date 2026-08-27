@@ -40,7 +40,7 @@ export function ProjectGuard() {
         </p>
         <Link
           to="/projects"
-          className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-paper"
+          className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
         >
           Back to projects
         </Link>

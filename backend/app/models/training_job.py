@@ -53,6 +53,15 @@ class TrainingJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     result_model_id: Mapped[uuid.UUID | None] = mapped_column(
         PGUUID(as_uuid=True), ForeignKey("models.id", ondelete="SET NULL"), nullable=True
     )
+    # User-supplied name for the model this job produces. Every provider's
+    # finalize step (train_local_model, kaggle_training._finalize_completed_job,
+    # modal_training._finalize_completed_job) used to hardcode
+    # f"{base_model.name}-retrained" unconditionally — fine for one run, but
+    # indistinguishable once you've retrained the same base model more than
+    # once (the Models list shows N identical "detect_v1-retrained" rows,
+    # told apart only by an opaque version string). NULL falls back to that
+    # same default name, so this is purely additive.
+    result_model_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     provider: Mapped[TrainingProviderType] = mapped_column(
         Enum(TrainingProviderType, name="training_provider_type"), nullable=False

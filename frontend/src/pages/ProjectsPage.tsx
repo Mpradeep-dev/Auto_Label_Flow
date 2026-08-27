@@ -39,13 +39,13 @@ function RenameProjectPanel({ project, onCancel }: { project: Project; onCancel:
         <button
           onClick={() => renameMutation.mutate()}
           disabled={!name.trim() || renameMutation.isPending}
-          className="border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
+          className="border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
         >
           {renameMutation.isPending ? "Saving…" : "Save"}
         </button>
         <button
           onClick={onCancel}
-          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-muted"
+          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
         >
           Cancel
         </button>
@@ -86,13 +86,13 @@ function DeleteProjectPanel({ project, onCancel }: { project: Project; onCancel:
         <button
           onClick={() => deleteMutation.mutate()}
           disabled={!matches || deleteMutation.isPending}
-          className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-ink hover:border-ink disabled:opacity-40"
+          className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:border-orange hover:bg-orange disabled:opacity-40"
         >
           {deleteMutation.isPending ? "Deleting…" : "Delete permanently"}
         </button>
         <button
           onClick={onCancel}
-          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-muted"
+          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
         >
           Cancel
         </button>
@@ -119,13 +119,13 @@ function ProjectEditMenu({
       <div className="flex flex-col gap-2">
         <button
           onClick={onRename}
-          className="border-2 border-ink px-4 py-2 text-left text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-paper"
+          className="border-2 border-ink px-4 py-2 text-left text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
         >
           Rename / edit description
         </button>
         <button
           onClick={onDelete}
-          className="border-2 border-ink/30 px-4 py-2 text-left text-xs font-bold uppercase tracking-widest text-accent hover:border-accent"
+          className="border-2 border-ink/30 px-4 py-2 text-left text-xs font-bold uppercase tracking-widest text-accent hover:border-orange"
         >
           Delete project
         </button>
@@ -172,7 +172,7 @@ function ProjectCard({ project }: { project: Project }) {
   }
 
   return (
-    <div className="group relative border-b-2 border-r-2 border-ink transition-colors duration-150 hover:bg-ink hover:text-paper">
+    <div className="group relative border-b-2 border-r-2 border-ink transition-colors duration-150 hover:bg-orange hover:text-paper">
       <Link to={`/projects/${project.id}`} className="block p-8">
         <p className="text-2xl font-bold uppercase tracking-tight">{project.name}</p>
         <p className="mt-2 text-xs uppercase tracking-widest text-ink/50 group-hover:text-paper/60">
@@ -183,7 +183,7 @@ function ProjectCard({ project }: { project: Project }) {
       </Link>
       <button
         onClick={() => setMode("menu")}
-        className="absolute right-4 top-4 border border-ink/30 px-2 py-1 text-[10px] font-bold uppercase tracking-widest opacity-0 hover:border-accent hover:text-accent group-hover:opacity-100 group-hover:border-paper/40 group-hover:text-paper group-hover:hover:border-accent group-hover:hover:text-accent"
+        className="absolute right-4 top-4 border border-ink/30 px-2 py-1 text-[10px] font-bold uppercase tracking-widest opacity-0 hover:border-ink hover:bg-paper hover:text-ink group-hover:opacity-100 group-hover:border-paper/40 group-hover:text-paper group-hover:hover:border-ink group-hover:hover:bg-paper group-hover:hover:text-ink"
       >
         Edit
       </button>
@@ -230,7 +230,7 @@ export function ProjectsPage() {
         <button
           type="submit"
           disabled={!name.trim() || createMutation.isPending}
-          className="border-l-2 border-ink bg-ink px-6 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
+          className="border-l-2 border-ink bg-ink px-6 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
         >
           {createMutation.isPending ? "Creating…" : "Create"}
         </button>

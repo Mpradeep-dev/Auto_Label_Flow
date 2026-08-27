@@ -144,7 +144,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                   onClick={() => select(result)}
                   onMouseEnter={() => setActiveIndex(i)}
                   className={`flex w-full items-center justify-between border-b border-ink/10 px-4 py-2.5 text-left text-sm font-semibold ${
-                    i === activeIndex ? "bg-ink text-paper" : "hover:bg-muted"
+                    i === activeIndex ? "bg-ink text-paper" : "hover:bg-orange hover:text-paper"
                   }`}
                 >
                   <span className="truncate uppercase tracking-wide">{result.label}</span>

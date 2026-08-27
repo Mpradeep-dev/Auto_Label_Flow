@@ -175,6 +175,8 @@ export interface TrainingJob {
   dataset_version_id: string;
   base_model_id: string | null;
   result_model_id: string | null;
+  result_model_name: string | null;
+  kaggle_kernel_ref: string | null;
   provider: TrainingProviderName;
   status: TrainingJobStatus;
   epochs: number;

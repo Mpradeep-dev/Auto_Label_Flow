@@ -62,9 +62,26 @@ function JobDetail({ job }: { job: TrainingJob }) {
             Epoch {current.current_epoch} / {current.epochs}
           </p>
         </div>
-        <span className={`px-3 py-1 text-xs font-bold uppercase tracking-widest ${STATUS_STYLE[current.status]}`}>
-          {current.status}
-        </span>
+        <div className="flex items-center gap-2">
+          {/* This app's own epoch chart below is a best-effort parse of
+              Kaggle's console log (see ultralytics_log_parser.py) — the
+              kernel page itself is the real-time source of truth: build
+              logs, live cell output, and it keeps working even if that
+              parser ever falls behind or misses something. */}
+          {current.provider === "KAGGLE" && current.kaggle_kernel_ref && (
+            <a
+              href={`https://www.kaggle.com/code/${current.kaggle_kernel_ref}`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="border-2 border-ink px-3 py-1 text-xs font-bold uppercase tracking-widest transition-colors duration-150 hover:border-orange hover:bg-orange hover:text-paper"
+            >
+              Open in Kaggle ↗
+            </a>
+          )}
+          <span className={`px-3 py-1 text-xs font-bold uppercase tracking-widest ${STATUS_STYLE[current.status]}`}>
+            {current.status}
+          </span>
+        </div>
       </div>
 
       <div className="mb-4 h-2 w-full border border-ink">
@@ -85,7 +102,7 @@ function JobDetail({ job }: { job: TrainingJob }) {
           <button
             onClick={() => cancelMutation.mutate()}
             disabled={cancelMutation.isPending}
-            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-accent hover:text-paper hover:border-accent disabled:opacity-40"
+            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-orange hover:text-paper hover:border-orange disabled:opacity-40"
           >
             {cancelMutation.isPending ? "Cancelling…" : "Cancel"}
           </button>
@@ -103,7 +120,7 @@ function JobDetail({ job }: { job: TrainingJob }) {
       )}
       {current.status === "COMPLETED" && current.result_model_id && (
         <p className="text-xs text-ink/60">
-          New model registered — go to{" "}
+          New model{current.result_model_name ? ` "${current.result_model_name}"` : ""} registered — go to{" "}
           <a href="../models" className="underline">
             Models
           </a>{" "}
@@ -160,6 +177,7 @@ export function TrainingRunsPage() {
   const [datasetId, setDatasetId] = useState(() => searchParams.get("datasetId") ?? "");
   const [versionId, setVersionId] = useState(() => searchParams.get("versionId") ?? "");
   const [baseModelId, setBaseModelId] = useState("");
+  const [resultModelName, setResultModelName] = useState("");
   const [provider, setProvider] = useState<TrainingProviderName>("LOCAL");
   // Held as free-typed strings, not numbers: a controlled <input type="number">
   // that coerces on every keystroke (parseInt(e.target.value) || fallback)
@@ -237,6 +255,7 @@ export function TrainingRunsPage() {
       return api.createTrainingJob({
         dataset_version_id: versionId,
         base_model_id: baseModelId,
+        result_model_name: resultModelName.trim() || undefined,
         provider,
         epochs: Math.max(1, parseInt(epochsInput, 10) || 100),
         batch_size: Math.max(1, parseInt(batchSizeInput, 10) || 8),
@@ -305,7 +324,7 @@ export function TrainingRunsPage() {
               <li className={hasAnyVersion ? "text-ink" : "text-ink/40"}>
                 {hasAnyVersion ? "✓" : "○"} Dataset version created{" "}
                 {!hasAnyVersion && (
-                  <Link to={`/projects/${projectId}/export`} className="underline hover:text-accent">
+                  <Link to={`/projects/${projectId}/export`} className="underline hover:text-orange">
                     (create one on Export)
                   </Link>
                 )}
@@ -313,7 +332,7 @@ export function TrainingRunsPage() {
               <li className={detectorModels.length > 0 ? "text-ink" : "text-ink/40"}>
                 {detectorModels.length > 0 ? "✓" : "○"} Detector model registered{" "}
                 {detectorModels.length === 0 && (
-                  <Link to={`/projects/${projectId}/models`} className="underline hover:text-accent">
+                  <Link to={`/projects/${projectId}/models`} className="underline hover:text-orange">
                     (register one on Models)
                   </Link>
                 )}
@@ -393,7 +412,7 @@ export function TrainingRunsPage() {
             {datasetId && !versionsQuery.isLoading && versionsQuery.data?.length === 0 && (
               <p className="mt-1 text-[10px] text-ink/50">
                 No versions yet for this dataset —{" "}
-                <Link to={`/projects/${projectId}/export`} className="underline hover:text-accent">
+                <Link to={`/projects/${projectId}/export`} className="underline hover:text-orange">
                   create one on the Export page
                 </Link>{" "}
                 first (approve some images in Review, then "Create version").
@@ -418,6 +437,28 @@ export function TrainingRunsPage() {
               </option>
             ))}
           </select>
+        </div>
+
+        <div>
+          <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/50">
+            New model name (optional)
+          </label>
+          <input
+            type="text"
+            value={resultModelName}
+            onChange={(e) => setResultModelName(e.target.value)}
+            placeholder={
+              baseModelId
+                ? `Default: ${detectorModels.find((m) => m.id === baseModelId)?.name ?? ""}-retrained`
+                : "Default: {base model}-retrained"
+            }
+            maxLength={200}
+            className="w-full border-2 border-ink bg-paper px-3 py-2 text-sm font-semibold outline-none focus:border-accent"
+          />
+          <p className="mt-1 text-[10px] text-ink/50">
+            Name the model this run will produce — leave blank to keep the default, which is identical across every
+            run off the same base model and hard to tell apart on the Models page.
+          </p>
         </div>
 
         <div className="grid grid-cols-3 gap-4">
@@ -549,7 +590,7 @@ export function TrainingRunsPage() {
         <button
           onClick={() => createMutation.mutate()}
           disabled={!versionId || !baseModelId || !!extraArgsError || createMutation.isPending}
-          className="w-full border-2 border-ink bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
+          className="w-full border-2 border-ink bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
         >
           {createMutation.isPending ? "Starting…" : `Start ${provider === "LOCAL" ? "local" : provider === "KAGGLE" ? "Kaggle" : "Modal"} training`}
         </button>
@@ -573,7 +614,7 @@ export function TrainingRunsPage() {
               <button
                 key={j.id}
                 onClick={() => setSelectedJobId(j.id)}
-                className="flex w-full items-center justify-between border-b-2 border-ink py-3 text-left hover:bg-muted"
+                className="flex w-full items-center justify-between border-b-2 border-ink py-3 text-left hover:bg-orange/10"
               >
                 <span className="tabular text-xs">
                   Epoch {j.current_epoch}/{j.epochs} · {new Date(j.created_at).toLocaleString()}

@@ -65,7 +65,7 @@ function RegisterModelForm() {
             key={s}
             type="button"
             onClick={() => setSource(s)}
-            className={`flex-1 py-2 ${source === s ? "bg-ink text-paper" : "bg-paper hover:bg-muted"}`}
+            className={`flex-1 py-2 ${source === s ? "bg-ink text-paper" : "bg-paper hover:bg-orange hover:text-paper"}`}
           >
             {s === "upload" ? "Upload from this computer" : "Download from link"}
           </button>
@@ -125,7 +125,7 @@ function RegisterModelForm() {
               pickFile(e.dataTransfer.files?.[0] ?? null);
             }}
             className={`flex w-full flex-col items-center justify-center gap-1 border-2 border-dashed px-4 py-8 text-center transition-colors duration-150 ${
-              dragActive ? "border-accent bg-muted" : "border-ink/40 hover:border-ink hover:bg-muted"
+              dragActive ? "border-accent bg-muted" : "border-ink/40 hover:border-orange hover:bg-orange/10"
             }`}
           >
             {file ? (
@@ -155,7 +155,7 @@ function RegisterModelForm() {
       <button
         type="submit"
         disabled={!canSubmit}
-        className="w-full bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
+        className="w-full bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
       >
         {registerMutation.isPending
           ? source === "url"
@@ -197,13 +197,13 @@ function RenameModelPanel({ model, onCancel }: { model: MLModel; onCancel: () =>
         <button
           onClick={() => renameMutation.mutate()}
           disabled={!name.trim() || renameMutation.isPending}
-          className="border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
+          className="border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
         >
           {renameMutation.isPending ? "Saving…" : "Save"}
         </button>
         <button
           onClick={onCancel}
-          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-muted"
+          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
         >
           Cancel
         </button>
@@ -238,13 +238,13 @@ function DeleteModelPanel({ model, onCancel }: { model: MLModel; onCancel: () =>
         <button
           onClick={() => deleteMutation.mutate()}
           disabled={deleteMutation.isPending}
-          className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-ink hover:border-ink disabled:opacity-40"
+          className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:border-orange hover:bg-orange disabled:opacity-40"
         >
           {deleteMutation.isPending ? "Deleting…" : "Delete permanently"}
         </button>
         <button
           onClick={onCancel}
-          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-muted"
+          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
         >
           Cancel
         </button>
@@ -319,13 +319,13 @@ function ModelCard({ model }: { model: MLModel }) {
         <div className="absolute right-4 top-4 flex gap-1 border border-ink/30 bg-paper p-1">
           <button
             onClick={() => setMode("rename")}
-            className="px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:bg-ink hover:text-paper"
+            className="px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:bg-orange hover:text-paper"
           >
             Rename
           </button>
           <button
             onClick={() => setMode("delete")}
-            className="px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-accent hover:bg-accent hover:text-paper"
+            className="px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-accent hover:bg-orange hover:text-paper"
           >
             Delete
           </button>
@@ -339,7 +339,7 @@ function ModelCard({ model }: { model: MLModel }) {
       ) : (
         <button
           onClick={() => setMode("menu")}
-          className="absolute right-4 top-4 border border-ink/30 px-2 py-1 text-[10px] font-bold uppercase tracking-widest opacity-0 hover:border-accent hover:text-accent group-hover:opacity-100"
+          className="absolute right-4 top-4 border border-ink/30 px-2 py-1 text-[10px] font-bold uppercase tracking-widest opacity-0 hover:border-orange hover:text-orange group-hover:opacity-100"
         >
           Edit
         </button>
@@ -381,7 +381,7 @@ export function ModelsPage() {
           >
             <button
               onClick={() => registerFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })}
-              className="border-2 border-ink bg-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent"
+              className="border-2 border-ink bg-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange"
             >
               Register a model
             </button>
@@ -389,7 +389,7 @@ export function ModelsPage() {
               href="https://docs.ultralytics.com/models/"
               target="_blank"
               rel="noreferrer"
-              className="border-2 border-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest hover:bg-muted"
+              className="border-2 border-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
             >
               YOLO model reference →
             </a>

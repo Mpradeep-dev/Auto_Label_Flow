@@ -12,6 +12,9 @@ class TrainingJobCreate(BaseModel):
     dataset_version_id: uuid.UUID
     base_model_id: uuid.UUID
     provider: TrainingProviderType = TrainingProviderType.LOCAL
+    # What to call the model this run produces once it completes. Omit (or
+    # send blank) to keep the old default: "{base model name}-retrained".
+    result_model_name: str | None = Field(default=None, max_length=200)
     epochs: int = Field(default=100, ge=1, le=2000)
     batch_size: int = Field(default=8, ge=1, le=256)
     image_size: int = Field(default=640, ge=32, le=2048)
@@ -48,6 +51,14 @@ class TrainingJobRead(BaseModel):
     dataset_version_id: uuid.UUID
     base_model_id: uuid.UUID | None
     result_model_id: uuid.UUID | None
+    result_model_name: str | None
+    # "{kaggle_username}/{kernel_slug}" once the kernel's been pushed (see
+    # KaggleTrainingProvider._push_kernel) — None for LOCAL/MODAL jobs and
+    # for a KAGGLE job that hasn't reached that point yet. The frontend
+    # turns this into a kaggle.com/code/{ref} link so a KAGGLE job's actual
+    # console output (build logs, real-time cell output) is one click away,
+    # not just this app's own best-effort parsed summary of it.
+    kaggle_kernel_ref: str | None
     provider: TrainingProviderType
     status: TrainingJobStatus
     epochs: int

@@ -54,7 +54,7 @@ function RoboflowExportControls({ versionId }: { versionId: string }) {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-paper"
+        className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
       >
         Export to Roboflow
       </button>
@@ -77,7 +77,7 @@ function RoboflowExportControls({ versionId }: { versionId: string }) {
           <button
             onClick={() => exportMutation.mutate()}
             disabled={!workspace || !project || exportMutation.isPending}
-            className="w-full border-2 border-ink bg-ink py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
+            className="w-full border-2 border-ink bg-ink py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
           >
             {exportMutation.isPending ? "Starting…" : "Push"}
           </button>
@@ -108,7 +108,7 @@ function FormatExportButton({
     return (
       <a
         href={downloadUrl}
-        className="inline-block border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent"
+        className="inline-block border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange"
       >
         {downloadLabel}
       </a>
@@ -118,7 +118,7 @@ function FormatExportButton({
     <button
       onClick={onExport}
       disabled={pending}
-      className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-paper disabled:opacity-40"
+      className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper disabled:opacity-40"
     >
       {pending ? "Exporting…" : label}
     </button>
@@ -169,7 +169,7 @@ function VersionRow({
           <button
             onClick={() => onExport(version.id)}
             disabled={yoloPending}
-            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-paper disabled:opacity-40"
+            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper disabled:opacity-40"
           >
             {yoloPending ? "Exporting…" : "Export YOLO"}
           </button>
@@ -177,7 +177,7 @@ function VersionRow({
         {version.status === "EXPORTED" && version.download_url && (
           <a
             href={version.download_url}
-            className="inline-block border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent"
+            className="inline-block border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange"
           >
             Download .zip
           </a>
@@ -185,7 +185,7 @@ function VersionRow({
         {version.status === "EXPORTED" && (
           <Link
             to={`/projects/${projectId}/training?datasetId=${datasetId}&versionId=${version.id}`}
-            className="inline-block border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-ink hover:border-ink"
+            className="inline-block border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:border-orange"
           >
             Train with this version →
           </Link>
@@ -320,7 +320,7 @@ export function ExportPage() {
             <button
               onClick={() => createMutation.mutate()}
               disabled={createMutation.isPending}
-              className="ml-auto border-2 border-ink bg-ink px-6 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
+              className="ml-auto border-2 border-ink bg-ink px-6 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
             >
               {createMutation.isPending ? "Creating…" : "Create version"}
             </button>
