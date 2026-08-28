@@ -71,7 +71,7 @@ def _finalize_completed_job(db: Session, provider: ModalTrainingProvider, job: T
 
         result_model = register_model(
             db,
-            name=f"{base_model.name}-retrained",
+            name=job.result_model_name or f"{base_model.name}-retrained",
             weights_path=str(registered_path),
             kind=ModelKind.DETECTOR,
             version=f"trained-from-{base_model.name}-{str(job.id)[:8]}",

@@ -32,6 +32,35 @@ class KaggleNotConfiguredError(RuntimeError):
     pass
 
 
+def _decode_kaggle_log(raw_text: str) -> str:
+    """Kaggle's `kernels_output` `.log` file is a JSON array of
+    `{"stream_name", "time", "data"}` records — confirmed live against a
+    real completed kernel's actual output, not documented anywhere obvious
+    up front. Every prior version of `get_logs` returned that raw JSON
+    directly, which meant: the FAILED-job error snippet shown to users was
+    an unreadable JSON blob instead of the real error text buried inside
+    one of its `data` fields, and — the thing that sent us looking in the
+    first place — `ultralytics_log_parser.py`'s regexes never matched
+    anything, because there's no real Ultralytics progress line at the top
+    level of the raw file; it's trapped inside escaped `"data"` string
+    values. This concatenates every record's `data` field, in original
+    order, into the plain stdout/stderr text those regexes (and a human
+    reading `job.error`) actually expect.
+
+    Falls back to the raw text unchanged if it isn't that JSON-array shape
+    — an older/plain log format, or a future Kaggle API version that
+    changes this again — so a decode miss degrades to "unparsed", never a
+    crash.
+    """
+    try:
+        records = json.loads(raw_text)
+    except (json.JSONDecodeError, TypeError):
+        return raw_text
+    if not isinstance(records, list):
+        return raw_text
+    return "".join(r.get("data", "") for r in records if isinstance(r, dict))
+
+
 _KERNEL_TEMPLATE = """\
 import subprocess
 
@@ -353,7 +382,9 @@ class KaggleTrainingProvider(TrainingProvider):
         with tempfile.TemporaryDirectory() as tmp:
             api.kernels_output(job.kaggle_kernel_ref, path=tmp, quiet=True)
             log_path = Path(tmp) / f"{job.kaggle_kernel_ref.split('/')[-1]}.log"
-            return log_path.read_text(encoding="utf-8") if log_path.exists() else "log not available yet"
+            if not log_path.exists():
+                return "log not available yet"
+            return _decode_kaggle_log(log_path.read_text(encoding="utf-8"))
 
     def download_artifacts(self, db: Session, job: TrainingJob) -> Path | None:
         if self.get_status(db, job) != TrainingJobStatus.COMPLETED.value:

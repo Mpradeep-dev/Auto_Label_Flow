@@ -121,12 +121,17 @@ celery_app.conf.update(
         # Kaggle how a job is doing (see kaggle_training.py's own
         # docstring for why that mattered: without it, a Kaggle job just
         # sat frozen at RUNNING/epoch 0 until reconcile-stale-jobs killed
-        # it hours later). 120s: frequent enough to feel live in the UI,
-        # gentle enough not to hammer Kaggle's API for jobs that legitimately
-        # run for a long time.
+        # it hours later). Also now the only thing that gives a RUNNING
+        # Kaggle job live epoch/loss/mAP progress (kaggle_training.py's
+        # _sync_epoch_progress, added alongside this — parses Ultralytics'
+        # console output out of the kernel log each poll), so this interval
+        # directly sets how "live" that feels, not just the terminal
+        # QUEUED/RUNNING/COMPLETED transition. 30s: a real step down from
+        # the original 120s specifically for that; still bounded so a job
+        # that legitimately runs for hours doesn't hammer Kaggle's API.
         "poll-kaggle-training-jobs": {
             "task": "app.workers.tasks.kaggle_training.poll_kaggle_training_jobs",
-            "schedule": 120.0,
+            "schedule": 30.0,
         },
         # Modal: poll for training completion by checking the Volume for
         # best.pt. Same cadence as Kaggle polling.

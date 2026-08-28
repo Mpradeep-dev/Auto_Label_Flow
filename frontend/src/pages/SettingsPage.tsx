@@ -91,7 +91,7 @@ function ProjectSection({ projectId }: { projectId: string }) {
                 </button>
                 <button
                   onClick={() => setEditing(false)}
-                  className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-muted"
+                  className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
                 >
                   Cancel
                 </button>
@@ -103,7 +103,7 @@ function ProjectSection({ projectId }: { projectId: string }) {
                   setDescription(project.description ?? "");
                   setEditing(true);
                 }}
-                className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-paper"
+                className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
               >
                 Edit
               </button>
@@ -171,13 +171,13 @@ export function SettingsPage() {
       </h1>
       <p className="mb-12 max-w-2xl text-sm text-ink/60">
         Looking for Kaggle or Roboflow account connections?{" "}
-        <Link to="/settings" className="font-semibold underline decoration-1 underline-offset-2 hover:text-accent">
+        <Link to="/settings" className="font-semibold underline decoration-1 underline-offset-2 hover:text-orange">
           Those are account-wide, under Settings →
         </Link>{" "}
         Importing a Roboflow project into this project now lives on the{" "}
         <Link
           to={`/projects/${projectId}/datasets`}
-          className="font-semibold underline decoration-1 underline-offset-2 hover:text-accent"
+          className="font-semibold underline decoration-1 underline-offset-2 hover:text-orange"
         >
           Datasets page →
         </Link>

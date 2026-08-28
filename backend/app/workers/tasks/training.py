@@ -186,7 +186,7 @@ def train_local_model(self, training_job_id: str) -> None:
 
         result_model = register_model(
             db,
-            name=f"{base_model.name}-retrained",
+            name=job.result_model_name or f"{base_model.name}-retrained",
             weights_path=str(registered_path),
             kind=ModelKind.DETECTOR,
             # Includes the job id, not just the base model's name — two

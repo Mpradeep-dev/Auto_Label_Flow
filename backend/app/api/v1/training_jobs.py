@@ -56,6 +56,7 @@ def create_training_job(payload: TrainingJobCreate, db: Session = Depends(get_db
         project_id=dataset.project_id,
         dataset_version_id=payload.dataset_version_id,
         base_model_id=payload.base_model_id,
+        result_model_name=payload.result_model_name or None,
         provider=payload.provider,
         status=TrainingJobStatus.QUEUED,
         epochs=payload.epochs,

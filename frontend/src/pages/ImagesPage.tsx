@@ -70,7 +70,7 @@ function ImageCard({
                 deleteMutation.mutate();
               }}
               disabled={deleteMutation.isPending}
-              className="border border-accent bg-accent px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-paper hover:bg-paper hover:text-accent disabled:opacity-40"
+              className="border border-accent bg-accent px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-paper hover:bg-paper hover:text-orange disabled:opacity-40"
             >
               {deleteMutation.isPending ? "…" : "Delete"}
             </button>
@@ -94,7 +94,7 @@ function ImageCard({
             e.preventDefault();
             setConfirming(true);
           }}
-          className="absolute right-1 top-1 border border-paper/60 bg-ink/70 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-widest text-paper opacity-0 hover:border-accent hover:text-accent group-hover:opacity-100"
+          className="absolute right-1 top-1 border border-paper/60 bg-ink/70 px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-widest text-paper opacity-0 hover:border-orange hover:text-orange group-hover:opacity-100"
         >
           ✕
         </button>
@@ -263,7 +263,7 @@ export function ImagesPage() {
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={!datasetId}
-            className="border-2 border-ink bg-ink px-6 py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
+            className="border-2 border-ink bg-ink px-6 py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
           >
             Upload images
           </button>
@@ -313,7 +313,7 @@ export function ImagesPage() {
                 key={value}
                 onClick={() => setTab(value)}
                 className={`flex-1 border-r-2 border-ink px-4 py-3 text-xs font-bold uppercase tracking-widest last:border-r-0 ${
-                  tab === value ? "bg-ink text-paper" : "hover:bg-muted"
+                  tab === value ? "bg-ink text-paper" : "hover:bg-orange hover:text-paper"
                 }`}
               >
                 {label} <span className="tabular">{count ?? "…"}</span>
@@ -354,7 +354,7 @@ export function ImagesPage() {
                 >
                   <button
                     onClick={() => fileInputRef.current?.click()}
-                    className="border-2 border-ink bg-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent"
+                    className="border-2 border-ink bg-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange"
                   >
                     Upload images
                   </button>
@@ -368,7 +368,7 @@ export function ImagesPage() {
               <button
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={page === 0}
-                className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-muted disabled:opacity-30"
+                className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper disabled:opacity-30"
               >
                 ← Prev
               </button>
@@ -378,7 +378,7 @@ export function ImagesPage() {
               <button
                 onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
                 disabled={page >= totalPages - 1}
-                className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-muted disabled:opacity-30"
+                className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper disabled:opacity-30"
               >
                 Next →
               </button>

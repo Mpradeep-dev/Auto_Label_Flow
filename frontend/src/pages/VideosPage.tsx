@@ -69,7 +69,7 @@ function VideoRow({
         {current.status === "UPLOADED" && !stillWaiting && (
           <button
             onClick={() => onExtract(current.id)}
-            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-paper"
+            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
           >
             Extract frames
           </button>
@@ -79,14 +79,14 @@ function VideoRow({
             <button
               onClick={() => onDelete(current.id)}
               disabled={deleting}
-              className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-ink hover:border-ink disabled:opacity-40"
+              className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:border-orange hover:bg-orange disabled:opacity-40"
             >
               {deleting ? "Removing…" : "Confirm"}
             </button>
             <button
               onClick={() => setConfirmingDelete(false)}
               disabled={deleting}
-              className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-muted"
+              className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
             >
               Cancel
             </button>
@@ -94,7 +94,7 @@ function VideoRow({
         ) : (
           <button
             onClick={() => setConfirmingDelete(true)}
-            className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest text-ink/60 hover:border-accent hover:text-accent"
+            className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest text-ink/60 hover:border-orange hover:text-orange"
           >
             Remove
           </button>
@@ -303,7 +303,7 @@ export function VideosPage() {
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading || !datasetId}
-            className="border-2 border-ink bg-ink px-6 py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-accent disabled:opacity-40"
+            className="border-2 border-ink bg-ink px-6 py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
           >
             {uploading ? "Uploading…" : "Upload video"}
           </button>
@@ -322,14 +322,14 @@ export function VideosPage() {
           <button
             onClick={() => folderInputRef.current?.click()}
             disabled={!!folderProgress || !datasetId}
-            className="border-2 border-ink px-6 py-3 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-paper disabled:opacity-40"
+            className="border-2 border-ink px-6 py-3 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper disabled:opacity-40"
           >
             {folderProgress ? `Uploading ${folderProgress.done}/${folderProgress.total}…` : "Upload folder"}
           </button>
           <button
             onClick={() => extractAllMutation.mutate()}
             disabled={extractAllMutation.isPending || !uploadedCount}
-            className="border-2 border-ink px-6 py-3 text-xs font-bold uppercase tracking-widest hover:bg-ink hover:text-paper disabled:opacity-40"
+            className="border-2 border-ink px-6 py-3 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper disabled:opacity-40"
           >
             {extractAllMutation.isPending ? "Extracting…" : `Extract all${uploadedCount ? ` (${uploadedCount})` : ""}`}
           </button>

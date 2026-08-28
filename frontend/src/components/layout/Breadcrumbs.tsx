@@ -78,7 +78,7 @@ export function Breadcrumbs() {
           <span key={i} className="flex shrink-0 items-center gap-1.5">
             {i > 0 && <span className="text-ink/20">/</span>}
             {crumb.to && !isLast ? (
-              <Link to={crumb.to} className="hover:text-accent hover:underline">
+              <Link to={crumb.to} className="hover:text-orange hover:underline">
                 {crumb.label}
               </Link>
             ) : (
