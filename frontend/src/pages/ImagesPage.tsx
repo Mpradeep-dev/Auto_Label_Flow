@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, ApiError } from "@/services/api";
+import { mapWithConcurrency } from "@/lib/concurrency";
 import { SectionLabel } from "@/components/layout/SectionLabel";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
@@ -16,6 +17,14 @@ const STATUS_LABEL: Record<string, string> = {
 type StatusTab = "ALL" | ImageReviewStatus;
 
 const PAGE_SIZE = 60;
+
+// Each upload is its own POST. Firing all of them at once (a bare
+// `Promise.all` over the file list) exhausts the browser's connection pool —
+// past a couple hundred in-flight `fetch`es Chrome starts rejecting them with
+// ERR_INSUFFICIENT_RESOURCES, and the single-worker dev API starves — so a
+// 500-file batch would land only ~70 images with the rest silently failed.
+// A small fixed pool keeps uploads parallel without either failure mode.
+const UPLOAD_CONCURRENCY = 6;
 
 function ImageCard({
   image,
@@ -175,22 +184,27 @@ export function ImagesPage() {
     const list = Array.from(files);
     setUploading(list.length);
     setFailedUploads([]);
-    // Uploaded concurrently (was a sequential `await` loop — N files meant
-    // N round trips back to back) and each failure is now collected
-    // instead of only `console.error`'d: a partial failure used to leave
-    // the page showing the files that succeeded with zero indication
-    // anything was missing (audit finding FE-04).
+    // Uploaded through a bounded pool (was a bare `Promise.all` over the whole
+    // list — N files meant N simultaneous POSTs, which past a few hundred
+    // exhausts the browser's request pool and starves the API, so a large
+    // batch only partly landed). Each failure is collected rather than only
+    // `console.error`'d: a partial failure used to leave the page showing the
+    // files that succeeded with zero indication anything was missing (audit
+    // finding FE-04).
     const failures: { name: string; message: string }[] = [];
-    await Promise.all(
-      list.map(async (file) => {
+    await mapWithConcurrency(
+      list,
+      UPLOAD_CONCURRENCY,
+      async (file) => {
         try {
           await uploadMutation.mutateAsync(file);
-        } catch (err) {
-          failures.push({ name: file.name, message: err instanceof ApiError ? err.message : "Upload failed" });
         } finally {
           setUploading((n) => n - 1);
         }
-      }),
+      },
+      (file, err) => {
+        failures.push({ name: file.name, message: err instanceof ApiError ? err.message : "Upload failed" });
+      },
     );
     setFailedUploads(failures);
     setPage(0);
