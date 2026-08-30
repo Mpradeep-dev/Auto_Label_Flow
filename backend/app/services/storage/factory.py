@@ -15,6 +15,11 @@ def get_storage() -> ObjectStorage:
 
         return MinioStorage()
 
+    if settings.STORAGE_BACKEND == "azure":
+        from app.services.storage.azure_storage import AzureBlobStorage
+
+        return AzureBlobStorage()
+
     from app.services.storage.local import LocalFileStorage
 
     return LocalFileStorage()

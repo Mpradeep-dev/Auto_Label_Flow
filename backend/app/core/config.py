@@ -85,7 +85,7 @@ class Settings(BaseSettings):
         return self.CELERY_RESULT_BACKEND or self.REDIS_URL
 
     # --- Storage ---
-    STORAGE_BACKEND: Literal["local", "minio"] = "local"
+    STORAGE_BACKEND: Literal["local", "minio", "azure"] = "local"
     LOCAL_STORAGE_DIR: Path = LOCAL_STORAGE_DIR
 
     MINIO_ENDPOINT: str = "localhost:9000"
@@ -113,6 +113,10 @@ class Settings(BaseSettings):
     @property
     def minio_public_endpoint(self) -> str:
         return self.MINIO_PUBLIC_ENDPOINT or self.MINIO_ENDPOINT
+
+    # --- Azure Blob (optional; only read when STORAGE_BACKEND=azure) ---
+    AZURE_STORAGE_CONNECTION_STRING: str | None = None
+    AZURE_STORAGE_CONTAINER: str = "annotate"
 
     # --- Uploads ---
     MAX_UPLOAD_SIZE_MB: int = 200
@@ -186,6 +190,8 @@ if settings.MAX_UPLOAD_SIZE_MB <= 0:
     raise ValueError("MAX_UPLOAD_SIZE_MB must be positive")
 if not (0.0 <= settings.DEFAULT_CONFIDENCE_FLOOR <= 1.0):
     raise ValueError("DEFAULT_CONFIDENCE_FLOOR must be in [0, 1]")
+if settings.STORAGE_BACKEND == "azure" and not settings.AZURE_STORAGE_CONNECTION_STRING:
+    raise ValueError("AZURE_STORAGE_CONNECTION_STRING is required when STORAGE_BACKEND=azure")
 
 for _dir in (settings.ARTIFACTS_DIR, settings.MODELS_DIR / "pt", settings.LOCAL_STORAGE_DIR):
     _dir.mkdir(parents=True, exist_ok=True)
