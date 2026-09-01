@@ -1,0 +1,41 @@
+appId: co.uk.globaltechprofessionals.autolabelflow
+productName: AutoLabelFlow
+copyright: Copyright (c) 2026 Mpradeep-dev. All Rights Reserved.
+
+directories:
+  output: dist
+  buildResources: build
+
+# Only the shell's own files are packed into app.asar; everything heavy
+# (the Python runtime, the built SPA, ffmpeg) rides along as extraResources
+# and is referenced by path from main.js.
+files:
+  - main.js
+  - preload.js
+  - package.json
+
+extraResources:
+  - from: build/python
+    to: python
+  - from: build/frontend
+    to: frontend
+  - from: build/bin
+    to: bin
+
+win:
+  target:
+    - nsis
+  artifactName: ${productName}-Setup-${version}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+
+# Manual "Check for updates" button -> electron-updater -> public GitHub Releases.
+publish:
+  provider: github
+  owner: Mpradeep-dev
+  repo: Auto_Label_Flow
+  releaseType: release

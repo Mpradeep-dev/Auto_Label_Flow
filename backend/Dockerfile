@@ -26,11 +26,14 @@ ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu130
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --index-url ${TORCH_INDEX_URL} torch torchvision
 
-COPY requirements.txt .
+COPY requirements.txt requirements-server.txt ./
 RUN --mount=type=cache,target=/root/.cache/pip \
-    pip install -r requirements.txt
+    pip install -r requirements-server.txt
 
 COPY . .
+
+# This image runs the server profile: Celery + Redis + Postgres.
+ENV ALF_TASK_QUEUE=celery
 
 EXPOSE 8000
 

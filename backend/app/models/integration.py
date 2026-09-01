@@ -17,10 +17,11 @@ from __future__ import annotations
 from datetime import datetime
 from enum import Enum as PyEnum
 
-from sqlalchemy import DateTime, JSON, String, Text
+from sqlalchemy import JSON, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.types import TZDateTime
 
 
 class IntegrationProvider(str, PyEnum):
@@ -34,5 +35,5 @@ class Integration(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     provider: Mapped[str] = mapped_column(String(20), nullable=False, unique=True, index=True)
     config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
-    verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    verified_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)

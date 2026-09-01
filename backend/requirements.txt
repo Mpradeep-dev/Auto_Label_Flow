@@ -1,63 +1,40 @@
+# Base runtime — shared by the desktop app and the server.
+#
+#   Desktop bundle : pip install -r requirements-desktop.txt   (this + CPU torch)
+#   Server / Docker: pip install -r requirements-server.txt     (this + Celery/Redis/Postgres/cloud SDKs)
+#   Dev / CI       : pip install -r requirements-dev.txt        (server + pytest)
+#
+# torch / torchvision are intentionally NOT listed in any of these except
+# requirements-desktop.txt (pinned CPU wheels). On the server, install them
+# first from the CUDA index — see Dockerfile — because a plain
+# `pip install torch` silently resolves to a CPU-only wheel.
+
 # Core web framework
 fastapi==0.118.0
 uvicorn[standard]==0.37.0
 pydantic==2.11.7
 pydantic-settings==2.6.1
 
-# Database
+# Database (SQLite via the stdlib on desktop; Postgres driver is server-only)
 sqlalchemy==2.0.36
 alembic==1.14.0
-psycopg[binary]==3.2.3
 
-# Background jobs
-celery==5.4.0
-redis==5.2.1
+# Background jobs — in-process runner (desktop). Celery/Redis are server-only.
+apscheduler>=3.10,<4
 
 # CV / ML
-# torch / torchvision are intentionally NOT listed here — see Dockerfile.
-# Plain `pip install torch` on Windows resolves to a CPU-only wheel
-# (confirmed the hard way: it silently installed torch 2.13.0+cpu and
-# inference/training fell back to CPU without erroring). Install them
-# FIRST, separately, from the CUDA index before this file:
-#     pip install --index-url https://download.pytorch.org/whl/cu130 torch torchvision
-# which yields torch 2.13.0+cu130 / torchvision 0.28.0+cu130, confirmed
-# working against the RTX 5060 (cuda_available=True, real device name).
-# Listing them here too would let `pip install -r requirements.txt` alone
-# silently re-resolve to the CPU wheel and overwrite that install.
 ultralytics==8.4.102
 opencv-python-headless==5.0.0.93
-# Pinned below 2.4: roboflow==1.4.1 (below) requires numpy<2.4, which
-# conflicts with a plain numpy==2.4.x pin (confirmed via `pip install -r
-# requirements.txt` failing dependency resolution outright — unlike
-# installing roboflow alone into an existing venv, which silently
-# downgrades numpy without complaint). 2.3.5 still satisfies opencv's
-# numpy>=2 and ultralytics' numpy>=1.23.0.
+# Pinned below 2.4: roboflow==1.4.1 requires numpy<2.4. 2.3.5 still satisfies
+# opencv's numpy>=2 and ultralytics' numpy>=1.23.0.
 numpy==2.3.5
 
-# Storage
+# Storage (local filesystem backend needs nothing extra; MinIO client is
+# small + pure-Python and the factory imports it lazily on the server path)
 minio==7.2.12
-boto3==1.35.71
-azure-storage-blob==12.24.0
 
 # Utilities
 python-multipart==0.0.17
 python-dotenv==1.0.1
 Pillow==11.0.0
 PyYAML==6.0.3
-
-# Kaggle (optional at runtime; import is guarded)
-kaggle==1.6.17
-
-# Modal (optional at runtime; import is guarded — see
-# services/integrations/modal_connect.py)
-modal>=0.64.0
-
-# Roboflow (optional at runtime; import is guarded — see
-# services/integrations/roboflow_connect.py)
-roboflow==1.4.1
-
-# Dev / test
-pytest==8.3.3
-pytest-asyncio==0.24.0
-pytest-cov==6.0.0
-httpx==0.28.0

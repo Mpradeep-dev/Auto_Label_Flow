@@ -1,0 +1,23 @@
+{
+  "name": "autolabelflow-desktop",
+  "productName": "AutoLabelFlow",
+  "version": "0.2.0",
+  "private": true,
+  "description": "AutoLabelFlow — standalone desktop build (Electron shell over the bundled FastAPI backend)",
+  "author": "Mpradeep-dev",
+  "license": "SEE LICENSE IN ../LICENSE",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "node scripts/build.mjs",
+    "dist": "node scripts/build.mjs && electron-builder --win nsis --publish never",
+    "release": "node scripts/build.mjs && electron-builder --win nsis --publish always"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
+  }
+}

@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  backend-sqlite:
+    # Desktop profile: bundled SQLite + in-process job runner. No services.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: pytest (SQLite, ALF_TASK_QUEUE=local)
+        env:
+          ALF_TASK_QUEUE: local
+        run: pytest -q
+
+  backend-postgres:
+    # Server profile: PostgreSQL + Celery (eager in tests, so no Redis).
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: annotate
+          POSTGRES_PASSWORD: annotate
+          POSTGRES_DB: annotate_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U annotate" --health-interval 5s
+          --health-timeout 5s --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: pytest (Postgres, ALF_TASK_QUEUE=celery)
+        env:
+          DATABASE_URL: postgresql+psycopg://annotate:annotate@localhost:5432/annotate_test
+          ALF_TASK_QUEUE: celery
+        run: pytest -q
+
+  frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npx tsc -b
+      - run: npx vitest run

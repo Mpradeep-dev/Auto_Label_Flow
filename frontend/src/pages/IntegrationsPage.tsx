@@ -1,4 +1,6 @@
 import { IntegrationsSection } from "@/components/settings/IntegrationsPanel";
+import { DesktopPanel } from "@/components/settings/DesktopPanel";
+import { isDesktop } from "@/services/desktop";
 
 // Top-level route (/settings) — deliberately NOT nested under
 // /projects/:projectId. Kaggle/Roboflow are account-wide connections, so
@@ -16,7 +18,8 @@ export function IntegrationsPage() {
         Account-wide connections, shared across every project. Per-project settings — name, class taxonomy, quality
         rule packs — live inside each project's own Settings page instead.
       </p>
-      <IntegrationsSection sectionIndex={1} />
+      {isDesktop() && <DesktopPanel sectionIndex={1} />}
+      <IntegrationsSection sectionIndex={isDesktop() ? 2 : 1} />
     </div>
   );
 }

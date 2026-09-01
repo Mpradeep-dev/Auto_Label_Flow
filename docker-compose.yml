@@ -53,6 +53,7 @@ services:
       - path: ./backend/.env
         required: false
     environment:
+      ALF_TASK_QUEUE: celery
       DATABASE_URL: postgresql+psycopg://annotate:annotate@postgres:5432/annotate
       REDIS_URL: redis://redis:6379/0
       # Override via a repo-root .env (Compose var substitution, distinct
@@ -116,6 +117,7 @@ services:
       - path: ./backend/.env
         required: false
     environment:
+      ALF_TASK_QUEUE: celery
       DATABASE_URL: postgresql+psycopg://annotate:annotate@postgres:5432/annotate
       REDIS_URL: redis://redis:6379/0
       STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}

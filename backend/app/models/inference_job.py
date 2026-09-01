@@ -6,11 +6,11 @@ from __future__ import annotations
 import uuid
 from enum import Enum as PyEnum
 
-from sqlalchemy import Enum, Float, ForeignKey, Index, Integer, String, text
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy import Float, ForeignKey, Index, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.types import GUID, enum_column
 
 
 class JobStatus(str, PyEnum):
@@ -37,21 +37,22 @@ class InferenceJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
             "dataset_id",
             unique=True,
             postgresql_where=text("status IN ('QUEUED', 'RUNNING')"),
+            sqlite_where=text("status IN ('QUEUED', 'RUNNING')"),
         ),
     )
 
     project_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+        GUID, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
     dataset_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True
+        GUID, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True
     )
     model_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("models.id", ondelete="RESTRICT"), nullable=False
+        GUID, ForeignKey("models.id", ondelete="RESTRICT"), nullable=False
     )
 
     status: Mapped[JobStatus] = mapped_column(
-        Enum(JobStatus, name="job_status"), nullable=False, default=JobStatus.QUEUED, index=True
+        enum_column(JobStatus, "job_status"), nullable=False, default=JobStatus.QUEUED, index=True
     )
     conf: Mapped[float] = mapped_column(Float, nullable=False, default=0.20)
     iou: Mapped[float] = mapped_column(Float, nullable=False, default=0.70)

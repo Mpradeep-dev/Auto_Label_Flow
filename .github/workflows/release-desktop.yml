@@ -1,0 +1,51 @@
+name: Release desktop app
+
+# Manual, Windows-only. Builds the NSIS installer and publishes it plus
+# latest.yml to the GitHub Release for the given tag (which the in-app
+# "Check for updates" button reads). See desktop/RELEASING.md.
+#
+# ffmpeg.exe + vc_redist are fetched here; for a signed build add the cert
+# secrets and the win.certificateFile config to electron-builder.yml.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag (must match desktop/package.json version), e.g. v0.3.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag }}
+
+      - uses: actions/setup-node@v4
+        with: { node-version: "22" }
+
+      - name: Fetch ffmpeg + vc_redist
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force desktop/build/bin | Out-Null
+          curl -L -o ffmpeg.zip https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip
+          tar -xf ffmpeg.zip
+          Get-ChildItem -Recurse -Filter ffmpeg.exe | Select-Object -First 1 |
+            ForEach-Object { Copy-Item $_.FullName desktop/build/bin/ffmpeg.exe }
+          curl -L -o desktop/build/bin/vc_redist.x64.exe https://aka.ms/vs/17/release/vc_redist.x64.exe
+
+      - name: Assemble payload
+        working-directory: desktop
+        run: |
+          npm install
+          node scripts/build.mjs
+
+      - name: Build + publish installer
+        working-directory: desktop
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: npx electron-builder --win nsis --publish always

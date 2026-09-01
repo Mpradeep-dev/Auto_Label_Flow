@@ -10,11 +10,11 @@ from __future__ import annotations
 import uuid
 from enum import Enum as PyEnum
 
-from sqlalchemy import Enum, Float, ForeignKey, Integer, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy import Float, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.types import GUID, enum_column
 
 
 class DatasetVersionStatus(str, PyEnum):
@@ -35,11 +35,11 @@ class DatasetVersion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (UniqueConstraint("dataset_id", "version_number", name="uq_dataset_version_number"),)
 
     dataset_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True
+        GUID, ForeignKey("datasets.id", ondelete="CASCADE"), nullable=False, index=True
     )
     version_number: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[DatasetVersionStatus] = mapped_column(
-        Enum(DatasetVersionStatus, name="dataset_version_status"), nullable=False, default=DatasetVersionStatus.DRAFT
+        enum_column(DatasetVersionStatus, "dataset_version_status"), nullable=False, default=DatasetVersionStatus.DRAFT
     )
 
     train_ratio: Mapped[float] = mapped_column(Float, nullable=False, default=0.8)
@@ -73,10 +73,10 @@ class DatasetVersionImage(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __table_args__ = (UniqueConstraint("dataset_version_id", "image_id", name="uq_version_image"),)
 
     dataset_version_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("dataset_versions.id", ondelete="CASCADE"), nullable=False, index=True
+        GUID, ForeignKey("dataset_versions.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    image_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, index=True)
-    split: Mapped[SplitName] = mapped_column(Enum(SplitName, name="split_name"), nullable=False)
+    image_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False, index=True)
+    split: Mapped[SplitName] = mapped_column(enum_column(SplitName, "split_name"), nullable=False)
     source_group_id: Mapped[str] = mapped_column(String(100), nullable=False)
 
 
@@ -89,8 +89,8 @@ class DatasetVersionAnnotationPin(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "dataset_version_annotation_pins"
 
     dataset_version_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("dataset_versions.id", ondelete="CASCADE"), nullable=False, index=True
+        GUID, ForeignKey("dataset_versions.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    annotation_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, index=True)
-    pinned_event_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
-    image_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, index=True)
+    annotation_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False, index=True)
+    pinned_event_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
+    image_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False, index=True)

@@ -1,19 +1,16 @@
-"""Redis-backed live training progress — same pattern as
-`workers/progress.py` but shaped for per-epoch metrics rather than
-per-image counts. Kept as a separate module since the payload shape
-(mAP/precision/recall vs fps/predictions) is genuinely different, not
-because the mechanism is."""
+"""Live training progress — same pattern as `workers/progress.py` but shaped
+for per-epoch metrics rather than per-image counts. Kept as a separate
+module since the payload shape (mAP/precision/recall vs fps/predictions) is
+genuinely different, not because the mechanism is. Backing store is
+in-process (desktop) or Redis (server); see `workers/progress_store.py`."""
 from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
 
-import redis
-
-from app.core.config import settings
+from app.workers.progress_store import get_store
 
 _TTL_S = 3600
-_redis = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
 
 @dataclass
@@ -36,11 +33,11 @@ def _key(job_id: str) -> str:
 
 
 def set_training_progress(job_id: str, progress: EpochProgress) -> None:
-    _redis.set(_key(job_id), json.dumps(asdict(progress)), ex=_TTL_S)
+    get_store().set(_key(job_id), json.dumps(asdict(progress)), _TTL_S)
 
 
 def get_training_progress(job_id: str) -> EpochProgress | None:
-    raw = _redis.get(_key(job_id))
+    raw = get_store().get(_key(job_id))
     if raw is None:
         return None
     return EpochProgress(**json.loads(raw))

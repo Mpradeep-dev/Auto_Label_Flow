@@ -9,10 +9,10 @@ from __future__ import annotations
 import uuid
 
 from sqlalchemy import JSON, ForeignKey, String, Text
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.types import GUID
 
 
 class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
@@ -35,10 +35,10 @@ class Project(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     quality_rule_config: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
 
     primary_model_id: Mapped[uuid.UUID | None] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("models.id", ondelete="SET NULL"), nullable=True
+        GUID, ForeignKey("models.id", ondelete="SET NULL"), nullable=True
     )
     pose_model_id: Mapped[uuid.UUID | None] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("models.id", ondelete="SET NULL"), nullable=True
+        GUID, ForeignKey("models.id", ondelete="SET NULL"), nullable=True
     )
 
     datasets: Mapped[list["Dataset"]] = relationship(back_populates="project", cascade="all, delete-orphan")

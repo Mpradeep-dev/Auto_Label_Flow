@@ -11,11 +11,11 @@ from __future__ import annotations
 import uuid
 from enum import Enum as PyEnum
 
-from sqlalchemy import Boolean, Enum, ForeignKey, Integer, JSON, String
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy import Boolean, ForeignKey, Integer, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.types import GUID, enum_column
 
 
 class RoboflowJobKind(str, PyEnum):
@@ -35,11 +35,11 @@ class RoboflowJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "roboflow_jobs"
 
     project_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+        GUID, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    kind: Mapped[RoboflowJobKind] = mapped_column(Enum(RoboflowJobKind, name="roboflow_job_kind"), nullable=False)
+    kind: Mapped[RoboflowJobKind] = mapped_column(enum_column(RoboflowJobKind, "roboflow_job_kind"), nullable=False)
     status: Mapped[RoboflowJobStatus] = mapped_column(
-        Enum(RoboflowJobStatus, name="roboflow_job_status"),
+        enum_column(RoboflowJobStatus, "roboflow_job_status"),
         nullable=False,
         default=RoboflowJobStatus.QUEUED,
         index=True,  # DB-05: the natural filter for "show running/queued jobs" UI polling
@@ -55,12 +55,12 @@ class RoboflowJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # images with zero existing annotations, instead of every raw image.
     unannotated_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     result_dataset_id: Mapped[uuid.UUID | None] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("datasets.id", ondelete="SET NULL"), nullable=True
+        GUID, ForeignKey("datasets.id", ondelete="SET NULL"), nullable=True
     )
 
     # EXPORT only
     dataset_version_id: Mapped[uuid.UUID | None] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("dataset_versions.id", ondelete="SET NULL"), nullable=True
+        GUID, ForeignKey("dataset_versions.id", ondelete="SET NULL"), nullable=True
     )
     uploaded_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)

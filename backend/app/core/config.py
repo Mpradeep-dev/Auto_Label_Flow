@@ -16,10 +16,11 @@ allowed to be unset — see `KaggleSettings.is_configured`.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 from typing import Literal
 
-from pydantic import computed_field
+from pydantic import computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Registering a model loads its weights file through Ultralytics/torch, which
@@ -50,10 +51,18 @@ PROJECT_ROOT = BACKEND_DIR.parent
 ARTIFACTS_DIR = PROJECT_ROOT / "artifacts"
 LOCAL_STORAGE_DIR = PROJECT_ROOT / "storage" / "local"
 
+# Desktop app: Electron passes ALF_DATA_DIR (= app.getPath('userData'),
+# e.g. %APPDATA%/AutoLabelFlow) and drops a user-editable `.env` there. Pick
+# the env file before the Settings class body is evaluated.
+_ALF_DATA_DIR_ENV = os.environ.get("ALF_DATA_DIR")
+_ENV_FILE = (
+    Path(_ALF_DATA_DIR_ENV).expanduser() / ".env" if _ALF_DATA_DIR_ENV else BACKEND_DIR / ".env"
+)
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        env_file=str(BACKEND_DIR / ".env"),
+        env_file=str(_ENV_FILE),
         env_file_encoding="utf-8",
         extra="ignore",
     )
@@ -62,6 +71,25 @@ class Settings(BaseSettings):
     APP_NAME: str = "AI-Assisted Annotation & Retraining Platform"
     ENV: Literal["development", "production", "test"] = "development"
     DEBUG: bool = True
+
+    # --- Desktop packaging ---
+    # Set by the Electron shell. When present, all mutable state (SQLite DB,
+    # uploaded media, model artifacts, logs) is rooted here instead of under
+    # the (read-only, when frozen) install tree, and the defaults below flip
+    # to the standalone profile: SQLite, local storage, no debug.
+    ALF_DATA_DIR: str | None = None
+    # Job execution backend. `local` = in-process ThreadPoolExecutor +
+    # APScheduler (desktop). `celery` = Celery + Redis (docker-compose/server).
+    ALF_TASK_QUEUE: Literal["local", "celery"] = "local"
+    # Version string surfaced by /api/v1/health and /api/v1/system/info.
+    # Electron injects ALF_APP_VERSION (= app.getVersion()); otherwise a
+    # build-time-generated app/_version.py; otherwise a dev sentinel.
+    ALF_APP_VERSION: str | None = None
+    # When set, FastAPI also serves the built SPA from this directory (the
+    # desktop app is one origin). Unset in dev/server — the Vite dev server
+    # serves the frontend there.
+    FRONTEND_DIST_DIR: Path | None = None
+    LOG_DIR: Path | None = None
 
     # --- CORS ---
     CORS_ORIGINS: list[str] = ["http://localhost:5173", "http://127.0.0.1:5173"]
@@ -180,6 +208,43 @@ class Settings(BaseSettings):
     def TRAINING_OUTPUT_DIR(self) -> Path:
         return self.ARTIFACTS_DIR / "training_runs"
 
+    @computed_field  # type: ignore[misc]
+    @property
+    def APP_VERSION(self) -> str:
+        if self.ALF_APP_VERSION:
+            return self.ALF_APP_VERSION
+        try:
+            from app._version import __version__  # generated at build time
+
+            return __version__
+        except Exception:
+            return "0.0.0-dev"
+
+    @model_validator(mode="after")
+    def _apply_desktop_profile(self) -> "Settings":
+        """When ALF_DATA_DIR is set (packaged desktop app), root all mutable
+        state there and flip unset defaults to the standalone profile. An
+        explicitly-provided value (env var / .env) always wins."""
+        if not self.ALF_DATA_DIR:
+            return self
+        data = Path(self.ALF_DATA_DIR).expanduser().resolve()
+        given = self.model_fields_set
+        if "DATABASE_URL" not in given:
+            self.DATABASE_URL = f"sqlite+pysqlite:///{(data / 'data' / 'app.db').as_posix()}"
+        if "LOCAL_STORAGE_DIR" not in given:
+            self.LOCAL_STORAGE_DIR = data / "storage"
+        if "ARTIFACTS_DIR" not in given:
+            self.ARTIFACTS_DIR = data / "artifacts"
+        if "LOG_DIR" not in given:
+            self.LOG_DIR = data / "logs"
+        if "STORAGE_BACKEND" not in given:
+            self.STORAGE_BACKEND = "local"
+        if "DEBUG" not in given:
+            self.DEBUG = False
+        if "ENV" not in given:
+            self.ENV = "production"
+        return self
+
 
 settings = Settings()
 
@@ -193,5 +258,17 @@ if not (0.0 <= settings.DEFAULT_CONFIDENCE_FLOOR <= 1.0):
 if settings.STORAGE_BACKEND == "azure" and not settings.AZURE_STORAGE_CONNECTION_STRING:
     raise ValueError("AZURE_STORAGE_CONNECTION_STRING is required when STORAGE_BACKEND=azure")
 
-for _dir in (settings.ARTIFACTS_DIR, settings.MODELS_DIR / "pt", settings.LOCAL_STORAGE_DIR):
+# A frozen build with no data dir would silently mkdir under Program Files /
+# the CWD and "work" until the first write permission error mid-session.
+if getattr(sys, "frozen", False) and not settings.ALF_DATA_DIR:
+    raise RuntimeError("ALF_DATA_DIR must be set when running as a packaged (frozen) app")
+
+_dirs_to_make = [settings.ARTIFACTS_DIR, settings.MODELS_DIR / "pt", settings.LOCAL_STORAGE_DIR]
+if settings.LOG_DIR is not None:
+    _dirs_to_make.append(settings.LOG_DIR)
+if settings.DATABASE_URL.startswith("sqlite"):
+    _db_path = settings.DATABASE_URL.split(":///", 1)[-1]
+    if _db_path:
+        _dirs_to_make.append(Path(_db_path).parent)
+for _dir in _dirs_to_make:
     _dir.mkdir(parents=True, exist_ok=True)
