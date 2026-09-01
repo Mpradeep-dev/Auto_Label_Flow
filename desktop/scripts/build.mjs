@@ -17,7 +17,7 @@
  * install + site-packages" is exactly what the repo already runs and tests.
  */
 import { execSync } from "node:child_process";
-import { existsSync, mkdirSync, rmSync, cpSync, writeFileSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, cpSync, writeFileSync, readFileSync, readdirSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import process from "node:process";
@@ -90,7 +90,41 @@ if (!args.has("--skip-python")) {
     if (existsSync(src)) cpSync(src, join(appRoot, item), { recursive: true });
   }
   writeFileSync(join(appRoot, "app", "_version.py"), versionPy);
+
+  // Trim ~150-250 MB the packaged app never needs: CPython debug symbols and
+  // bytecode caches / vendored test trees under site-packages. (Left alone:
+  // OpenCV — opencv-python and -headless share the cv2/ tree, so uninstalling
+  // one can break the other.)
+  const pyDir = join(BUILD, "python");
+  rmGlob(pyDir, "*.pdb");
+  rmDirsNamed(pyDir, ["__pycache__"]);
   console.log("  ✓ python runtime -> build/python");
+}
+
+function rmGlob(root, pattern) {
+  // shallow-ish recursive unlink for a simple *.ext pattern
+  const rx = new RegExp("^" + pattern.replace(/[.]/g, "\\.").replace(/[*]/g, ".*") + "$");
+  const walk = (d) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      const p = join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else if (rx.test(e.name)) rmSync(p, { force: true });
+    }
+  };
+  walk(root);
+}
+
+function rmDirsNamed(root, names) {
+  const set = new Set(names);
+  const walk = (d) => {
+    for (const e of readdirSync(d, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      const p = join(d, e.name);
+      if (set.has(e.name)) rmSync(p, { recursive: true, force: true });
+      else walk(p);
+    }
+  };
+  walk(root);
 }
 
 // --- 4. ffmpeg (belt-and-braces for OpenCV video decode; see RELEASING.md) ---
