@@ -1,7 +1,7 @@
 {
   "name": "autolabelflow-desktop",
   "productName": "AutoLabelFlow",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "AutoLabelFlow — standalone desktop build (Electron shell over the bundled FastAPI backend)",
   "author": "Mpradeep-dev",
