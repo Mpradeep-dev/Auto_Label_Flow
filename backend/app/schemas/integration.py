@@ -5,9 +5,11 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models.blob_import_job import BlobImportJobStatus
 from app.models.roboflow_job import RoboflowJobKind, RoboflowJobStatus
 
 
@@ -68,6 +70,34 @@ class RoboflowProjectSummary(BaseModel):
 class RoboflowVersionSummary(BaseModel):
     version: int
     image_count: int
+
+
+class BlobImportRequest(BaseModel):
+    """Kick off an "Import from Azure Blob" job: a prefix inside the app's
+    configured container, plus how its sibling labels are laid out."""
+
+    prefix: str = Field(min_length=1)
+    label_format: Literal["auto", "yolo", "coco"] = "auto"
+    dataset_name: str | None = None
+
+
+class BlobImportJobRead(BaseModel):
+    """Background job row backing the Azure-Blob import progress bar —
+    polled and SSE-streamed exactly like `RoboflowJobRead`."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    project_id: uuid.UUID
+    status: BlobImportJobStatus
+    prefix: str
+    label_format: str
+    dataset_name: str | None = None
+    total_items: int
+    processed_items: int
+    result_dataset_id: uuid.UUID | None = None
+    error: str | None = None
+    created_at: datetime
 
 
 class RoboflowJobRead(BaseModel):

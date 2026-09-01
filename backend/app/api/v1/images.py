@@ -116,6 +116,9 @@ def delete_image(image_id: uuid.UUID, db: Session = Depends(get_db)) -> None:
     image = db.get(Image, image_id)
     if image is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Image not found")
-    get_storage().delete(image.storage_key)
+    # An is_external image references a blob this app does not own (imported
+    # in place from an Azure Blob prefix) — drop the row, leave the blob.
+    if not image.is_external:
+        get_storage().delete(image.storage_key)
     db.delete(image)
     db.commit()

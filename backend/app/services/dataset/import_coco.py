@@ -22,39 +22,18 @@ import cv2
 from sqlalchemy.orm import Session
 
 from app.core.security import safe_storage_key
-from app.models.annotation import AnnotationSource, ShapeType
+from app.models.annotation import AnnotationSource
 from app.models.dataset import Dataset
 from app.models.image import Image, ImageSourceType
 from app.models.project import Project
 from app.services.annotation.service import create_annotation
+from app.services.dataset.coco_common import coco_ann_to_shape_kwargs, parse_coco
 from app.services.dataset.import_safety import UnsafeArchiveError, safe_extractall
 from app.services.storage.factory import get_storage
 
 
 class CocoImportError(RuntimeError):
     pass
-
-
-def _clamp01(value: float) -> float:
-    return max(0.0, min(1.0, value))
-
-
-def _polygon_points_from_segmentation(segmentation, width: int, height: int) -> list[list[float]] | None:
-    """COCO's `segmentation` is either a list of polygon rings
-    (`[[x1,y1,x2,y2,...], ...]`) or an RLE dict (`{"counts": ..., "size": [h,w]}`).
-    This app stores masks as polygons (see ShapeType docstring), so only the
-    polygon-ring form is imported; RLE stays explicitly unsupported — the
-    caller falls back to the bbox-only path for it, same as when
-    `segmentation` is absent or empty. Only the first ring is used (single
-    outer ring only, no holes — see PLAN non-goals)."""
-    if not isinstance(segmentation, list) or not segmentation:
-        return None
-    ring = segmentation[0]
-    if not isinstance(ring, list) or len(ring) < 6:  # need >=3 points * 2 coords
-        return None
-    flat = [float(v) for v in ring]
-    points = [[_clamp01(flat[i] / width), _clamp01(flat[i + 1] / height)] for i in range(0, len(flat), 2)]
-    return points if len(points) >= 3 else None
 
 
 def _find_annotations_json(root: Path) -> Path:
@@ -121,14 +100,10 @@ def import_coco_zip(
                 raise CocoImportError(str(exc)) from exc
 
         coco = json.loads(_find_annotations_json(extract_root).read_text(encoding="utf-8"))
-        categories = {c["id"]: c["name"] for c in coco.get("categories", [])}
+        categories, annotations_by_image = parse_coco(coco)
         class_id_by_category: dict[int, int] = {
             cat_id: _ensure_class_id(project, name) for cat_id, name in categories.items()
         }
-
-        annotations_by_image: dict[int, list[dict]] = {}
-        for ann in coco.get("annotations", []):
-            annotations_by_image.setdefault(ann["image_id"], []).append(ann)
 
         for img_entry in coco.get("images", []):
             src_path = _find_image_file(extract_root, img_entry["file_name"])
@@ -164,34 +139,15 @@ def import_coco_zip(
                 class_id = class_id_by_category.get(ann["category_id"])
                 if class_id is None:
                     continue
-                points = _polygon_points_from_segmentation(ann.get("segmentation"), width, height)
-                if points is not None:
-                    create_annotation(
-                        db,
-                        image_id=image.id,
-                        class_id=class_id,
-                        class_name=categories[ann["category_id"]],
-                        shape_type=ShapeType.POLYGON,
-                        points=points,
-                        confidence=None,
-                        source=AnnotationSource.HUMAN,
-                        actor="coco-import",
-                    )
-                    continue
-                bx, by, bw, bh = ann["bbox"]
-                x1, y1, x2, y2 = bx / width, by / height, (bx + bw) / width, (by + bh) / height
                 create_annotation(
                     db,
                     image_id=image.id,
                     class_id=class_id,
                     class_name=categories[ann["category_id"]],
-                    x1=_clamp01(x1),
-                    y1=_clamp01(y1),
-                    x2=_clamp01(x2),
-                    y2=_clamp01(y2),
                     confidence=None,
                     source=AnnotationSource.HUMAN,
                     actor="coco-import",
+                    **coco_ann_to_shape_kwargs(ann, width, height),
                 )
 
     db.commit()

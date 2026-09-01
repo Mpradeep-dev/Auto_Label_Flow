@@ -7,6 +7,7 @@ import { SectionLabel } from "@/components/layout/SectionLabel";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
 import { RoboflowImportSection } from "@/components/integrations/RoboflowImportSection";
+import { AzureBlobImportSection } from "@/components/integrations/AzureBlobImportSection";
 import type { Dataset } from "@/types";
 
 function DeleteDatasetPanel({ dataset, onCancel }: { dataset: Dataset; onCancel: () => void }) {
@@ -208,6 +209,11 @@ export function DatasetsPage() {
     enabled: !!projectId,
   });
 
+  // "Import from Azure Blob" only makes sense when the app's object store
+  // *is* Azure Blob — otherwise there's no container to reference in place.
+  const systemInfoQuery = useQuery({ queryKey: ["system-info"], queryFn: () => api.systemInfo() });
+  const azureStorage = systemInfoQuery.data?.storage_backend === "azure";
+
   const createMutation = useMutation({
     mutationFn: () => api.createDataset(projectId!, { name: name.trim() }),
     onSuccess: () => {
@@ -254,6 +260,7 @@ export function DatasetsPage() {
         <div ref={roboflowRef}>
           <RoboflowImportSection projectId={projectId} />
         </div>
+        {azureStorage && <AzureBlobImportSection projectId={projectId} />}
       </div>
 
       <div className="grid max-w-5xl grid-cols-1 gap-0 border-t-2 border-ink sm:grid-cols-2">

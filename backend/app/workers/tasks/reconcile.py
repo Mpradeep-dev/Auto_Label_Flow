@@ -18,6 +18,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 
 from app.db.session import SessionLocal
+from app.models.blob_import_job import BlobImportJob, BlobImportJobStatus
 from app.models.inference_job import InferenceJob, JobStatus as InferenceJobStatus
 from app.models.roboflow_job import RoboflowJob, RoboflowJobStatus
 from app.models.training_job import TrainingJob, TrainingJobStatus
@@ -33,7 +34,7 @@ _STALE_MESSAGE = (
 @celery_app.task(name="app.workers.tasks.reconcile.reconcile_stale_jobs")
 def reconcile_stale_jobs() -> dict[str, int]:
     db = SessionLocal()
-    counts = {"inference": 0, "training": 0, "video": 0, "roboflow": 0}
+    counts = {"inference": 0, "training": 0, "video": 0, "roboflow": 0, "blob_import": 0}
     try:
         now = datetime.now(timezone.utc)
 
@@ -69,6 +70,15 @@ def reconcile_stale_jobs() -> dict[str, int]:
             job.status = RoboflowJobStatus.FAILED
             job.error = _STALE_MESSAGE
             counts["roboflow"] += 1
+
+        cutoff = now - timedelta(seconds=RECONCILE_STALE_AFTER_S["blob_import"])
+        for job in db.query(BlobImportJob).filter(
+            BlobImportJob.status.in_([BlobImportJobStatus.QUEUED, BlobImportJobStatus.RUNNING]),
+            BlobImportJob.updated_at < cutoff,
+        ):
+            job.status = BlobImportJobStatus.FAILED
+            job.error = _STALE_MESSAGE
+            counts["blob_import"] += 1
 
         db.commit()
         return counts

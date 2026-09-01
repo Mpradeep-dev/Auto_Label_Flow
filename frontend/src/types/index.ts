@@ -342,6 +342,23 @@ export interface RoboflowJob {
   created_at: string;
 }
 
+export type BlobImportLabelFormat = "auto" | "yolo" | "coco";
+// Same lifecycle states as a Roboflow job — reuses RoboflowJobStatus.
+
+export interface BlobImportJob {
+  id: string;
+  project_id: string;
+  status: RoboflowJobStatus;
+  prefix: string;
+  label_format: BlobImportLabelFormat;
+  dataset_name: string | null;
+  total_items: number;
+  processed_items: number;
+  result_dataset_id: string | null;
+  error: string | null;
+  created_at: string;
+}
+
 export interface RoboflowProjectSummary {
   workspace: string;
   project: string;

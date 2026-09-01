@@ -14,8 +14,10 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
+from app.models.blob_import_job import BlobImportJob
 from app.models.roboflow_job import RoboflowJob, RoboflowJobKind
 from app.schemas.integration import (
+    BlobImportJobRead,
     IntegrationStatus,
     KaggleConnectRequest,
     ModalConnectRequest,
@@ -183,6 +185,86 @@ async def stream_roboflow_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
                 status_value = progress.status
             else:
                 fresh = db.get(RoboflowJob, job_id)
+                payload = json.dumps(
+                    {
+                        "current": fresh.processed_items if fresh else 0,
+                        "total": fresh.total_items if fresh else 0,
+                        "predictions": 0,
+                        "fps": 0.0,
+                        "eta_s": None,
+                        "status": fresh.status.value if fresh else "UNKNOWN",
+                        "error": fresh.error if fresh else None,
+                    }
+                )
+                status_value = fresh.status.value if fresh else "UNKNOWN"
+
+            if payload != last_payload:
+                yield f"data: {payload}\n\n"
+                last_payload = payload
+
+            if status_value in _TERMINAL_JOB_STATUSES:
+                return
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+# --- Azure Blob import jobs (mirrors /roboflow/jobs/*; see datasets.py's
+#     POST /projects/{id}/import/azure-blob for the create side) ---
+
+
+@router.get("/azure-blob/jobs/latest", response_model=BlobImportJobRead | None)
+def get_latest_blob_import_job(
+    project_id: uuid.UUID, db: Session = Depends(get_db)
+) -> BlobImportJob | None:
+    """Lets the Datasets page reattach to the last Azure-Blob import it
+    kicked off for this project after a navigation away or a reload.
+    Registered before `/azure-blob/jobs/{job_id}` so "latest" isn't parsed
+    as a UUID (same reason as the Roboflow route above)."""
+    return db.scalar(
+        select(BlobImportJob)
+        .where(BlobImportJob.project_id == project_id)
+        .order_by(BlobImportJob.created_at.desc())
+        .limit(1)
+    )
+
+
+@router.get("/azure-blob/jobs/{job_id}", response_model=BlobImportJobRead)
+def get_blob_import_job(job_id: uuid.UUID, db: Session = Depends(get_db)) -> BlobImportJob:
+    job = db.get(BlobImportJob, job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
+    return job
+
+
+@router.post("/azure-blob/jobs/{job_id}/cancel", response_model=BlobImportJobRead)
+def cancel_blob_import_job(job_id: uuid.UUID, db: Session = Depends(get_db)) -> BlobImportJob:
+    """Sets the Redis cancel flag the running task checks before each image
+    — same mechanism as the Roboflow cancel above."""
+    job = db.get(BlobImportJob, job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
+    request_cancel(str(job_id))
+    return job
+
+
+@router.get("/azure-blob/jobs/{job_id}/stream")
+async def stream_blob_import_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
+    """SSE progress stream — same shape and fallback reasoning as
+    `stream_roboflow_job`."""
+    job = db.get(BlobImportJob, job_id)
+    if job is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Job not found")
+
+    async def event_stream():
+        last_payload = None
+        for _ in range(3600):
+            progress = get_progress(str(job_id))
+            if progress is not None:
+                payload = json.dumps(progress.__dict__)
+                status_value = progress.status
+            else:
+                fresh = db.get(BlobImportJob, job_id)
                 payload = json.dumps(
                     {
                         "current": fresh.processed_items if fresh else 0,

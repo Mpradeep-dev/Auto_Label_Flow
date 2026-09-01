@@ -11,6 +11,7 @@ from app.models.annotation import (  # noqa: F401
     ErrorCategory,
     ErrorReason,
 )
+from app.models.blob_import_job import BlobImportJob, BlobImportJobStatus  # noqa: F401
 from app.models.dataset import Dataset, DatasetStatus  # noqa: F401
 from app.models.dataset_version import (  # noqa: F401
     DatasetVersion,
@@ -73,4 +74,6 @@ __all__ = [
     "RoboflowJob",
     "RoboflowJobKind",
     "RoboflowJobStatus",
+    "BlobImportJob",
+    "BlobImportJobStatus",
 ]

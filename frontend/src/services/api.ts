@@ -2,6 +2,8 @@ import type {
   Annotation,
   AnnotationFlag,
   AnnotationImage,
+  BlobImportJob,
+  BlobImportLabelFormat,
   Dataset,
   DatasetStatistics,
   DatasetStats,
@@ -392,6 +394,26 @@ export const api = {
   },
   cancelRoboflowJob: (id: string) =>
     request<RoboflowJob>(`/integrations/roboflow/jobs/${id}/cancel`, { method: "POST" }),
+
+  // --- Import from Azure Blob (only when storage_backend === "azure") ---
+  // Registers images that already live under `prefix` in the app's
+  // container as a new Dataset *by reference* — no byte copy. Returns a
+  // background job to poll, same shape/flow as a Roboflow import.
+  importAzureBlobDataset: (
+    projectId: string,
+    data: { prefix: string; label_format: BlobImportLabelFormat; dataset_name?: string },
+  ) =>
+    request<BlobImportJob>(`/projects/${projectId}/import/azure-blob`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    }),
+  getBlobImportJob: (id: string) => request<BlobImportJob>(`/integrations/azure-blob/jobs/${id}`),
+  getLatestBlobImportJob: (projectId: string) =>
+    request<BlobImportJob | null>(
+      `/integrations/azure-blob/jobs/latest?project_id=${encodeURIComponent(projectId)}`,
+    ),
+  cancelBlobImportJob: (id: string) =>
+    request<BlobImportJob>(`/integrations/azure-blob/jobs/${id}/cancel`, { method: "POST" }),
 };
 
 export { ApiError };

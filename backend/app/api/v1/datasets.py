@@ -6,8 +6,10 @@ from fastapi import APIRouter, Depends, Form, HTTPException, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.core.security import stream_upload_to_temp
 from app.db.session import get_db
+from app.models.blob_import_job import BlobImportJob
 from app.models.dataset import Dataset
 from app.models.image import Image, ImageReviewStatus
 from app.models.project import Project
@@ -15,13 +17,19 @@ from app.models.roboflow_job import RoboflowJob, RoboflowJobKind
 from app.models.video import Video
 from app.schemas.dashboard import DatasetStatistics, ErrorAnalysis
 from app.schemas.dataset import DatasetCreate, DatasetRead, DatasetStats
-from app.schemas.integration import RoboflowImportRequest, RoboflowJobRead
+from app.schemas.integration import (
+    BlobImportJobRead,
+    BlobImportRequest,
+    RoboflowImportRequest,
+    RoboflowJobRead,
+)
 from app.services.dataset.error_analysis import compute_error_analysis
 from app.services.dataset.import_coco import CocoImportError, import_coco_zip
 from app.services.dataset.import_cvat import CvatImportError, import_cvat_zip
 from app.services.dataset.statistics import compute_dataset_statistics
 from app.services.integrations.roboflow_connect import RoboflowNotConnectedError, get_client
 from app.services.storage.factory import get_storage
+from app.workers.tasks.blob_import import run_blob_import
 from app.workers.tasks.roboflow import run_roboflow_import
 
 router = APIRouter(tags=["datasets"])
@@ -84,6 +92,43 @@ def import_dataset_from_roboflow(
     db.refresh(job)
 
     run_roboflow_import.delay(str(job.id))
+    db.refresh(job)  # eager/test mode: already terminal by the time we return
+    return job
+
+
+@router.post(
+    "/projects/{project_id}/import/azure-blob",
+    response_model=BlobImportJobRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def import_dataset_from_azure_blob(
+    project_id: uuid.UUID, payload: BlobImportRequest, db: Session = Depends(get_db)
+) -> BlobImportJob:
+    """Register images that already live under `payload.prefix` in the
+    app's Azure container as a new Dataset — **by reference**, no byte
+    copy (see `services/integrations/azure_blob_import.py`). Dispatches a
+    background job (a production prefix is tens of thousands of images) and
+    returns immediately; poll `GET /integrations/azure-blob/jobs/{id}` or
+    follow `/stream`. Requires `STORAGE_BACKEND=azure` — fails fast here
+    rather than creating a doomed job."""
+    _get_project_or_404(project_id, db)
+    if settings.STORAGE_BACKEND != "azure":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "Azure Blob import is only available when STORAGE_BACKEND=azure",
+        )
+
+    job = BlobImportJob(
+        project_id=project_id,
+        prefix=payload.prefix,
+        label_format=payload.label_format,
+        dataset_name=payload.dataset_name,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    run_blob_import.delay(str(job.id))
     db.refresh(job)  # eager/test mode: already terminal by the time we return
     return job
 
@@ -200,7 +245,16 @@ def delete_dataset(dataset_id: uuid.UUID, db: Session = Depends(get_db)) -> None
     # finding BE-02: deleting a dataset used to cascade the DB rows but
     # never touch the underlying files, silently orphaning every image and
     # video frame on disk/MinIO forever with no reclaim path.
-    image_keys = list(db.scalars(select(Image.storage_key).where(Image.dataset_id == dataset_id)))
+    # is_external images reference a blob this app does not own (an Azure
+    # Blob prefix imported in place) — cascade removes the row, but the
+    # underlying blob must be left alone.
+    image_keys = list(
+        db.scalars(
+            select(Image.storage_key).where(
+                Image.dataset_id == dataset_id, Image.is_external.is_(False)
+            )
+        )
+    )
     video_keys = list(db.scalars(select(Video.storage_key).where(Video.dataset_id == dataset_id)))
 
     db.delete(dataset)
