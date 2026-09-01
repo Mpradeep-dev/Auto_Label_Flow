@@ -25,6 +25,34 @@ def _jpeg_bytes() -> bytes:
     return buf.getvalue()
 
 
+# Raw (unversioned) pull path result set — two items on purpose, one
+# already labeled and one not, so tests can exercise both "pull everything"
+# and "unannotated_only" against the same fake project.
+_RAW_SEARCH_ITEMS = [
+    {"id": "raw-img-1", "name": "raw1.jpg", "annotations": {"count": 1, "classes": {"cone": 1}}},
+    {"id": "raw-img-2", "name": "raw2.jpg", "annotations": {"count": 0, "classes": {}}},
+]
+
+
+class _FakeSearchResponse:
+    """Stands in for the `requests.post(.../search)` response that
+    `roboflow_import._rf_search_page` now inspects directly (the SDK's own
+    `Project.search()` is bypassed)."""
+
+    def __init__(self, items: list[dict], status_code: int = 200) -> None:
+        self._items = items
+        self.status_code = status_code
+        self.text = "OK"
+
+    def json(self) -> dict:
+        return {"results": self._items}
+
+
+def _fake_search_post(url: str, json: dict | None = None, timeout: int = 30) -> _FakeSearchResponse:
+    offset = (json or {}).get("offset", 0)
+    return _FakeSearchResponse([] if offset > 0 else list(_RAW_SEARCH_ITEMS))
+
+
 class _FakeDownloadResult:
     def __init__(self, location: str) -> None:
         self.location = location
@@ -49,6 +77,9 @@ class _FakeRoboflowVersion:
 class _FakeRoboflowProject:
     def __init__(self, slug: str) -> None:
         self.slug = slug
+        # `_rf_search_page` builds the /search URL from `rf_project.id`
+        # (canonical "workspace/project"), mirroring the real SDK.
+        self.id = f"my-workspace/{slug}"
         self.uploads: list[tuple[str, str | None, str]] = []
 
     def version(self, v: int) -> _FakeRoboflowVersion:
@@ -57,19 +88,10 @@ class _FakeRoboflowProject:
     def upload(self, *, image_path: str, annotation_path: str | None, annotation_labelmap: str, split: str) -> None:
         self.uploads.append((image_path, annotation_path, split))
 
-    # Raw (unversioned) pull path — no `.version()` here, only `search()`
-    # over the project's raw uploaded images plus `image()` per-item detail.
-    # Two items on purpose — one already labeled, one not — so tests can
-    # exercise both "pull everything" and "unannotated_only" against the
-    # same fake project.
-    def search(self, *, offset: int = 0, limit: int = 100, fields: list[str] | None = None) -> list[dict]:
-        if offset > 0:
-            return []
-        return [
-            {"id": "raw-img-1", "name": "raw1.jpg", "annotations": {"count": 1, "classes": {"cone": 1}}},
-            {"id": "raw-img-2", "name": "raw2.jpg", "annotations": {"count": 0, "classes": {}}},
-        ]
-
+    # Raw (unversioned) pull path — no `.version()` here. The service no
+    # longer calls `rf_project.search()`; it POSTs to /search directly, so
+    # that half is faked via `_fake_search_post` (monkeypatched onto
+    # `roboflow_import.requests.post`). `image()` per-item detail stays here.
     def image(self, image_id: str) -> dict:
         if image_id == "raw-img-1":
             return {
@@ -170,6 +192,7 @@ def test_roboflow_import_job_raw_pull_when_no_version(
         return _FakeHTTPResponse(_jpeg_bytes())
 
     monkeypatch.setattr(roboflow_import_module.requests, "get", _fake_get)
+    monkeypatch.setattr(roboflow_import_module.requests, "post", _fake_search_post)
 
     project_id = connected_roboflow.post("/api/v1/projects", json={"name": unique_name}).json()["id"]
 
@@ -211,6 +234,7 @@ def test_roboflow_import_job_raw_pull_unannotated_only(
         return _FakeHTTPResponse(_jpeg_bytes())
 
     monkeypatch.setattr(roboflow_import_module.requests, "get", _fake_get)
+    monkeypatch.setattr(roboflow_import_module.requests, "post", _fake_search_post)
 
     project_id = connected_roboflow.post("/api/v1/projects", json={"name": unique_name}).json()["id"]
 
@@ -233,6 +257,45 @@ def test_roboflow_import_job_raw_pull_unannotated_only(
     assert annotations == []
 
 
+def test_rf_search_error_body_surfaces_as_runtime_error(
+    connected_roboflow: TestClient, real_db_session, monkeypatch, unique_name: str
+) -> None:
+    """Regression: the Roboflow SDK's `Project.search()` ends with a bare
+    `data.json()["results"]`, so an `{"error": ...}` body from the /search
+    endpoint used to blow up as an opaque `KeyError: 'results'` from inside
+    the SDK. `_rf_search_page` must instead raise a `RuntimeError` that
+    carries the real HTTP status and response body."""
+    import uuid as _uuid
+
+    import app.services.integrations.roboflow_import as roboflow_import_module
+    from app.services.integrations.roboflow_import import import_roboflow_raw_project
+
+    class _ErrResp:
+        status_code = 401
+        text = '{"error": "no search access"}'
+
+        def json(self) -> dict:
+            return {"error": "This API key does not have search access."}
+
+    monkeypatch.setattr(
+        roboflow_import_module.requests, "post", lambda url, json=None, timeout=30: _ErrResp()
+    )
+
+    project_id = connected_roboflow.post("/api/v1/projects", json={"name": unique_name}).json()["id"]
+
+    with pytest.raises(RuntimeError) as excinfo:
+        import_roboflow_raw_project(
+            real_db_session,
+            project_id=_uuid.UUID(project_id),
+            workspace="my-workspace",
+            project_slug="ground",
+            dataset_name=None,
+        )
+    msg = str(excinfo.value)
+    assert "search access" in msg
+    assert "HTTP 401" in msg
+
+
 def test_roboflow_import_job_cancel_stops_early(
     connected_roboflow: TestClient, real_db_session, monkeypatch, unique_name: str
 ) -> None:
@@ -252,6 +315,7 @@ def test_roboflow_import_job_cancel_stops_early(
         return _FakeHTTPResponse(_jpeg_bytes())
 
     monkeypatch.setattr(roboflow_import_module.requests, "get", _fake_get)
+    monkeypatch.setattr(roboflow_import_module.requests, "post", _fake_search_post)
 
     project_id = connected_roboflow.post("/api/v1/projects", json={"name": unique_name}).json()["id"]
 
@@ -330,6 +394,7 @@ def test_roboflow_import_job_cancel_endpoint_sets_flag(
     monkeypatch.setattr(
         roboflow_import_module.requests, "get", lambda url, timeout=30: _FakeHTTPResponse(_jpeg_bytes())
     )
+    monkeypatch.setattr(roboflow_import_module.requests, "post", _fake_search_post)
 
     project_id = connected_roboflow.post("/api/v1/projects", json={"name": unique_name}).json()["id"]
     job = connected_roboflow.post(

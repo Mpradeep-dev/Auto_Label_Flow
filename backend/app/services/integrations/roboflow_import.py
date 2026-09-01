@@ -24,6 +24,7 @@ straight off the project's `search()`/`image()` endpoints instead.
 """
 from __future__ import annotations
 
+import logging
 import tempfile
 import uuid
 from pathlib import Path
@@ -43,6 +44,8 @@ from app.models.project import Project
 from app.services.annotation.service import approve_image, create_annotation
 from app.services.integrations.roboflow_connect import get_client
 from app.services.storage.factory import get_storage
+
+logger = logging.getLogger(__name__)
 
 _SPLIT_DIRS = ("train", "valid", "test")
 _RAW_SEARCH_PAGE_SIZE = 100
@@ -226,6 +229,46 @@ def _ensure_class_id(project: Project, name: str) -> int:
     return next_id
 
 
+def _rf_search_page(
+    rf_project, api_key: str, *, offset: int, limit: int, fields: list[str]
+) -> list[dict]:
+    """Direct call to Roboflow's `/search` endpoint, in place of
+    `rf_project.search()`. The SDK (roboflow==1.4.1) ends `search()` with a
+    bare `data.json()["results"]` — no status check, no error-envelope
+    check (unlike `Workspace.create_project()` right beside it, which does
+    `if "error" in r.json()`) — so any response that isn't
+    `{"results": [...]}` (an `{"error": ...}` body, a changed response
+    shape, a permission failure on this one endpoint) surfaces only as an
+    opaque `KeyError: 'results'` from deep in the SDK with the real cause
+    swallowed. This issues the identical request (same URL the SDK builds
+    from `rf_project.id`, same payload) but inspects the response and keeps
+    the body in both the raised error and the logs.
+    """
+    from roboflow.config import API_URL
+
+    resp = requests.post(
+        f"{API_URL}/{rf_project.id}/search?api_key={api_key}",
+        json={"offset": offset, "limit": limit, "fields": fields},
+        timeout=30,
+    )
+    try:
+        body = resp.json()
+    except ValueError as exc:
+        logger.error(
+            "Roboflow /search returned non-JSON (HTTP %s): %s", resp.status_code, resp.text[:2000]
+        )
+        raise RuntimeError(
+            f"Roboflow /search returned a non-JSON response (HTTP {resp.status_code})"
+        ) from exc
+
+    if resp.status_code != 200 or not isinstance(body, dict) or "results" not in body:
+        logger.error("Roboflow /search failed (HTTP %s): %s", resp.status_code, body)
+        detail = (body.get("error") or body.get("message") or body) if isinstance(body, dict) else body
+        raise RuntimeError(f"Roboflow /search failed (HTTP {resp.status_code}): {detail}")
+
+    return body["results"]
+
+
 def import_roboflow_raw_project(
     db: Session,
     *,
@@ -258,7 +301,7 @@ def import_roboflow_raw_project(
     if project is None:
         raise ValueError(f"No project with id {project_id}")
 
-    rf, _config = get_client(db)
+    rf, config = get_client(db)
     rf_project = rf.workspace(workspace).project(project_slug)
 
     items: list[dict] = []
@@ -266,8 +309,12 @@ def import_roboflow_raw_project(
     while True:
         if should_cancel is not None and should_cancel():
             break
-        page = rf_project.search(
-            offset=offset, limit=_RAW_SEARCH_PAGE_SIZE, fields=["id", "name", "annotations"]
+        page = _rf_search_page(
+            rf_project,
+            config["api_key"],
+            offset=offset,
+            limit=_RAW_SEARCH_PAGE_SIZE,
+            fields=["id", "name", "annotations"],
         )
         items.extend(page)
         if len(page) < _RAW_SEARCH_PAGE_SIZE:
