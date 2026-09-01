@@ -36,7 +36,48 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # at the top of the most-upstream module, is the one place that's
 # guaranteed to run first regardless of entry point (uvicorn, the Celery
 # worker, or pytest).
-os.environ.setdefault("ULTRALYTICS_SAFE_LOAD", "1")
+#
+# Guard: ultralytics registers its allow-list as `(class, "module.Name")`
+# tuples, a form `torch.serialization.add_safe_globals` only accepts on
+# torch >= 2.7. On older torch every restricted load of a real checkpoint
+# dies with `'tuple' object has no attribute '__module__'` before the file
+# is even read — so enabling the mitigation there breaks all model
+# registration instead of hardening it. Detect via dist metadata (no torch
+# import from this most-upstream module); on a mismatch, leave it off and
+# say so rather than hard-fail. An explicit env value always wins.
+def _torch_supports_safe_globals_tuples() -> bool | None:
+    """True/False if the installed torch is >= / < 2.7; None if torch isn't
+    installed or its version can't be parsed (caller keeps the default)."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+
+        raw = version("torch")
+    except PackageNotFoundError:
+        return None
+    except Exception:
+        return None
+    try:
+        major, minor = (int(p) for p in raw.split("+", 1)[0].split(".")[:2])
+    except ValueError:
+        return None
+    return (major, minor) >= (2, 7)
+
+
+if "ULTRALYTICS_SAFE_LOAD" not in os.environ:
+    _safe_globals_ok = _torch_supports_safe_globals_tuples()
+    if _safe_globals_ok is False:
+        import logging
+
+        logging.getLogger(__name__).warning(
+            "ULTRALYTICS_SAFE_LOAD left disabled: installed torch is < 2.7, whose "
+            "torch.serialization.add_safe_globals rejects the (callable, str) entries "
+            "ultralytics' restricted loader registers — enabling it would make every "
+            "model registration fail with \"'tuple' object has no attribute '__module__'\". "
+            "Upgrade torch to >= 2.7 to restore the checkpoint pickle-RCE mitigation."
+        )
+    else:
+        # torch >= 2.7, or torch absent / unparseable (nothing to lose by keeping it on).
+        os.environ["ULTRALYTICS_SAFE_LOAD"] = "1"
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent.parent
 PROJECT_ROOT = BACKEND_DIR.parent

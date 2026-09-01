@@ -7,6 +7,12 @@
 #       --extra-index-url https://download.pytorch.org/whl/cpu
 -r requirements.txt
 
+# torch >= 2.7 is required: ultralytics 8.4.102's restricted-load allow-list
+# (ULTRALYTICS_SAFE_LOAD, set in app/core/config.py) passes (class, "name")
+# tuples to torch.serialization.add_safe_globals, a form only accepted since
+# 2.7. On older torch every real-checkpoint load fails with
+# "'tuple' object has no attribute '__module__'". 0.22.1 is the torchvision
+# pair for 2.7.1.
 --extra-index-url https://download.pytorch.org/whl/cpu
-torch==2.5.1+cpu
-torchvision==0.20.1+cpu
+torch==2.7.1+cpu
+torchvision==0.22.1+cpu
