@@ -21,7 +21,7 @@ function DeleteDatasetPanel({ dataset, onCancel }: { dataset: Dataset; onCancel:
 
   return (
     <div className="p-8">
-      <p className="text-xs font-bold uppercase tracking-widest text-accent">Delete this dataset?</p>
+      <p className="text-xs font-bold uppercase tracking-widest text-accent-ink">Delete this dataset?</p>
       <p className="mt-2 text-xs text-ink/60">
         Permanently deletes <span className="font-bold text-ink">{dataset.name}</span> and every image,
         video, and annotation inside it.
@@ -30,19 +30,19 @@ function DeleteDatasetPanel({ dataset, onCancel }: { dataset: Dataset; onCancel:
         <button
           onClick={() => deleteMutation.mutate()}
           disabled={deleteMutation.isPending}
-          className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:border-orange hover:bg-orange disabled:opacity-40"
+          className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:border-orange hover:bg-orange hover:text-ink disabled:opacity-40"
         >
           {deleteMutation.isPending ? "Deleting…" : "Delete permanently"}
         </button>
         <button
           onClick={onCancel}
-          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
         >
           Cancel
         </button>
       </div>
       {deleteMutation.isError && (
-        <p className="mt-2 text-xs text-accent">{(deleteMutation.error as Error).message}</p>
+        <p className="mt-2 text-xs text-accent-ink">{(deleteMutation.error as Error).message}</p>
       )}
     </div>
   );
@@ -65,10 +65,10 @@ function DatasetCard({ dataset }: { dataset: Dataset }) {
   }
 
   return (
-    <div className="group relative border-b-2 border-r-2 border-ink p-8 transition-colors duration-150 hover:bg-orange hover:text-paper">
+    <div className="group relative border-b-2 border-r-2 border-ink p-8 transition-colors duration-150 hover:bg-orange hover:text-ink">
       <Link to={`/projects/${dataset.project_id}/datasets/${dataset.id}/images`} className="block pr-16">
         <p className="text-2xl font-bold uppercase tracking-tight">{dataset.name}</p>
-        <p className="mt-2 tabular text-xs uppercase tracking-widest text-ink/50 group-hover:text-paper/60">
+        <p className="mt-2 tabular text-xs uppercase tracking-widest text-ink/60 group-hover:text-paper/80">
           {stats ? `${stats.total_images} images · ${stats.total_videos} videos` : "…"}
         </p>
       </Link>
@@ -119,7 +119,7 @@ function FileImportSection({ projectId }: { projectId: string }) {
   return (
     <div className="max-w-xl flex-1 border-2 border-ink p-6">
       <p className="mb-1 text-sm font-bold uppercase tracking-tight">Import from a file</p>
-      <p className="mb-4 text-xs text-ink/50">
+      <p className="mb-4 text-xs text-ink/60">
         COCO or CVAT-XML — the two formats CVAT's own UI exports. Round-trips with CVAT: export a task
         there as "COCO 1.0" or "CVAT 1.1", import that zip here; export a version from this app in
         either format (on the Export page) to bring it back into CVAT.
@@ -161,14 +161,14 @@ function FileImportSection({ projectId }: { projectId: string }) {
           {file ? (
             <>
               <span className="text-sm font-bold">{file.name}</span>
-              <span className="text-[10px] uppercase tracking-widest text-ink/50">
+              <span className="text-[10px] uppercase tracking-widest text-ink/60">
                 Click or drop to replace
               </span>
             </>
           ) : (
             <>
               <span className="text-sm font-bold uppercase tracking-wide">Drop a .zip file here</span>
-              <span className="text-[10px] uppercase tracking-widest text-ink/50">or click to browse</span>
+              <span className="text-[10px] uppercase tracking-widest text-ink/60">or click to browse</span>
             </>
           )}
         </button>
@@ -176,18 +176,19 @@ function FileImportSection({ projectId }: { projectId: string }) {
         <input
           value={datasetName}
           onChange={(e) => setDatasetName(e.target.value)}
+          aria-label="DATASET NAME (optional)"
           placeholder="DATASET NAME (optional)"
           className="w-full border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
         />
         <button
           onClick={() => importMutation.mutate()}
           disabled={!file || importMutation.isPending}
-          className="w-full border-2 border-ink bg-ink py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+          className="w-full border-2 border-ink bg-ink py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
         >
           {importMutation.isPending ? "Importing…" : "Import"}
         </button>
         {importMutation.isError && (
-          <p className="text-xs text-accent">{(importMutation.error as Error).message}</p>
+          <p className="text-xs text-accent-ink">{(importMutation.error as Error).message}</p>
         )}
       </div>
     </div>
@@ -234,13 +235,14 @@ export function DatasetsPage() {
           ref={nameInputRef}
           value={name}
           onChange={(e) => setName(e.target.value)}
+          aria-label="NEW DATASET NAME"
           placeholder="NEW DATASET NAME"
-          className="flex-1 bg-paper px-4 py-3 text-sm font-semibold uppercase tracking-wide outline-none placeholder:text-ink/30 focus:bg-muted"
+          className="flex-1 bg-paper px-4 py-3 text-sm font-semibold uppercase tracking-wide outline-none placeholder:text-ink/50 focus:bg-muted"
         />
         <button
           type="submit"
           disabled={!name.trim() || createMutation.isPending}
-          className="border-l-2 border-ink bg-ink px-6 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+          className="border-l-2 border-ink bg-ink px-6 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
         >
           {createMutation.isPending ? "Creating…" : "Create"}
         </button>
@@ -272,13 +274,13 @@ export function DatasetsPage() {
           >
             <button
               onClick={() => nameInputRef.current?.focus()}
-              className="border-2 border-ink bg-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange"
+              className="border-2 border-ink bg-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink"
             >
               Create a dataset
             </button>
             <button
               onClick={() => roboflowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })}
-              className="border-2 border-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+              className="border-2 border-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
             >
               Import from Roboflow
             </button>

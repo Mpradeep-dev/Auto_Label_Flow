@@ -10,7 +10,7 @@ const STATUS_STYLE: Record<string, string> = {
   RUNNING: "bg-ink text-paper",
   COMPLETED: "bg-ink text-paper",
   FAILED: "bg-accent text-paper",
-  CANCELLED: "bg-muted text-ink/50",
+  CANCELLED: "bg-muted text-ink/60",
 };
 
 // Converts a finished/history job row into the same shape the live SSE
@@ -78,7 +78,7 @@ function HistorySection({
 
   return (
     <div className="mt-16 max-w-3xl">
-      <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/50">History</p>
+      <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/60">History</p>
       <div className="border-t-2 border-ink">
         {jobs.map((j) => {
           const dataset = datasets.find((d) => d.id === j.dataset_id);
@@ -91,11 +91,11 @@ function HistorySection({
                 j.id === activeJobId ? "bg-muted" : ""
               }`}
             >
-              <button onClick={() => onSelect(j)} className="flex-1 text-left hover:text-orange">
+              <button onClick={() => onSelect(j)} className="flex-1 text-left hover:text-ink">
                 <span className="text-xs font-semibold">
                   {dataset?.name ?? "Unknown dataset"} · {model?.name ?? "Unknown model"}
                 </span>
-                <span className="tabular ml-2 text-[10px] text-ink/50">
+                <span className="tabular ml-2 text-[10px] text-ink/60">
                   {j.processed_images}/{j.total_images} images · {j.total_predictions} predictions ·{" "}
                   {new Date(j.created_at).toLocaleString()}
                 </span>
@@ -107,7 +107,7 @@ function HistorySection({
                 <button
                   onClick={() => cancelMutation.mutate(j.id)}
                   disabled={cancelMutation.isPending}
-                  className="border border-ink/30 px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:border-orange hover:text-orange disabled:opacity-40"
+                  className="border border-ink/30 px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:border-orange hover:text-ink disabled:opacity-40"
                 >
                   Cancel
                 </button>
@@ -276,7 +276,7 @@ export function AutoAnnotationPage() {
 
       <div className="max-w-2xl space-y-6">
         <div>
-          <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/50">Dataset</label>
+          <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/60">Dataset</label>
           <select
             value={datasetId}
             onChange={(e) => setDatasetId(e.target.value)}
@@ -292,7 +292,7 @@ export function AutoAnnotationPage() {
         </div>
 
         <div>
-          <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/50">Model</label>
+          <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/60">Model</label>
           <select
             value={modelId}
             onChange={(e) => setModelId(e.target.value)}
@@ -306,7 +306,7 @@ export function AutoAnnotationPage() {
             ))}
           </select>
           {detectorModels.length === 0 && (
-            <p className="mt-2 text-xs text-ink/50">
+            <p className="mt-2 text-xs text-ink/60">
               No detector registered yet.{" "}
               <Link to={`/projects/${projectId}/models`} className="underline">
                 Register one
@@ -315,7 +315,7 @@ export function AutoAnnotationPage() {
             </p>
           )}
           {blockedByEmptyClasses && (
-            <p className="mt-2 text-xs text-accent">
+            <p className="mt-2 text-xs text-accent-ink">
               This project has no classes defined yet, so this open-vocabulary model has nothing to
               detect. Add classes to the project before running it.
             </p>
@@ -323,7 +323,7 @@ export function AutoAnnotationPage() {
         </div>
 
         <div>
-          <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/50">
+          <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/60">
             Confidence floor: <span className="tabular">{conf.toFixed(2)}</span>
           </label>
           <input
@@ -335,7 +335,7 @@ export function AutoAnnotationPage() {
             onChange={(e) => setConf(parseFloat(e.target.value))}
             className="w-full accent-accent"
           />
-          <p className="mt-1 text-[10px] text-ink/40">
+          <p className="mt-1 text-[10px] text-ink/60">
             Kept low by default — low-confidence detections are review candidates, not noise. See
             the documented foot/cone confusion: the known false positive scores well below a
             typical 0.5+ cutoff.
@@ -345,7 +345,7 @@ export function AutoAnnotationPage() {
         <button
           onClick={run}
           disabled={!datasetId || !modelId || submitting || running || blockedByEmptyClasses}
-          className="w-full border-2 border-ink bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+          className="w-full border-2 border-ink bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
         >
           {submitting
             ? "Starting…"
@@ -353,7 +353,7 @@ export function AutoAnnotationPage() {
               ? `Processing… ${progress?.current} / ${progress?.total}`
               : "Run auto-annotation"}
         </button>
-        {submitError && <p className="text-xs text-accent">{submitError}</p>}
+        {submitError && <p className="text-xs text-accent-ink">{submitError}</p>}
 
         {progress && (
           <div>
@@ -376,11 +376,11 @@ export function AutoAnnotationPage() {
                 </>
               )}
             </p>
-            {progress.error && <p className="mt-1 text-xs text-accent">{progress.error}</p>}
+            {progress.error && <p className="mt-1 text-xs text-accent-ink">{progress.error}</p>}
           </div>
         )}
         {jobId && !finished && (
-          <p className="text-[10px] uppercase tracking-widest text-ink/30">
+          <p className="text-[10px] uppercase tracking-widest text-ink/50">
             Job <span className="tabular">{jobId}</span> runs in the background — this page can be
             left safely.
           </p>

@@ -133,6 +133,7 @@ export function RoboflowImportSection({ projectId }: { projectId: string }) {
         <input
           value={datasetName}
           onChange={(e) => setDatasetName(e.target.value)}
+          aria-label="DATASET NAME (optional)"
           placeholder="DATASET NAME (optional)"
           className="w-full border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
         />
@@ -140,12 +141,12 @@ export function RoboflowImportSection({ projectId }: { projectId: string }) {
         <button
           onClick={() => importMutation.mutate()}
           disabled={!workspace || !project || (!usingRaw && version === "") || running}
-          className="w-full border-2 border-ink bg-ink py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+          className="w-full border-2 border-ink bg-ink py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
         >
           {running ? `Importing… ${job?.processed_items ?? 0} / ${job?.total_items ?? 0}` : "Import"}
         </button>
         {importMutation.isError && (
-          <p className="text-xs text-accent">{(importMutation.error as Error).message}</p>
+          <p className="text-xs text-accent-ink">{(importMutation.error as Error).message}</p>
         )}
       </div>
 

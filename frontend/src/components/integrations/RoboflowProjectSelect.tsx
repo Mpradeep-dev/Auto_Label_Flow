@@ -29,7 +29,7 @@ export function RoboflowProjectSelect({
 
   if (!connected) {
     return (
-      <p className="text-xs text-ink/50">
+      <p className="text-xs text-ink/60">
         Roboflow isn't connected yet.{" "}
         <Link to="/settings" className="underline">
           Connect it in Settings
@@ -59,9 +59,9 @@ export function RoboflowProjectSelect({
           </option>
         ))}
       </select>
-      {projectsQuery.isLoading && <p className="mt-1 text-[10px] text-ink/40">Loading projects…</p>}
+      {projectsQuery.isLoading && <p className="mt-1 text-[10px] text-ink/60">Loading projects…</p>}
       {projects.length === 0 && !projectsQuery.isLoading && (
-        <p className="mt-1 text-[10px] text-ink/40">No projects found for this Roboflow account.</p>
+        <p className="mt-1 text-[10px] text-ink/60">No projects found for this Roboflow account.</p>
       )}
     </div>
   );

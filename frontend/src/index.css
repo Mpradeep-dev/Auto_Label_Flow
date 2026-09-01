@@ -12,6 +12,33 @@
   ::selection {
     @apply bg-accent text-paper;
   }
+
+  /* One visible focus indicator for every interactive element. Components
+     replace input outlines with a `focus:border-accent` colour swap, which
+     is a weak signal on its own and absent entirely on buttons/links — this
+     is the backstop. A 2px offset `ink` outline reads in the Swiss system
+     without competing with `accent`. `:focus-visible` so it only shows for
+     keyboard/AT users, not on every mouse click. */
+  :where(a, button, input, textarea, select, summary, [tabindex]):focus-visible {
+    outline: 2px solid theme(colors.ink);
+    outline-offset: 2px;
+  }
+}
+
+/* DESIGN.md: "Respect prefers-reduced-motion." Nothing in the app honoured
+   it before. This collapses every CSS transition/animation (colour
+   inversions, skeleton pulse, sidebar width, chevron rotation) to instant.
+   The two JS-driven motion pieces — the landing Ballpit and its former
+   custom cursor — are guarded separately in their components. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 
 @layer utilities {

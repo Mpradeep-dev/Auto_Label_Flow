@@ -23,7 +23,7 @@ export function ShortcutHelp({ onClose }: { onClose: () => void }) {
         </ul>
         <button
           onClick={onClose}
-          className="mt-4 w-full border-2 border-ink py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+          className="mt-4 w-full border-2 border-ink py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
         >
           Close
         </button>

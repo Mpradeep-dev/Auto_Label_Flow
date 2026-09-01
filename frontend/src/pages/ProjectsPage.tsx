@@ -21,7 +21,7 @@ function RenameProjectPanel({ project, onCancel }: { project: Project; onCancel:
 
   return (
     <div className="p-8">
-      <p className="text-xs font-bold uppercase tracking-widest text-ink/50">Rename project</p>
+      <p className="text-xs font-bold uppercase tracking-widest text-ink/60">Rename project</p>
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
@@ -31,6 +31,7 @@ function RenameProjectPanel({ project, onCancel }: { project: Project; onCancel:
       <textarea
         value={description}
         onChange={(e) => setDescription(e.target.value)}
+        aria-label="Description (optional)"
         placeholder="Description (optional)"
         rows={2}
         className="mt-2 w-full border border-ink/30 bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
@@ -39,13 +40,13 @@ function RenameProjectPanel({ project, onCancel }: { project: Project; onCancel:
         <button
           onClick={() => renameMutation.mutate()}
           disabled={!name.trim() || renameMutation.isPending}
-          className="border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+          className="border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
         >
           {renameMutation.isPending ? "Saving…" : "Save"}
         </button>
         <button
           onClick={onCancel}
-          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
         >
           Cancel
         </button>
@@ -70,7 +71,7 @@ function DeleteProjectPanel({ project, onCancel }: { project: Project; onCancel:
 
   return (
     <div className="p-8">
-      <p className="text-xs font-bold uppercase tracking-widest text-accent">Delete this project?</p>
+      <p className="text-xs font-bold uppercase tracking-widest text-accent-ink">Delete this project?</p>
       <p className="mt-2 text-xs text-ink/60">
         Permanently deletes every dataset, image, annotation, and version inside it. Type{" "}
         <span className="font-bold text-ink">{project.name}</span> to confirm.
@@ -78,6 +79,7 @@ function DeleteProjectPanel({ project, onCancel }: { project: Project; onCancel:
       <input
         value={confirmText}
         onChange={(e) => setConfirmText(e.target.value)}
+        aria-label={`Type "${project.name}" to confirm deletion`}
         placeholder={project.name}
         autoFocus
         className="mt-3 w-full border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
@@ -86,13 +88,13 @@ function DeleteProjectPanel({ project, onCancel }: { project: Project; onCancel:
         <button
           onClick={() => deleteMutation.mutate()}
           disabled={!matches || deleteMutation.isPending}
-          className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:border-orange hover:bg-orange disabled:opacity-40"
+          className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:border-orange hover:bg-orange hover:text-ink disabled:opacity-40"
         >
           {deleteMutation.isPending ? "Deleting…" : "Delete permanently"}
         </button>
         <button
           onClick={onCancel}
-          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
         >
           Cancel
         </button>
@@ -115,24 +117,24 @@ function ProjectEditMenu({
 }) {
   return (
     <div className="p-8">
-      <p className="mb-4 text-xs font-bold uppercase tracking-widest text-ink/50">Edit project</p>
+      <p className="mb-4 text-xs font-bold uppercase tracking-widest text-ink/60">Edit project</p>
       <div className="flex flex-col gap-2">
         <button
           onClick={onRename}
-          className="border-2 border-ink px-4 py-2 text-left text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+          className="border-2 border-ink px-4 py-2 text-left text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
         >
           Rename / edit description
         </button>
         <button
           onClick={onDelete}
-          className="border-2 border-ink/30 px-4 py-2 text-left text-xs font-bold uppercase tracking-widest text-accent hover:border-orange"
+          className="border-2 border-ink/30 px-4 py-2 text-left text-xs font-bold uppercase tracking-widest text-accent-ink hover:border-orange"
         >
           Delete project
         </button>
       </div>
       <button
         onClick={onClose}
-        className="mt-3 text-[10px] font-bold uppercase tracking-widest text-ink/50 hover:text-ink"
+        className="mt-3 text-[10px] font-bold uppercase tracking-widest text-ink/60 hover:text-ink"
       >
         Close
       </button>
@@ -172,10 +174,10 @@ function ProjectCard({ project }: { project: Project }) {
   }
 
   return (
-    <div className="group relative border-b-2 border-r-2 border-ink transition-colors duration-150 hover:bg-orange hover:text-paper">
+    <div className="group relative border-b-2 border-r-2 border-ink transition-colors duration-150 hover:bg-orange hover:text-ink">
       <Link to={`/projects/${project.id}`} className="block p-8">
         <p className="text-2xl font-bold uppercase tracking-tight">{project.name}</p>
-        <p className="mt-2 text-xs uppercase tracking-widest text-ink/50 group-hover:text-paper/60">
+        <p className="mt-2 text-xs uppercase tracking-widest text-ink/60 group-hover:text-paper/80">
           {project.class_config.length > 0
             ? project.class_config.map((c) => c.name).join(" · ")
             : "no model registered yet"}
@@ -224,27 +226,28 @@ export function ProjectsPage() {
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
+          aria-label="NEW PROJECT NAME"
           placeholder="NEW PROJECT NAME"
-          className="flex-1 bg-paper px-4 py-3 text-sm font-semibold uppercase tracking-wide outline-none placeholder:text-ink/30 focus:bg-muted"
+          className="flex-1 bg-paper px-4 py-3 text-sm font-semibold uppercase tracking-wide outline-none placeholder:text-ink/50 focus:bg-muted"
         />
         <button
           type="submit"
           disabled={!name.trim() || createMutation.isPending}
-          className="border-l-2 border-ink bg-ink px-6 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+          className="border-l-2 border-ink bg-ink px-6 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
         >
           {createMutation.isPending ? "Creating…" : "Create"}
         </button>
       </form>
       {createMutation.isError && <FieldError error={createMutation.error} />}
 
-      {projectsQuery.isLoading && <p className="text-sm text-ink/50">Loading…</p>}
+      {projectsQuery.isLoading && <p className="text-sm text-ink/60">Loading…</p>}
 
       <div className="grid max-w-5xl grid-cols-1 gap-0 border-t-2 border-ink sm:grid-cols-2">
         {(projectsQuery.data ?? []).map((project) => (
           <ProjectCard key={project.id} project={project} />
         ))}
         {projectsQuery.data?.length === 0 && (
-          <p className="col-span-2 py-8 text-sm text-ink/50">No projects yet — create one above.</p>
+          <p className="col-span-2 py-8 text-sm text-ink/60">No projects yet — create one above.</p>
         )}
       </div>
     </div>

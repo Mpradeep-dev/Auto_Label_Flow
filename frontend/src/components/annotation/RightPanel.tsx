@@ -34,20 +34,20 @@ function DeleteImageSection({ onDeleteImage, deletingImage }: { onDeleteImage: (
   if (confirming) {
     return (
       <div className="mt-6 border-2 border-accent p-3">
-        <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-accent">
+        <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-accent-ink">
           Delete this image and its annotations?
         </p>
         <div className="flex gap-2">
           <button
             onClick={onDeleteImage}
             disabled={deletingImage}
-            className="flex-1 border-2 border-accent bg-accent py-1.5 text-[10px] font-bold uppercase tracking-widest text-paper hover:border-orange hover:bg-orange disabled:opacity-40"
+            className="flex-1 border-2 border-accent bg-accent py-1.5 text-[10px] font-bold uppercase tracking-widest text-paper hover:border-orange hover:bg-orange hover:text-ink disabled:opacity-40"
           >
             {deletingImage ? "Deleting…" : "Delete permanently"}
           </button>
           <button
             onClick={() => setConfirming(false)}
-            className="border-2 border-ink/30 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+            className="border-2 border-ink/30 px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
           >
             Cancel
           </button>
@@ -59,7 +59,7 @@ function DeleteImageSection({ onDeleteImage, deletingImage }: { onDeleteImage: (
   return (
     <button
       onClick={() => setConfirming(true)}
-      className="mt-6 border-2 border-ink/20 py-2 text-[10px] font-bold uppercase tracking-widest text-ink/50 transition-colors duration-150 hover:border-orange hover:text-orange"
+      className="mt-6 border-2 border-ink/20 py-2 text-[10px] font-bold uppercase tracking-widest text-ink/60 transition-colors duration-150 hover:border-orange hover:text-ink"
     >
       Delete image
     </button>
@@ -110,7 +110,7 @@ function ClassPicker({
     <div className={`mb-6 border-b-2 pb-6 ${pendingShape ? "border-[#FFB000]" : "border-ink"}`}>
       <p
         className={`mb-2 text-[10px] font-bold uppercase tracking-widest ${
-          pendingShape ? "text-[#FFB000]" : "text-ink/50"
+          pendingShape ? "text-[#FFB000]" : "text-ink/60"
         }`}
       >
         {pendingShape ? "New shape — pick a class" : "Drawing as — next shape uses this class"}
@@ -132,7 +132,7 @@ function ClassPicker({
           </button>
         ))}
         {classEntries.length === 0 && (
-          <p className="text-xs text-ink/50">
+          <p className="text-xs text-ink/60">
             {pendingShape ? "No classes yet — add one below to classify this box." : "No classes yet — add one below to start drawing."}
           </p>
         )}
@@ -140,7 +140,7 @@ function ClassPicker({
       {pendingShape && (
         <button
           onClick={onCancelPending}
-          className="mt-2 text-[10px] font-bold uppercase tracking-widest text-ink/50 underline decoration-1 underline-offset-2 hover:text-orange"
+          className="mt-2 text-[10px] font-bold uppercase tracking-widest text-ink/60 underline decoration-1 underline-offset-2 hover:text-ink"
         >
           Cancel — discard this box
         </button>
@@ -156,6 +156,7 @@ function ClassPicker({
               if (e.key === "Enter") submit();
               if (e.key === "Escape") setAdding(false);
             }}
+            aria-label="NEW CLASS NAME"
             placeholder="NEW CLASS NAME"
             className="min-w-0 flex-1 border-2 border-ink bg-paper px-2 py-1 text-xs outline-none focus:border-accent"
           />
@@ -170,7 +171,7 @@ function ClassPicker({
       ) : (
         <button
           onClick={() => setAdding(true)}
-          className="mt-2 text-[10px] font-bold uppercase tracking-widest text-ink/50 underline decoration-1 underline-offset-2 hover:text-orange"
+          className="mt-2 text-[10px] font-bold uppercase tracking-widest text-ink/60 underline decoration-1 underline-offset-2 hover:text-ink"
         >
           + Add new class
         </button>
@@ -200,7 +201,7 @@ function ClassCounts({ annotations, classEntries }: { annotations: Annotation[];
 
   return (
     <div className="mb-6 border-b-2 border-ink pb-6">
-      <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/50">
+      <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/60">
         In this image — {annotations.length} box{annotations.length === 1 ? "" : "es"}
       </p>
       <div className="flex flex-wrap gap-1.5">
@@ -216,7 +217,7 @@ function ClassCounts({ annotations, classEntries }: { annotations: Annotation[];
                 style={{ backgroundColor: classColor(colorIndex >= 0 ? colorIndex : classId) }}
               />
               {name}
-              <span className="tabular text-ink/40">{count}</span>
+              <span className="tabular text-ink/60">{count}</span>
             </span>
           );
         })}
@@ -230,7 +231,7 @@ const SOURCE_LABEL: Record<string, string> = { AUTO: "Auto", HUMAN: "Human", COR
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-center justify-between border-b border-ink/10 py-2">
-      <span className="text-[10px] font-bold uppercase tracking-widest text-ink/50">{label}</span>
+      <span className="text-[10px] font-bold uppercase tracking-widest text-ink/60">{label}</span>
       {children}
     </div>
   );
@@ -259,7 +260,7 @@ function CollapseTab({ collapsed, onToggle }: { collapsed: boolean; onToggle: ()
     <button
       onClick={onToggle}
       aria-label={collapsed ? "Expand annotation panel" : "Collapse annotation panel"}
-      className="flex h-8 w-8 shrink-0 items-center justify-center self-end border-b-2 border-l-2 border-ink text-xs font-bold hover:bg-orange hover:text-paper"
+      className="flex h-8 w-8 shrink-0 items-center justify-center self-end border-b-2 border-l-2 border-ink text-xs font-bold hover:bg-orange hover:text-ink"
     >
       {collapsed ? "‹" : "›"}
     </button>
@@ -310,7 +311,7 @@ export function RightPanel({
             onCancelPending={onCancelPending}
           />
           <ClassCounts annotations={annotations} classEntries={classEntries} />
-          <p className="text-xs font-bold uppercase tracking-widest text-ink/40">
+          <p className="text-xs font-bold uppercase tracking-widest text-ink/60">
             No annotation selected
           </p>
           <DeleteImageSection onDeleteImage={onDeleteImage} deletingImage={deletingImage} />
@@ -409,25 +410,25 @@ export function RightPanel({
           <div className="divide-y divide-accent/20">
             {flags.map((flag) => (
               <div key={flag.id} className="p-3">
-                <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-accent">
+                <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-accent-ink">
                   {flag.flag_type.replace(/_/g, " ")}
                 </p>
                 <p className="mb-2 text-xs text-ink/70">{flag.reason}</p>
                 {flag.resolution ? (
-                  <span className="text-[10px] font-bold uppercase tracking-widest text-ink/40">
+                  <span className="text-[10px] font-bold uppercase tracking-widest text-ink/60">
                     Resolved: {flag.resolution}
                   </span>
                 ) : (
                   <div className="flex gap-2">
                     <button
                       onClick={() => onResolveFlag(flag.id, "CONFIRMED_FP")}
-                      className="border border-ink px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+                      className="border border-ink px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
                     >
                       False positive
                     </button>
                     <button
                       onClick={() => onResolveFlag(flag.id, "CONFIRMED_OK")}
-                      className="border border-ink px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+                      className="border border-ink px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
                     >
                       Looks fine
                     </button>
@@ -442,13 +443,13 @@ export function RightPanel({
       <div className="mt-6 flex flex-col gap-2">
         <button
           onClick={onDuplicate}
-          className="border-2 border-ink py-2 text-xs font-bold uppercase tracking-widest transition-colors duration-150 hover:border-orange hover:bg-orange hover:text-paper"
+          className="border-2 border-ink py-2 text-xs font-bold uppercase tracking-widest transition-colors duration-150 hover:border-orange hover:bg-orange hover:text-ink"
         >
           Duplicate
         </button>
         <button
           onClick={onDelete}
-          className="border-2 border-ink bg-paper py-2 text-xs font-bold uppercase tracking-widest text-ink transition-colors duration-150 hover:bg-orange hover:text-paper hover:border-orange"
+          className="border-2 border-ink bg-paper py-2 text-xs font-bold uppercase tracking-widest text-ink transition-colors duration-150 hover:bg-orange hover:text-ink hover:border-orange"
         >
           Delete
         </button>

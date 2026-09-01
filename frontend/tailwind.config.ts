@@ -14,7 +14,12 @@ export default {
         paper: "#FFFFFF",
         ink: "#000000",
         muted: "#F2F2F2",
-        accent: "#FF3000", // "Swiss red" — reserved exclusively for alerts/flags, never a class colour
+        // "Swiss red" — reserved exclusively for "needs attention" (alert/flag
+        // fills, borders, large/bold labels), never a class colour, never a
+        // hover affordance. `accent.ink` is the same red darkened to clear
+        // WCAG AA (~5.9:1) for small accent-coloured text on paper — use it
+        // for error/validation copy at text-sm and below.
+        accent: { DEFAULT: "#FF3000", ink: "#C42200" },
         orange: "#FF4500",
         plate: "#000000", // the black image-well ground (see DESIGN.md "Ground")
       },

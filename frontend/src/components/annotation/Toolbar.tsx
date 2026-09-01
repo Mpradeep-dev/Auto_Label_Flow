@@ -25,9 +25,9 @@ interface Props {
 }
 
 const STATUS_STYLE: Record<Props["reviewStatus"], string> = {
-  PENDING: "text-ink/40",
+  PENDING: "text-ink/60",
   APPROVED: "text-ink",
-  REJECTED: "text-accent",
+  REJECTED: "text-accent-ink",
 };
 
 function ToolButton({
@@ -55,7 +55,7 @@ function ToolButton({
       } disabled:cursor-not-allowed disabled:opacity-30`}
     >
       {label}
-      {shortcut && <span className="text-[9px] font-normal text-ink/40">{shortcut}</span>}
+      {shortcut && <span className="text-[9px] font-normal text-ink/60">{shortcut}</span>}
     </button>
   );
 }
@@ -66,7 +66,7 @@ export function Toolbar(props: Props) {
     <div className="flex h-11 shrink-0 items-stretch border-t-4 border-ink bg-paper">
       <ToolButton label="← Prev" shortcut="←" onClick={props.onPrev} />
       <ToolButton label="Next →" shortcut="→" onClick={props.onNext} />
-      <div className="flex items-center border-r border-ink/20 px-3 text-xs font-bold text-ink/50 tabular">
+      <div className="flex items-center border-r border-ink/20 px-3 text-xs font-bold text-ink/60 tabular">
         {props.position}
       </div>
       <ToolButton label="Box" shortcut="B" onClick={props.onSelectBboxTool} active={props.activeTool === "bbox"} />
@@ -79,7 +79,7 @@ export function Toolbar(props: Props) {
       <ToolButton label="Delete" shortcut="D" onClick={props.onDeleteSelected} disabled={!props.hasSelection} />
       <div className="flex-1" />
       {error ? (
-        <div className="flex items-center border-r border-ink/20 px-3 text-xs font-bold uppercase tracking-widest text-accent">
+        <div className="flex items-center border-r border-ink/20 px-3 text-xs font-bold uppercase tracking-widest text-accent-ink">
           {error}
         </div>
       ) : (
@@ -101,9 +101,9 @@ export function Toolbar(props: Props) {
       <button
         onClick={props.onApprove}
         disabled={props.approving}
-        className="flex h-full items-center gap-1.5 bg-ink px-4 text-xs font-bold uppercase tracking-widest text-paper transition-colors duration-150 hover:bg-orange disabled:cursor-not-allowed disabled:opacity-60"
+        className="flex h-full items-center gap-1.5 bg-ink px-4 text-xs font-bold uppercase tracking-widest text-paper transition-colors duration-150 hover:bg-orange hover:text-ink disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {props.approving ? "Approving…" : "Approve"} <span className="text-[9px] font-normal text-paper/50">Space</span>
+        {props.approving ? "Approving…" : "Approve"} <span className="text-[9px] font-normal text-paper/70">Space</span>
       </button>
     </div>
   );

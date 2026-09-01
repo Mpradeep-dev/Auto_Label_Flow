@@ -11,13 +11,13 @@ const STATUS_STYLE: Record<string, string> = {
   RUNNING: "bg-ink text-paper",
   COMPLETED: "bg-ink text-paper",
   FAILED: "bg-accent text-paper",
-  CANCELLED: "bg-muted text-ink/50",
+  CANCELLED: "bg-muted text-ink/60",
 };
 
 function MetricCell({ label, value }: { label: string; value: number | null | undefined }) {
   return (
     <div>
-      <p className="text-[9px] font-bold uppercase tracking-widest text-ink/40">{label}</p>
+      <p className="text-[9px] font-bold uppercase tracking-widest text-ink/60">{label}</p>
       <p className="tabular text-lg font-bold">{value != null ? value.toFixed(3) : "—"}</p>
     </div>
   );
@@ -53,7 +53,7 @@ function JobDetail({ job }: { job: TrainingJob }) {
     <div className="border-2 border-ink p-6">
       <div className="mb-4 flex items-center justify-between">
         <div>
-          <p className="text-sm font-bold uppercase tracking-widest text-ink/50">
+          <p className="text-sm font-bold uppercase tracking-widest text-ink/60">
             {current.provider === "LOCAL"
               ? `LOCAL · device ${current.device}`
               : `KAGGLE · ${current.enable_gpu ? "GPU" : "CPU only"}`}
@@ -73,7 +73,7 @@ function JobDetail({ job }: { job: TrainingJob }) {
               href={`https://www.kaggle.com/code/${current.kaggle_kernel_ref}`}
               target="_blank"
               rel="noopener noreferrer"
-              className="border-2 border-ink px-3 py-1 text-xs font-bold uppercase tracking-widest transition-colors duration-150 hover:border-orange hover:bg-orange hover:text-paper"
+              className="border-2 border-ink px-3 py-1 text-xs font-bold uppercase tracking-widest transition-colors duration-150 hover:border-orange hover:bg-orange hover:text-ink"
             >
               Open in Kaggle ↗
             </a>
@@ -95,14 +95,14 @@ function JobDetail({ job }: { job: TrainingJob }) {
         <MetricCell label="Recall" value={current.metrics.recall} />
       </div>
 
-      {current.error && <p className="mb-4 text-xs text-accent">{current.error}</p>}
+      {current.error && <p className="mb-4 text-xs text-accent-ink">{current.error}</p>}
 
       {(current.status === "RUNNING" || current.status === "QUEUED") && (
         <div>
           <button
             onClick={() => cancelMutation.mutate()}
             disabled={cancelMutation.isPending}
-            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-orange hover:text-paper hover:border-orange disabled:opacity-40"
+            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-orange hover:text-ink hover:border-orange disabled:opacity-40"
           >
             {cancelMutation.isPending ? "Cancelling…" : "Cancel"}
           </button>
@@ -111,7 +111,7 @@ function JobDetail({ job }: { job: TrainingJob }) {
               cancelling leaves behind, since a Kaggle run can keep billing
               against your GPU quota after you've clicked away. */}
           {current.provider === "KAGGLE" && (
-            <p className="mt-2 text-[10px] text-ink/40">
+            <p className="mt-2 text-[10px] text-ink/60">
               Kaggle has no remote-stop API — this stops tracking it here, but the kernel may keep
               running on kaggle.com until it finishes on its own.
             </p>
@@ -135,7 +135,7 @@ function JobDetail({ job }: { job: TrainingJob }) {
       {epochsQuery.data && epochsQuery.data.length > 0 && (
         <table className="tabular mt-4 w-full text-xs">
           <thead>
-            <tr className="border-b-2 border-ink text-left text-[10px] uppercase tracking-widest text-ink/50">
+            <tr className="border-b-2 border-ink text-left text-[10px] uppercase tracking-widest text-ink/60">
               <th className="py-1">Epoch</th>
               <th>Box</th>
               <th>Cls</th>
@@ -305,7 +305,7 @@ export function TrainingRunsPage() {
 
       {gpu && (
         <div className="mb-8 max-w-3xl border-2 border-ink p-4">
-          <p className="text-[10px] font-bold uppercase tracking-widest text-ink/50">GPU</p>
+          <p className="text-[10px] font-bold uppercase tracking-widest text-ink/60">GPU</p>
           <p className="tabular text-sm font-semibold">
             {gpu.cuda_available ? gpu.device_name : "No CUDA GPU detected — will train on CPU"}
             {gpu.vram_total_mb && ` · ${(gpu.vram_total_mb / 1024).toFixed(1)} GB VRAM`}
@@ -321,18 +321,18 @@ export function TrainingRunsPage() {
             description="Once these are ready, pick them below and start a run — local (RTX) or on Kaggle."
           >
             <ul className="w-full space-y-1.5 text-xs font-bold uppercase tracking-widest">
-              <li className={hasAnyVersion ? "text-ink" : "text-ink/40"}>
+              <li className={hasAnyVersion ? "text-ink" : "text-ink/60"}>
                 {hasAnyVersion ? "✓" : "○"} Dataset version created{" "}
                 {!hasAnyVersion && (
-                  <Link to={`/projects/${projectId}/export`} className="underline hover:text-orange">
+                  <Link to={`/projects/${projectId}/export`} className="underline hover:text-ink">
                     (create one on Export)
                   </Link>
                 )}
               </li>
-              <li className={detectorModels.length > 0 ? "text-ink" : "text-ink/40"}>
+              <li className={detectorModels.length > 0 ? "text-ink" : "text-ink/60"}>
                 {detectorModels.length > 0 ? "✓" : "○"} Detector model registered{" "}
                 {detectorModels.length === 0 && (
-                  <Link to={`/projects/${projectId}/models`} className="underline hover:text-orange">
+                  <Link to={`/projects/${projectId}/models`} className="underline hover:text-ink">
                     (register one on Models)
                   </Link>
                 )}
@@ -355,12 +355,12 @@ export function TrainingRunsPage() {
               />
               {p}
               {p === "KAGGLE" && !kaggleAvailable && (
-                <span className="text-[9px] font-normal normal-case text-ink/40">
+                <span className="text-[9px] font-normal normal-case text-ink/60">
                   (disabled — no Kaggle credentials configured)
                 </span>
               )}
               {p === "MODAL" && !modalAvailable && (
-                <span className="text-[9px] font-normal normal-case text-ink/40">
+                <span className="text-[9px] font-normal normal-case text-ink/60">
                   (disabled — no Modal credentials configured)
                 </span>
               )}
@@ -370,7 +370,7 @@ export function TrainingRunsPage() {
 
         <div className="grid grid-cols-2 gap-4">
           <div>
-            <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/50">Dataset</label>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/60">Dataset</label>
             <select
               value={datasetId}
               onChange={(e) => {
@@ -388,7 +388,7 @@ export function TrainingRunsPage() {
             </select>
           </div>
           <div>
-            <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/50">
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/60">
               Dataset version
             </label>
             <select
@@ -410,9 +410,9 @@ export function TrainingRunsPage() {
                 a bug, it's "you haven't done that step yet." Say so instead
                 of leaving a silently-empty <select>. */}
             {datasetId && !versionsQuery.isLoading && versionsQuery.data?.length === 0 && (
-              <p className="mt-1 text-[10px] text-ink/50">
+              <p className="mt-1 text-[10px] text-ink/60">
                 No versions yet for this dataset —{" "}
-                <Link to={`/projects/${projectId}/export`} className="underline hover:text-orange">
+                <Link to={`/projects/${projectId}/export`} className="underline hover:text-ink">
                   create one on the Export page
                 </Link>{" "}
                 first (approve some images in Review, then "Create version").
@@ -422,7 +422,7 @@ export function TrainingRunsPage() {
         </div>
 
         <div>
-          <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/50">
+          <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/60">
             Base model
           </label>
           <select
@@ -440,7 +440,7 @@ export function TrainingRunsPage() {
         </div>
 
         <div>
-          <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/50">
+          <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/60">
             New model name (optional)
           </label>
           <input
@@ -455,14 +455,14 @@ export function TrainingRunsPage() {
             maxLength={200}
             className="w-full border-2 border-ink bg-paper px-3 py-2 text-sm font-semibold outline-none focus:border-accent"
           />
-          <p className="mt-1 text-[10px] text-ink/50">
+          <p className="mt-1 text-[10px] text-ink/60">
             Name the model this run will produce — leave blank to keep the default, which is identical across every
             run off the same base model and hard to tell apart on the Models page.
           </p>
         </div>
 
         <div className="grid grid-cols-3 gap-4">
-          <label className="text-[10px] font-bold uppercase tracking-widest text-ink/50">
+          <label className="text-[10px] font-bold uppercase tracking-widest text-ink/60">
             Epochs
             <input
               type="number"
@@ -472,7 +472,7 @@ export function TrainingRunsPage() {
               className="tabular mt-1 w-full border border-ink/30 px-2 py-1 text-sm"
             />
           </label>
-          <label className="text-[10px] font-bold uppercase tracking-widest text-ink/50">
+          <label className="text-[10px] font-bold uppercase tracking-widest text-ink/60">
             Batch size
             <input
               type="number"
@@ -482,7 +482,7 @@ export function TrainingRunsPage() {
               className="tabular mt-1 w-full border border-ink/30 px-2 py-1 text-sm"
             />
           </label>
-          <label className="text-[10px] font-bold uppercase tracking-widest text-ink/50">
+          <label className="text-[10px] font-bold uppercase tracking-widest text-ink/60">
             Image size
             <input
               type="number"
@@ -496,7 +496,7 @@ export function TrainingRunsPage() {
         </div>
 
         <div className="grid grid-cols-2 gap-4">
-          <label className="text-[10px] font-bold uppercase tracking-widest text-ink/50">
+          <label className="text-[10px] font-bold uppercase tracking-widest text-ink/60">
             Learning rate (lr0)
             <input
               type="number"
@@ -505,7 +505,7 @@ export function TrainingRunsPage() {
               value={learningRate}
               onChange={(e) => setLearningRate(e.target.value)}
               placeholder="auto (0.01)"
-              className="tabular mt-1 w-full border border-ink/30 px-2 py-1 text-sm placeholder:normal-case placeholder:text-ink/30"
+              className="tabular mt-1 w-full border border-ink/30 px-2 py-1 text-sm placeholder:normal-case placeholder:text-ink/50"
             />
           </label>
           {/* Device is a LOCAL-only concept (a torch device string for
@@ -517,17 +517,17 @@ export function TrainingRunsPage() {
               quota-free CPU kernel instead matters in a way Device never
               did for this provider. Modal similarly offers GPU type selection. */}
           {provider === "LOCAL" ? (
-            <label className="text-[10px] font-bold uppercase tracking-widest text-ink/50">
+            <label className="text-[10px] font-bold uppercase tracking-widest text-ink/60">
               Device
               <input
                 value={device}
                 onChange={(e) => setDevice(e.target.value)}
                 placeholder="0, 0,1, or cpu"
-                className="tabular mt-1 w-full border border-ink/30 px-2 py-1 text-sm placeholder:normal-case placeholder:text-ink/30"
+                className="tabular mt-1 w-full border border-ink/30 px-2 py-1 text-sm placeholder:normal-case placeholder:text-ink/50"
               />
             </label>
           ) : provider === "MODAL" ? (
-            <label className="text-[10px] font-bold uppercase tracking-widest text-ink/50">
+            <label className="text-[10px] font-bold uppercase tracking-widest text-ink/60">
               Modal GPU
               <div className="mt-1 flex items-center gap-2 border border-ink/30 px-2 py-1.5">
                 <input
@@ -542,7 +542,7 @@ export function TrainingRunsPage() {
               </div>
             </label>
           ) : (
-            <label className="text-[10px] font-bold uppercase tracking-widest text-ink/50">
+            <label className="text-[10px] font-bold uppercase tracking-widest text-ink/60">
               Kaggle GPU
               <div className="mt-1 flex items-center gap-2 border border-ink/30 px-2 py-1.5">
                 <input
@@ -560,13 +560,13 @@ export function TrainingRunsPage() {
         </div>
 
         <div>
-          <label className="mb-1 flex items-baseline justify-between text-[10px] font-bold uppercase tracking-widest text-ink/50">
+          <label className="mb-1 flex items-baseline justify-between text-[10px] font-bold uppercase tracking-widest text-ink/60">
             <span>Advanced YOLO parameters (JSON)</span>
             <a
               href="https://docs.ultralytics.com/modes/train/#train-settings"
               target="_blank"
               rel="noreferrer"
-              className="font-normal normal-case text-ink/40 underline"
+              className="font-normal normal-case text-ink/60 underline"
             >
               Ultralytics train() reference →
             </a>
@@ -577,25 +577,25 @@ export function TrainingRunsPage() {
             placeholder='{"optimizer": "AdamW", "patience": 20, "dropout": 0.1, "mosaic": 0.5}'
             rows={3}
             spellCheck={false}
-            className="tabular w-full border border-ink/30 bg-paper px-2 py-1.5 text-xs outline-none placeholder:text-ink/30 focus:border-accent"
+            className="tabular w-full border border-ink/30 bg-paper px-2 py-1.5 text-xs outline-none placeholder:text-ink/50 focus:border-accent"
           />
-          <p className="mt-1 text-[10px] text-ink/40">
+          <p className="mt-1 text-[10px] text-ink/60">
             Any other <span className="tabular">YOLO.train()</span> keyword — optimizer, patience, dropout,
             augmentation knobs, and everything else not already a field above. Epochs/batch/image
             size/learning rate/device here always win over the same key typed in this box.
           </p>
-          {extraArgsError && <p className="mt-1 text-xs text-accent">{extraArgsError}</p>}
+          {extraArgsError && <p className="mt-1 text-xs text-accent-ink">{extraArgsError}</p>}
         </div>
 
         <button
           onClick={() => createMutation.mutate()}
           disabled={!versionId || !baseModelId || !!extraArgsError || createMutation.isPending}
-          className="w-full border-2 border-ink bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+          className="w-full border-2 border-ink bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
         >
           {createMutation.isPending ? "Starting…" : `Start ${provider === "LOCAL" ? "local" : provider === "KAGGLE" ? "Kaggle" : "Modal"} training`}
         </button>
         {createMutation.isError && (
-          <p className="text-xs text-accent">{(createMutation.error as Error).message}</p>
+          <p className="text-xs text-accent-ink">{(createMutation.error as Error).message}</p>
         )}
       </div>
 
@@ -607,7 +607,7 @@ export function TrainingRunsPage() {
 
       {jobs.length > 1 && (
         <div className="max-w-3xl">
-          <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/50">Previous runs</p>
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/60">Previous runs</p>
           {jobs
             .filter((j) => j.id !== activeJob?.id)
             .map((j) => (

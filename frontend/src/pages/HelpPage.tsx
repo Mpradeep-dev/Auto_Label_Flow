@@ -59,12 +59,12 @@ function StageCard({ index, stage }: { index: number; stage: Stage }) {
       </span>
       <div>
         <p className="text-xl font-bold uppercase tracking-tight">{stage.label}</p>
-        <p className="mt-0.5 text-[10px] font-bold uppercase tracking-widest text-ink/40">
+        <p className="mt-0.5 text-[10px] font-bold uppercase tracking-widest text-ink/60">
           Sidebar → {stage.where}
         </p>
         <p className="mt-2 max-w-2xl text-sm text-ink/70">{stage.detail}</p>
         {stage.needs && (
-          <p className="mt-2 text-xs text-ink/50">
+          <p className="mt-2 text-xs text-ink/60">
             <span className="font-bold uppercase tracking-widest text-ink/70">Needs: </span>
             {stage.needs}
           </p>
@@ -116,27 +116,27 @@ export function HelpPage() {
         <SectionLabel index={2}>Finding your way around the sidebar</SectionLabel>
         <div className="grid max-w-3xl gap-6 sm:grid-cols-2">
           <div className="border-2 border-ink p-5">
-            <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/40">Workflow</p>
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/60">Workflow</p>
             <p className="text-sm text-ink/70">
               Pipeline, Dataset, Images, Videos — the raw material. Where things go in.
             </p>
           </div>
           <div className="border-2 border-ink p-5">
-            <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/40">AI</p>
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/60">AI</p>
             <p className="text-sm text-ink/70">
               Auto Annotation, Review Queue, Models, Training Runs — the actual model work: predict,
               correct, retrain.
             </p>
           </div>
           <div className="border-2 border-ink p-5">
-            <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/40">Output</p>
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/60">Output</p>
             <p className="text-sm text-ink/70">
               Export (versioning) and Project Settings — what leaves the loop, and this project's own
               configuration.
             </p>
           </div>
           <div className="border-2 border-ink p-5">
-            <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/40">
+            <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/60">
               Always visible
             </p>
             <p className="text-sm text-ink/70">
@@ -210,11 +210,11 @@ export function HelpPage() {
         </div>
       </section>
 
-      <p className="mt-16 max-w-2xl text-xs text-ink/40">
+      <p className="mt-16 max-w-2xl text-xs text-ink/60">
         Full technical reference (stack, local dev setup, API layout) lives in the repo's{" "}
         <code className="text-ink/60">README.md</code> and <code className="text-ink/60">docs/WORKFLOW.md</code>.
         Start a walkthrough any time from{" "}
-        <Link to="/projects" className="underline hover:text-orange">
+        <Link to="/projects" className="underline hover:text-ink">
           Projects →
         </Link>
       </p>

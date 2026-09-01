@@ -7,5 +7,5 @@ import { ApiError } from "@/services/api";
 export function FieldError({ error }: { error: unknown }) {
   if (!error) return null;
   const message = error instanceof ApiError ? error.message : (error as Error).message;
-  return <p className="mt-2 text-xs text-accent">{message}</p>;
+  return <p className="mt-2 text-xs text-accent-ink">{message}</p>;
 }
