@@ -56,7 +56,7 @@ function VideoRow({
     <div className="flex items-center justify-between border-b-2 border-ink p-6">
       <div>
         <p className="text-lg font-bold uppercase tracking-tight">{current.original_filename}</p>
-        <p className="tabular mt-1 text-xs uppercase tracking-widest text-ink/50">
+        <p className="tabular mt-1 text-xs uppercase tracking-widest text-ink/60">
           {current.width}×{current.height} · {current.fps?.toFixed(1)} fps ·{" "}
           {current.duration_s?.toFixed(1)}s · {current.total_frames} frames
         </p>
@@ -69,7 +69,7 @@ function VideoRow({
         {current.status === "UPLOADED" && !stillWaiting && (
           <button
             onClick={() => onExtract(current.id)}
-            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
           >
             Extract frames
           </button>
@@ -79,14 +79,14 @@ function VideoRow({
             <button
               onClick={() => onDelete(current.id)}
               disabled={deleting}
-              className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:border-orange hover:bg-orange disabled:opacity-40"
+              className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:border-orange hover:bg-orange hover:text-ink disabled:opacity-40"
             >
               {deleting ? "Removing…" : "Confirm"}
             </button>
             <button
               onClick={() => setConfirmingDelete(false)}
               disabled={deleting}
-              className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+              className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
             >
               Cancel
             </button>
@@ -94,7 +94,7 @@ function VideoRow({
         ) : (
           <button
             onClick={() => setConfirmingDelete(true)}
-            className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest text-ink/60 hover:border-orange hover:text-orange"
+            className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest text-ink/60 hover:border-orange hover:text-ink"
           >
             Remove
           </button>
@@ -266,7 +266,7 @@ export function VideosPage() {
         <h1 className="mb-6 text-5xl font-black uppercase tracking-tightest sm:text-7xl">Videos</h1>
         <div className="flex flex-wrap items-end gap-3">
           <div>
-            <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/50">
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/60">
               Dataset
             </label>
             <select
@@ -282,7 +282,7 @@ export function VideosPage() {
               ))}
             </select>
           </div>
-          <label className="text-[10px] font-bold uppercase tracking-widest text-ink/50">
+          <label className="text-[10px] font-bold uppercase tracking-widest text-ink/60">
             Sample every
             <input
               type="number"
@@ -303,7 +303,7 @@ export function VideosPage() {
           <button
             onClick={() => fileInputRef.current?.click()}
             disabled={uploading || !datasetId}
-            className="border-2 border-ink bg-ink px-6 py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+            className="border-2 border-ink bg-ink px-6 py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
           >
             {uploading ? "Uploading…" : "Upload video"}
           </button>
@@ -322,26 +322,26 @@ export function VideosPage() {
           <button
             onClick={() => folderInputRef.current?.click()}
             disabled={!!folderProgress || !datasetId}
-            className="border-2 border-ink px-6 py-3 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper disabled:opacity-40"
+            className="border-2 border-ink px-6 py-3 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink disabled:opacity-40"
           >
             {folderProgress ? `Uploading ${folderProgress.done}/${folderProgress.total}…` : "Upload folder"}
           </button>
           <button
             onClick={() => extractAllMutation.mutate()}
             disabled={extractAllMutation.isPending || !uploadedCount}
-            className="border-2 border-ink px-6 py-3 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper disabled:opacity-40"
+            className="border-2 border-ink px-6 py-3 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink disabled:opacity-40"
           >
             {extractAllMutation.isPending ? "Extracting…" : `Extract all${uploadedCount ? ` (${uploadedCount})` : ""}`}
           </button>
         </div>
       </div>
 
-      {!datasetId && <p className="text-sm text-ink/50">Select a dataset above to see or upload its videos.</p>}
+      {!datasetId && <p className="text-sm text-ink/60">Select a dataset above to see or upload its videos.</p>}
 
       {(uploadErrors.length > 0 || extractAllError) && (
         <div className="mb-8 max-w-4xl border-2 border-accent bg-accent/5 px-4 py-3 text-xs">
           <div className="flex items-start justify-between gap-4">
-            <p className="font-bold uppercase tracking-widest text-accent">
+            <p className="font-bold uppercase tracking-widest text-accent-ink">
               {uploadErrors.length > 0
                 ? `${uploadErrors.length} file${uploadErrors.length === 1 ? "" : "s"} failed to upload`
                 : "Some videos failed to queue for extraction"}
@@ -351,7 +351,7 @@ export function VideosPage() {
                 setUploadErrors([]);
                 setExtractAllError(null);
               }}
-              className="font-bold uppercase tracking-widest text-ink/40 hover:text-ink"
+              className="font-bold uppercase tracking-widest text-ink/60 hover:text-ink"
             >
               Dismiss
             </button>
@@ -379,7 +379,7 @@ export function VideosPage() {
           />
         ))}
         {videosQuery.data?.length === 0 && (
-          <p className="py-8 text-sm text-ink/50">No videos yet — upload one to get started.</p>
+          <p className="py-8 text-sm text-ink/60">No videos yet — upload one to get started.</p>
         )}
       </div>
     </div>

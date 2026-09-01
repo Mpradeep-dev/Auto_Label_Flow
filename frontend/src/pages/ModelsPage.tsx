@@ -65,7 +65,7 @@ function RegisterModelForm() {
             key={s}
             type="button"
             onClick={() => setSource(s)}
-            className={`flex-1 py-2 ${source === s ? "bg-ink text-paper" : "bg-paper hover:bg-orange hover:text-paper"}`}
+            className={`flex-1 py-2 ${source === s ? "bg-ink text-paper" : "bg-paper hover:bg-orange hover:text-ink"}`}
           >
             {s === "upload" ? "Upload from this computer" : "Download from link"}
           </button>
@@ -75,8 +75,9 @@ function RegisterModelForm() {
         <input
           value={name}
           onChange={(e) => setName(e.target.value)}
+          aria-label="NAME (E.G. detect_v1)"
           placeholder="NAME (E.G. detect_v1)"
-          className="bg-paper px-3 py-3 text-xs font-semibold uppercase tracking-wide outline-none placeholder:text-ink/30 focus:bg-muted"
+          className="bg-paper px-3 py-3 text-xs font-semibold uppercase tracking-wide outline-none placeholder:text-ink/50 focus:bg-muted"
         />
         <select
           value={kind}
@@ -131,12 +132,12 @@ function RegisterModelForm() {
             {file ? (
               <>
                 <span className="text-sm font-bold">{file.name}</span>
-                <span className="text-[10px] uppercase tracking-widest text-ink/50">Click or drop to replace</span>
+                <span className="text-[10px] uppercase tracking-widest text-ink/60">Click or drop to replace</span>
               </>
             ) : (
               <>
                 <span className="text-sm font-bold uppercase tracking-wide">Drop a .pt weights file here</span>
-                <span className="text-[10px] uppercase tracking-widest text-ink/50">
+                <span className="text-[10px] uppercase tracking-widest text-ink/60">
                   or click to browse your computer
                 </span>
               </>
@@ -147,15 +148,16 @@ function RegisterModelForm() {
         <input
           value={url}
           onChange={(e) => setUrl(e.target.value)}
+          aria-label="DIRECT LINK TO .PT FILE (e.g. https://.../detect_v1.pt)"
           placeholder="DIRECT LINK TO .PT FILE (e.g. https://.../detect_v1.pt)"
-          className="w-full border-b-2 border-ink bg-paper px-3 py-3 text-xs font-semibold tracking-wide outline-none placeholder:text-ink/30 focus:bg-muted"
+          className="w-full border-b-2 border-ink bg-paper px-3 py-3 text-xs font-semibold tracking-wide outline-none placeholder:text-ink/50 focus:bg-muted"
         />
       )}
 
       <button
         type="submit"
         disabled={!canSubmit}
-        className="w-full bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+        className="w-full bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
       >
         {registerMutation.isPending
           ? source === "url"
@@ -164,7 +166,7 @@ function RegisterModelForm() {
           : "Register model"}
       </button>
       {registerMutation.isError && (
-        <p className="border-t-2 border-ink bg-muted px-3 py-2 text-xs text-accent">
+        <p className="border-t-2 border-ink bg-muted px-3 py-2 text-xs text-accent-ink">
           {(registerMutation.error as Error).message}
         </p>
       )}
@@ -186,7 +188,7 @@ function RenameModelPanel({ model, onCancel }: { model: MLModel; onCancel: () =>
 
   return (
     <div className="p-8">
-      <p className="text-xs font-bold uppercase tracking-widest text-ink/50">Rename model</p>
+      <p className="text-xs font-bold uppercase tracking-widest text-ink/60">Rename model</p>
       <input
         value={name}
         onChange={(e) => setName(e.target.value)}
@@ -197,19 +199,19 @@ function RenameModelPanel({ model, onCancel }: { model: MLModel; onCancel: () =>
         <button
           onClick={() => renameMutation.mutate()}
           disabled={!name.trim() || renameMutation.isPending}
-          className="border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+          className="border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
         >
           {renameMutation.isPending ? "Saving…" : "Save"}
         </button>
         <button
           onClick={onCancel}
-          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
         >
           Cancel
         </button>
       </div>
       {renameMutation.isError && (
-        <p className="mt-2 text-xs text-accent">
+        <p className="mt-2 text-xs text-accent-ink">
           {renameMutation.error instanceof ApiError ? renameMutation.error.message : "Save failed"}
         </p>
       )}
@@ -229,7 +231,7 @@ function DeleteModelPanel({ model, onCancel }: { model: MLModel; onCancel: () =>
 
   return (
     <div className="p-8">
-      <p className="text-xs font-bold uppercase tracking-widest text-accent">Delete this model?</p>
+      <p className="text-xs font-bold uppercase tracking-widest text-accent-ink">Delete this model?</p>
       <p className="mt-2 text-xs text-ink/60">
         Removes <span className="font-bold text-ink">{model.name}</span> from the registry and deletes its
         weights file. Any project using it as its primary/pose model falls back to none.
@@ -238,19 +240,19 @@ function DeleteModelPanel({ model, onCancel }: { model: MLModel; onCancel: () =>
         <button
           onClick={() => deleteMutation.mutate()}
           disabled={deleteMutation.isPending}
-          className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:border-orange hover:bg-orange disabled:opacity-40"
+          className="border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:border-orange hover:bg-orange hover:text-ink disabled:opacity-40"
         >
           {deleteMutation.isPending ? "Deleting…" : "Delete permanently"}
         </button>
         <button
           onClick={onCancel}
-          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+          className="border-2 border-ink/30 px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
         >
           Cancel
         </button>
       </div>
       {deleteMutation.isError && (
-        <p className="mt-2 text-xs text-accent">
+        <p className="mt-2 text-xs text-accent-ink">
           {deleteMutation.error instanceof ApiError ? deleteMutation.error.message : "Delete failed"}
         </p>
       )}
@@ -292,13 +294,13 @@ function ModelCard({ model }: { model: MLModel }) {
           <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-widest bg-muted">{model.kind}</span>
         </div>
       </div>
-      <p className="tabular text-xs uppercase tracking-widest text-ink/50">
+      <p className="tabular text-xs uppercase tracking-widest text-ink/60">
         {model.is_promptable
           ? "Detects whatever classes the project it runs against is configured with"
           : model.class_config.map((c) => c.name).join(" · ") || "no classes"}
       </p>
       {model.base_model_id && (
-        <p className="mt-1 text-[10px] uppercase tracking-widest text-ink/30">Fine-tuned from a base model</p>
+        <p className="mt-1 text-[10px] uppercase tracking-widest text-ink/50">Fine-tuned from a base model</p>
       )}
       {Object.keys(model.metrics).length > 0 && (
         <div className="mt-4 grid grid-cols-4 gap-2 border-t border-ink/10 pt-3">
@@ -307,7 +309,7 @@ function ModelCard({ model }: { model: MLModel }) {
             .slice(0, 8)
             .map(([key, value]) => (
               <div key={key}>
-                <p className="text-[8px] font-bold uppercase tracking-widest text-ink/40">
+                <p className="text-[8px] font-bold uppercase tracking-widest text-ink/60">
                   {key.replace(/_/g, " ")}
                 </p>
                 <p className="tabular text-sm font-bold">{(value as number).toFixed(3)}</p>
@@ -319,19 +321,19 @@ function ModelCard({ model }: { model: MLModel }) {
         <div className="absolute right-4 top-4 flex gap-1 border border-ink/30 bg-paper p-1">
           <button
             onClick={() => setMode("rename")}
-            className="px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:bg-orange hover:text-paper"
+            className="px-2 py-1 text-[10px] font-bold uppercase tracking-widest hover:bg-orange hover:text-ink"
           >
             Rename
           </button>
           <button
             onClick={() => setMode("delete")}
-            className="px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-accent hover:bg-orange hover:text-paper"
+            className="px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-accent-ink hover:bg-orange hover:text-ink"
           >
             Delete
           </button>
           <button
             onClick={() => setMode("view")}
-            className="px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-ink/50 hover:text-ink"
+            className="px-2 py-1 text-[10px] font-bold uppercase tracking-widest text-ink/60 hover:text-ink"
           >
             Close
           </button>
@@ -339,7 +341,7 @@ function ModelCard({ model }: { model: MLModel }) {
       ) : (
         <button
           onClick={() => setMode("menu")}
-          className="absolute right-4 top-4 border border-ink/30 px-2 py-1 text-[10px] font-bold uppercase tracking-widest opacity-0 hover:border-orange hover:text-orange group-hover:opacity-100"
+          className="absolute right-4 top-4 border border-ink/30 px-2 py-1 text-[10px] font-bold uppercase tracking-widest opacity-0 hover:border-orange hover:text-ink group-hover:opacity-100"
         >
           Edit
         </button>
@@ -381,7 +383,7 @@ export function ModelsPage() {
           >
             <button
               onClick={() => registerFormRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })}
-              className="border-2 border-ink bg-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange"
+              className="border-2 border-ink bg-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink"
             >
               Register a model
             </button>
@@ -389,7 +391,7 @@ export function ModelsPage() {
               href="https://docs.ultralytics.com/models/"
               target="_blank"
               rel="noreferrer"
-              className="border-2 border-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+              className="border-2 border-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
             >
               YOLO model reference →
             </a>

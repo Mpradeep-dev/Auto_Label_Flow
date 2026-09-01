@@ -8,7 +8,7 @@ import { classColor } from "@/config/classColors";
 function FieldError({ error }: { error: unknown }) {
   if (!error) return null;
   const message = error instanceof ApiError ? error.message : (error as Error).message;
-  return <p className="mt-2 text-xs text-accent">{message}</p>;
+  return <p className="mt-2 text-xs text-accent-ink">{message}</p>;
 }
 
 // --- Project identity + class taxonomy + quality packs -------------------
@@ -58,7 +58,7 @@ function ProjectSection({ projectId }: { projectId: string }) {
           {!editing ? (
             <div>
               <p className="text-2xl font-bold uppercase tracking-tight">{project.name}</p>
-              <p className="tabular mt-1 text-xs uppercase tracking-widest text-ink/50">/{project.slug}</p>
+              <p className="tabular mt-1 text-xs uppercase tracking-widest text-ink/60">/{project.slug}</p>
               {project.description && <p className="mt-3 max-w-xl text-sm text-ink/70">{project.description}</p>}
             </div>
           ) : (
@@ -66,12 +66,14 @@ function ProjectSection({ projectId }: { projectId: string }) {
               <input
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                aria-label="PROJECT NAME"
                 placeholder="PROJECT NAME"
                 className="w-full border-2 border-ink bg-paper px-3 py-2 text-sm font-semibold uppercase tracking-wide outline-none focus:border-accent"
               />
               <textarea
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
+                aria-label="Description"
                 placeholder="Description"
                 rows={2}
                 className="w-full border border-ink/30 bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
@@ -85,13 +87,13 @@ function ProjectSection({ projectId }: { projectId: string }) {
                 <button
                   onClick={() => saveMutation.mutate()}
                   disabled={!name.trim() || saveMutation.isPending}
-                  className="border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+                  className="border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
                 >
                   {saveMutation.isPending ? "Saving…" : "Save"}
                 </button>
                 <button
                   onClick={() => setEditing(false)}
-                  className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+                  className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
                 >
                   Cancel
                 </button>
@@ -103,7 +105,7 @@ function ProjectSection({ projectId }: { projectId: string }) {
                   setDescription(project.description ?? "");
                   setEditing(true);
                 }}
-                className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+                className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
               >
                 Edit
               </button>
@@ -112,12 +114,12 @@ function ProjectSection({ projectId }: { projectId: string }) {
         </div>
 
         <div className="border-b-2 border-ink p-6">
-          <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-ink/50">
+          <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-ink/60">
             Class taxonomy — read from the primary detector's own weights, not typed in
           </p>
           <div className="flex flex-wrap gap-2">
             {project.class_config.length === 0 && (
-              <p className="text-sm text-ink/50">No classes yet — register a detector model to seed this.</p>
+              <p className="text-sm text-ink/60">No classes yet — register a detector model to seed this.</p>
             )}
             {project.class_config.map((c) => (
               <span
@@ -126,14 +128,14 @@ function ProjectSection({ projectId }: { projectId: string }) {
               >
                 <span className="h-2.5 w-2.5" style={{ backgroundColor: classColor(c.id) }} />
                 {c.name}
-                <span className="tabular text-ink/40">#{c.id}</span>
+                <span className="tabular text-ink/60">#{c.id}</span>
               </span>
             ))}
           </div>
         </div>
 
         <div className="p-6">
-          <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-ink/50">Quality rule packs</p>
+          <p className="mb-3 text-[10px] font-bold uppercase tracking-widest text-ink/60">Quality rule packs</p>
           <label className="flex max-w-xl items-start gap-3 text-sm">
             <input
               type="checkbox"
@@ -143,7 +145,7 @@ function ProjectSection({ projectId }: { projectId: string }) {
             />
             <span>
               <span className="font-bold uppercase tracking-wide">Anatomical proximity</span>{" "}
-              <span className="tabular text-[10px] uppercase tracking-widest text-ink/40">
+              <span className="tabular text-[10px] uppercase tracking-widest text-ink/60">
                 CONE_NEAR_PLAYER · SUSPICIOUS_CONE
               </span>
               <br />
@@ -171,13 +173,13 @@ export function SettingsPage() {
       </h1>
       <p className="mb-12 max-w-2xl text-sm text-ink/60">
         Looking for Kaggle or Roboflow account connections?{" "}
-        <Link to="/settings" className="font-semibold underline decoration-1 underline-offset-2 hover:text-orange">
+        <Link to="/settings" className="font-semibold underline decoration-1 underline-offset-2 hover:text-ink">
           Those are account-wide, under Settings →
         </Link>{" "}
         Importing a Roboflow project into this project now lives on the{" "}
         <Link
           to={`/projects/${projectId}/datasets`}
-          className="font-semibold underline decoration-1 underline-offset-2 hover:text-orange"
+          className="font-semibold underline decoration-1 underline-offset-2 hover:text-ink"
         >
           Datasets page →
         </Link>

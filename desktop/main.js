@@ -128,6 +128,7 @@ function createWindow(port) {
     minWidth: 960,
     minHeight: 640,
     backgroundColor: "#ffffff",
+    icon: path.join(__dirname, "icon.ico"),
     show: false,
     webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
   });

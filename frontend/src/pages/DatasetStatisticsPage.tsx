@@ -8,9 +8,9 @@ import { Skeleton } from "@/components/layout/Skeleton";
 function BigStat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
     <div className="border-2 border-ink p-6">
-      <p className="text-[10px] font-bold uppercase tracking-widest text-ink/50">{label}</p>
+      <p className="text-[10px] font-bold uppercase tracking-widest text-ink/60">{label}</p>
       <p className="tabular text-4xl font-black">{value}</p>
-      {sub && <p className="tabular mt-1 text-xs text-ink/40">{sub}</p>}
+      {sub && <p className="tabular mt-1 text-xs text-ink/60">{sub}</p>}
     </div>
   );
 }
@@ -21,7 +21,7 @@ function Bar({ label, count, total }: { label: string; count: number; total: num
     <div className="mb-3">
       <div className="mb-1 flex items-center justify-between text-xs">
         <span className="font-bold uppercase tracking-widest">{label}</span>
-        <span className="tabular text-ink/50">{count}</span>
+        <span className="tabular text-ink/60">{count}</span>
       </div>
       <div className="h-2 w-full bg-muted">
         <div className="h-full bg-ink" style={{ width: `${pct}%` }} />
@@ -100,7 +100,7 @@ export function DatasetStatisticsPage() {
                 <Bar key={name} label={name} count={count} total={stats.total_annotations} />
               ))}
               {Object.keys(stats.annotations_by_class).length === 0 && (
-                <p className="text-sm text-ink/40">No annotations yet.</p>
+                <p className="text-sm text-ink/60">No annotations yet.</p>
               )}
             </div>
             <div>
@@ -138,18 +138,18 @@ export function DatasetStatisticsPage() {
           {errorsQuery.data && errorsQuery.data.total_categorized_deletions > 0 && (
             <>
               <SectionLabel index={5}>Error analysis</SectionLabel>
-              <p className="tabular mb-4 text-xs uppercase tracking-widest text-ink/50">
+              <p className="tabular mb-4 text-xs uppercase tracking-widest text-ink/60">
                 {errorsQuery.data.total_categorized_deletions} categorized deletions
               </p>
               <div className="grid grid-cols-1 gap-8 lg:grid-cols-2">
                 <div>
-                  <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/40">By category</p>
+                  <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/60">By category</p>
                   {Object.entries(errorsQuery.data.by_category).map(([cat, count]) => (
                     <Bar key={cat} label={cat} count={count} total={errorsQuery.data!.total_categorized_deletions} />
                   ))}
                 </div>
                 <div>
-                  <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/40">By reason</p>
+                  <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/60">By reason</p>
                   {Object.entries(errorsQuery.data.by_reason).map(([reason, count]) => (
                     <Bar
                       key={reason}

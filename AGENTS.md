@@ -118,6 +118,7 @@ Design system: `frontend/DESIGN.md` (Swiss International — pure black/white/`#
 
 ## Conventions worth knowing before editing
 
+- **Commit messages follow [Conventional Commits](https://www.conventionalcommits.org/).** release-please (`.github/workflows/release-please.yml`) parses `main` history to bump the version and changelog: `feat:` → minor, `fix:` → patch, `feat!:` / `BREAKING CHANGE:` → minor while pre-1.0. `chore/docs/refactor/test/ci/build` don't cut a release. The version lives in `version.txt` + `desktop/package.json` (kept in sync by release-please — don't hand-edit); `desktop/RELEASING.md` has the full flow.
 - When adding a new training or storage backend, implement the `TrainingProvider`/`ObjectStorage` interface and register it — don't add conditionals to callers.
 - When adding a new quality heuristic, add a module under `backend/app/services/quality/rules/` (or `rules/packs/` if it's project-toggleable) that subclasses `QualityRule` and calls `register_rule(...)` — don't touch `analyzer.py` or `registry.py`.
 - Auto-annotation intentionally runs at a low confidence floor (`DEFAULT_CONFIDENCE_FLOOR = 0.20`, well below the measured foot/cone false positive at 0.336) — suspicious detections are meant to be caught by quality flags and review ranking, not filtered out by a hard confidence cutoff before a human sees them. Don't raise this floor to "fix" noisy auto-annotation.

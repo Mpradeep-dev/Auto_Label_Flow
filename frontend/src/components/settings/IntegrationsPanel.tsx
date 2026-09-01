@@ -12,7 +12,7 @@ import type { IntegrationStatus } from "@/types";
 function FieldError({ error }: { error: unknown }) {
   if (!error) return null;
   const message = error instanceof ApiError ? error.message : (error as Error).message;
-  return <p className="mt-2 text-xs text-accent">{message}</p>;
+  return <p className="mt-2 text-xs text-accent-ink">{message}</p>;
 }
 
 function StatusPill({ status }: { status: IntegrationStatus }) {
@@ -58,14 +58,14 @@ function KaggleCard({ status }: { status: IntegrationStatus }) {
 
       {status.connected ? (
         <div className="flex items-center justify-between border-t border-ink/20 pt-4">
-          <p className="tabular text-xs uppercase tracking-widest text-ink/50">
+          <p className="tabular text-xs uppercase tracking-widest text-ink/60">
             {status.identifier}
             {status.verified_at && ` · verified ${new Date(status.verified_at).toLocaleString()}`}
           </p>
           <button
             onClick={() => disconnectMutation.mutate()}
             disabled={disconnectMutation.isPending}
-            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-orange hover:text-paper hover:border-orange disabled:opacity-40"
+            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-orange hover:text-ink hover:border-orange disabled:opacity-40"
           >
             Disconnect
           </button>
@@ -82,6 +82,7 @@ function KaggleCard({ status }: { status: IntegrationStatus }) {
             <input
               value={username}
               onChange={(e) => setUsername(e.target.value)}
+              aria-label="KAGGLE USERNAME"
               placeholder="KAGGLE USERNAME"
               className="min-w-[200px] flex-1 border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
             />
@@ -89,22 +90,23 @@ function KaggleCard({ status }: { status: IntegrationStatus }) {
               value={key}
               onChange={(e) => setKey(e.target.value)}
               type="password"
+              aria-label="API KEY"
               placeholder="API KEY"
               className="min-w-[200px] flex-1 border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
             />
             <button
               type="submit"
               disabled={!username.trim() || !key.trim() || connectMutation.isPending}
-              className="border-2 border-ink bg-ink px-6 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+              className="border-2 border-ink bg-ink px-6 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
             >
               {connectMutation.isPending ? "Verifying…" : "Connect"}
             </button>
           </div>
           <FieldError error={connectMutation.error} />
           {status.last_error && !connectMutation.isError && (
-            <p className="text-xs text-accent">Last attempt failed: {status.last_error}</p>
+            <p className="text-xs text-accent-ink">Last attempt failed: {status.last_error}</p>
           )}
-          <p className="text-xs text-ink/40">
+          <p className="text-xs text-ink/60">
             From your Kaggle account → Settings → API → Create New Token. The key is stored on this server only.
           </p>
         </form>
@@ -144,14 +146,14 @@ function ModalCard({ status }: { status: IntegrationStatus }) {
 
       {status.connected ? (
         <div className="flex items-center justify-between border-t border-ink/20 pt-4">
-          <p className="tabular text-xs uppercase tracking-widest text-ink/50">
+          <p className="tabular text-xs uppercase tracking-widest text-ink/60">
             Token: {status.identifier}
             {status.verified_at && ` · verified ${new Date(status.verified_at).toLocaleString()}`}
           </p>
           <button
             onClick={() => disconnectMutation.mutate()}
             disabled={disconnectMutation.isPending}
-            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-orange hover:text-paper hover:border-orange disabled:opacity-40"
+            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-orange hover:text-ink hover:border-orange disabled:opacity-40"
           >
             Disconnect
           </button>
@@ -168,6 +170,7 @@ function ModalCard({ status }: { status: IntegrationStatus }) {
             <input
               value={tokenId}
               onChange={(e) => setTokenId(e.target.value)}
+              aria-label="TOKEN ID"
               placeholder="TOKEN ID"
               className="min-w-[200px] flex-1 border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
             />
@@ -175,22 +178,23 @@ function ModalCard({ status }: { status: IntegrationStatus }) {
               value={tokenSecret}
               onChange={(e) => setTokenSecret(e.target.value)}
               type="password"
+              aria-label="TOKEN SECRET"
               placeholder="TOKEN SECRET"
               className="min-w-[200px] flex-1 border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
             />
             <button
               type="submit"
               disabled={!tokenId.trim() || !tokenSecret.trim() || connectMutation.isPending}
-              className="border-2 border-ink bg-ink px-6 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+              className="border-2 border-ink bg-ink px-6 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
             >
               {connectMutation.isPending ? "Verifying…" : "Connect"}
             </button>
           </div>
           <FieldError error={connectMutation.error} />
           {status.last_error && !connectMutation.isError && (
-            <p className="text-xs text-accent">Last attempt failed: {status.last_error}</p>
+            <p className="text-xs text-accent-ink">Last attempt failed: {status.last_error}</p>
           )}
-          <p className="text-xs text-ink/40">
+          <p className="text-xs text-ink/60">
             From modal.com/settings → API Tokens → Create new token. The credentials are stored on this server only.
           </p>
         </form>
@@ -231,14 +235,14 @@ function RoboflowCard({ status }: { status: IntegrationStatus }) {
 
       {status.connected ? (
         <div className="flex items-center justify-between border-t border-ink/20 pt-4">
-          <p className="tabular text-xs uppercase tracking-widest text-ink/50">
+          <p className="tabular text-xs uppercase tracking-widest text-ink/60">
             Default workspace: {status.identifier}
             {status.verified_at && ` · verified ${new Date(status.verified_at).toLocaleString()}`}
           </p>
           <button
             onClick={() => disconnectMutation.mutate()}
             disabled={disconnectMutation.isPending}
-            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-orange hover:text-paper hover:border-orange disabled:opacity-40"
+            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-orange hover:text-ink hover:border-orange disabled:opacity-40"
           >
             Disconnect
           </button>
@@ -256,28 +260,30 @@ function RoboflowCard({ status }: { status: IntegrationStatus }) {
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               type="password"
+              aria-label="API KEY"
               placeholder="API KEY"
               className="min-w-[200px] flex-1 border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
             />
             <input
               value={defaultWorkspace}
               onChange={(e) => setDefaultWorkspace(e.target.value)}
+              aria-label="DEFAULT WORKSPACE (optional)"
               placeholder="DEFAULT WORKSPACE (optional)"
               className="min-w-[200px] flex-1 border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
             />
             <button
               type="submit"
               disabled={!apiKey.trim() || connectMutation.isPending}
-              className="border-2 border-ink bg-ink px-6 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+              className="border-2 border-ink bg-ink px-6 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
             >
               {connectMutation.isPending ? "Verifying…" : "Connect"}
             </button>
           </div>
           <FieldError error={connectMutation.error} />
           {status.last_error && !connectMutation.isError && (
-            <p className="text-xs text-accent">Last attempt failed: {status.last_error}</p>
+            <p className="text-xs text-accent-ink">Last attempt failed: {status.last_error}</p>
           )}
-          <p className="text-xs text-ink/40">
+          <p className="text-xs text-ink/60">
             From app.roboflow.com → Settings → Roboflow API. Leave workspace blank to use your account's default.
           </p>
         </form>

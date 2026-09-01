@@ -21,23 +21,31 @@ for updates** button pulls new versions from **public GitHub Releases** on
 
 ## Cut a release
 
-1. Bump the version in **`desktop/package.json`** (single source of truth —
-   it drives `electron-updater` and, via `ALF_APP_VERSION`, the backend's
-   `/api/v1/health` + `/api/v1/system/info`).
-2. Commit, then tag: `git tag vX.Y.Z && git push --tags` (convention matches
-   the existing `v0.2.0`).
-3. `cd desktop`
-4. `node scripts/build.mjs` — assembles `desktop/build/` (frontend with
-   `VITE_DESKTOP=1`, embedded Python + `requirements-desktop.txt`, backend
-   source, version stamp). ~10–20 min the first time (downloads
-   python-build-standalone + CPU torch).
-5. `npx electron-builder --win nsis --publish always` — builds
-   `desktop/dist/AutoLabelFlow-Setup.exe` (versionless on purpose, so the
-   README's `releases/latest/download/AutoLabelFlow-Setup.exe` button keeps
-   working) and uploads it plus `latest.yml` to the GitHub Release for the tag.
+Versioning is automated by **release-please** ([`.github/workflows/release-please.yml`](../.github/workflows/release-please.yml)).
+Commit messages on `main` must follow [Conventional Commits](https://www.conventionalcommits.org/):
+`feat:` bumps the minor, `fix:` bumps the patch, `feat!:` / `BREAKING CHANGE:`
+bumps the minor while pre-1.0. `chore/docs/refactor/test/ci` do not release.
 
-`npm run dist` does steps 4–5 with `--publish never` (local artifact only);
-`npm run release` does them with `--publish always`.
+1. **Merge feat/fix PRs.** release-please keeps one open "release PR" that
+   accumulates the pending `CHANGELOG.md` entry and version bump.
+2. **Merge the release PR.** That commits the changelog, bumps
+   `version.txt` + **`desktop/package.json`** (the version
+   `electron-updater` and, via `ALF_APP_VERSION`, the backend's
+   `/api/v1/health` + `/api/v1/system/info` read), and creates the
+   `vX.Y.Z` tag + a GitHub Release — **notes only, no installer yet**.
+3. **Build + publish the installer for that tag.** Actions → *Release
+   desktop app* → **Run workflow**, tag = `vX.Y.Z`. It runs
+   `scripts/build.mjs` then `electron-builder --win nsis --publish always`
+   on `windows-latest` and uploads `AutoLabelFlow-Setup.exe` (versionless
+   on purpose, so the README's `releases/latest/download/...` button keeps
+   working) plus `latest.yml` to the Release release-please just made.
+   Only now does the in-app **Check for updates** button see the new
+   version.
+
+`.release-please-manifest.json` and `version.txt` at the repo root are
+release-please's version anchors; don't hand-edit them. To build a local
+artifact without any of this: `cd desktop && npm run dist` runs
+`scripts/build.mjs` + `electron-builder … --publish never`.
 
 ## Optional add-on packs
 
@@ -76,15 +84,21 @@ already in `build.mjs`.
 
 ## Notes
 
-- **Unsigned** — `win.signAndEditExecutable: false` in `electron-builder.yml`
-  skips the exe resource-edit/sign pass; this also sidesteps electron-builder's
-  `winCodeSign` helper, whose archive carries macOS symlinks that fail to
-  extract on Windows without Developer Mode / an elevated shell. Windows
-  SmartScreen warns on first run ("More info → Run anyway"). Auto-update still
-  works. To sign later, remove that line and add `win.certificateFile` /
+- **Unsigned** — there is no `win.certificateFile`, so the exe/installer are
+  not code-signed. Windows SmartScreen warns on first run ("More info → Run
+  anyway"). Auto-update still works. To sign, add `win.certificateFile` /
   `certificatePassword` (or an EV token config).
-- **No app icon** — electron-builder falls back to the default Electron icon.
-  Add `desktop/build/icon.ico` (256×256) to brand it.
+- **exe icon / rcedit** — `win.icon: icon.ico` is set, so the release build
+  embeds the app icon and version strings into `AutoLabelFlow.exe` via
+  electron-builder's rcedit pass. That pass pulls the `winCodeSign` helper,
+  whose archive carries macOS symlinks that only extract on Windows with
+  admin / **Developer Mode**. The *Release desktop app* workflow runs on
+  `windows-latest` (admin) so it just works; for a **local** `npm run dist`,
+  turn on Windows Developer Mode first (Settings → Privacy & security → For
+  developers) or the build fails unpacking `winCodeSign`.
+- **App icon source** — `desktop/icon.ico` is generated from
+  `frontend/public/favicon.png` by `scripts/make-icon.py` (7 frames,
+  16→256 px). Re-run that script if the favicon changes.
 - To move updates off public GitHub Releases (the all-rights-reserved LICENSE
   makes the installer publicly downloadable): switch `publish.provider` to
   `generic` with a `url` you host, and point `autoUpdater` at it. Config-only.

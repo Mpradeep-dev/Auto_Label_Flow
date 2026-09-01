@@ -15,8 +15,8 @@ interface Stage {
 const STATE_STYLE: Record<StageState, string> = {
   done: "border-ink bg-ink text-paper",
   in_progress: "border-ink bg-paper text-ink",
-  blocked: "border-ink/30 bg-muted text-ink/50",
-  not_started: "border-ink/30 bg-paper text-ink/40",
+  blocked: "border-ink/30 bg-muted text-ink/60",
+  not_started: "border-ink/30 bg-paper text-ink/60",
 };
 
 function StageRow({ index, stage }: { index: number; stage: Stage }) {
@@ -37,7 +37,7 @@ function StageRow({ index, stage }: { index: number; stage: Stage }) {
       {stage.to && stage.state !== "blocked" && (
         <Link
           to={stage.to}
-          className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors duration-150 hover:border-orange hover:bg-orange hover:text-paper"
+          className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest transition-colors duration-150 hover:border-orange hover:bg-orange hover:text-ink"
         >
           {stage.state === "done" || stage.state === "in_progress" ? "Continue →" : "Start →"}
         </Link>
@@ -239,7 +239,7 @@ export function PipelineHome() {
           <p className="tabular text-4xl font-black">
             {total > 0 ? `${reviewed}⁄${total}` : "—"}
           </p>
-          <p className="text-xs font-bold uppercase tracking-widest text-ink/50">
+          <p className="text-xs font-bold uppercase tracking-widest text-ink/60">
             {total > 0 ? `${pct}% reviewed` : "no images yet"}
           </p>
         </div>

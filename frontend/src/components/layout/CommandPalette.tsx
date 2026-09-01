@@ -121,12 +121,13 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
               select(results[activeIndex]);
             }
           }}
+          aria-label="SEARCH PROJECTS, DATASETS, MODELS…"
           placeholder="SEARCH PROJECTS, DATASETS, MODELS…"
-          className="w-full border-b-2 border-ink bg-paper px-4 py-4 text-sm font-semibold uppercase tracking-wide outline-none placeholder:text-ink/30"
+          className="w-full border-b-2 border-ink bg-paper px-4 py-4 text-sm font-semibold uppercase tracking-wide outline-none placeholder:text-ink/50"
         />
         <div className="max-h-96 overflow-y-auto">
           {results.length === 0 && (
-            <p className="px-4 py-6 text-center text-xs font-bold uppercase tracking-widest text-ink/40">
+            <p className="px-4 py-6 text-center text-xs font-bold uppercase tracking-widest text-ink/60">
               {query ? "No matches" : "Type to search"}
             </p>
           )}
@@ -136,7 +137,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
             return (
               <div key={result.id}>
                 {showGroup && (
-                  <p className="border-b border-ink/10 bg-muted px-4 py-1 text-[9px] font-bold uppercase tracking-widest text-ink/40">
+                  <p className="border-b border-ink/10 bg-muted px-4 py-1 text-[9px] font-bold uppercase tracking-widest text-ink/60">
                     {result.group}
                   </p>
                 )}
@@ -144,14 +145,14 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
                   onClick={() => select(result)}
                   onMouseEnter={() => setActiveIndex(i)}
                   className={`flex w-full items-center justify-between border-b border-ink/10 px-4 py-2.5 text-left text-sm font-semibold ${
-                    i === activeIndex ? "bg-ink text-paper" : "hover:bg-orange hover:text-paper"
+                    i === activeIndex ? "bg-ink text-paper" : "hover:bg-orange hover:text-ink"
                   }`}
                 >
                   <span className="truncate uppercase tracking-wide">{result.label}</span>
                   {result.detail && (
                     <span
                       className={`shrink-0 pl-3 text-[10px] font-bold uppercase tracking-widest ${
-                        i === activeIndex ? "text-paper/50" : "text-ink/40"
+                        i === activeIndex ? "text-paper/70" : "text-ink/60"
                       }`}
                     >
                       {result.detail}
@@ -162,7 +163,7 @@ export function CommandPalette({ open, onOpenChange }: { open: boolean; onOpenCh
             );
           })}
         </div>
-        <div className="flex items-center justify-between border-t-2 border-ink px-4 py-2 text-[9px] font-bold uppercase tracking-widest text-ink/40">
+        <div className="flex items-center justify-between border-t-2 border-ink px-4 py-2 text-[9px] font-bold uppercase tracking-widest text-ink/60">
           <span>↑↓ navigate · ↵ open</span>
           <span>Esc to close</span>
         </div>

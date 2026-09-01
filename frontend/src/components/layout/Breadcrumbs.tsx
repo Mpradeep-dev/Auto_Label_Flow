@@ -70,7 +70,7 @@ export function Breadcrumbs() {
   return (
     <nav
       aria-label="Breadcrumb"
-      className="flex h-9 shrink-0 items-center gap-1.5 overflow-x-auto border-b-2 border-ink/10 bg-paper px-6 text-[11px] font-bold uppercase tracking-widest text-ink/40"
+      className="flex h-9 shrink-0 items-center gap-1.5 overflow-x-auto border-b-2 border-ink/10 bg-paper px-6 text-[11px] font-bold uppercase tracking-widest text-ink/60"
     >
       {crumbs.map((crumb, i) => {
         const isLast = i === crumbs.length - 1;
@@ -78,7 +78,7 @@ export function Breadcrumbs() {
           <span key={i} className="flex shrink-0 items-center gap-1.5">
             {i > 0 && <span className="text-ink/20">/</span>}
             {crumb.to && !isLast ? (
-              <Link to={crumb.to} className="hover:text-orange hover:underline">
+              <Link to={crumb.to} className="hover:text-ink hover:underline">
                 {crumb.label}
               </Link>
             ) : (

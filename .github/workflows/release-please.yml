@@ -1,0 +1,30 @@
+name: release-please
+
+# Conventional Commits on main drive versioning. release-please keeps an open
+# "release PR" that accumulates the pending changelog + version bump; merging
+# it writes CHANGELOG.md, bumps version.txt and desktop/package.json, and
+# creates the vX.Y.Z tag + a GitHub Release (notes only).
+#
+# The Release ships to users only after the "Release desktop app" workflow is
+# run manually with that tag — it builds the installer and uploads it plus
+# latest.yml to the same Release, which the in-app updater reads.
+#
+# feat: -> minor, fix: -> patch. feat!: / BREAKING CHANGE: -> minor while
+# pre-1.0 (bump-minor-pre-major). chore/docs/refactor/test/ci do not release.
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json

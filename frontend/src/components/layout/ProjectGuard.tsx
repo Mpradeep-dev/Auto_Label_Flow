@@ -23,7 +23,7 @@ export function ProjectGuard() {
   if (!projectId) return <Navigate to="/projects" replace />;
 
   if (projectQuery.isLoading) {
-    return <div className="flex h-full items-center justify-center text-sm text-ink/40">Loading…</div>;
+    return <div className="flex h-full items-center justify-center text-sm text-ink/60">Loading…</div>;
   }
 
   if (projectQuery.isError) {
@@ -33,14 +33,14 @@ export function ProjectGuard() {
         <p className="text-2xl font-black uppercase tracking-tight">
           {notFound ? "Project not found" : "Couldn't load this project"}
         </p>
-        <p className="max-w-md text-sm text-ink/50">
+        <p className="max-w-md text-sm text-ink/60">
           {notFound
             ? "It may have been deleted, or the link is out of date."
             : "Something went wrong reaching the server — check your connection and try again."}
         </p>
         <Link
           to="/projects"
-          className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+          className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
         >
           Back to projects
         </Link>

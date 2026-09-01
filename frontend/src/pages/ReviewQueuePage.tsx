@@ -151,7 +151,7 @@ export function ReviewQueuePage() {
           <button
             onClick={() => analyzeMutation.mutate()}
             disabled={!datasetId || analyzeMutation.isPending}
-            className="border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+            className="border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
           >
             {analyzeMutation.isPending ? "Queued…" : "Run quality analysis"}
           </button>
@@ -188,7 +188,7 @@ export function ReviewQueuePage() {
                 key={value}
                 onClick={() => setTab(value)}
                 className={`flex-1 border-r-2 border-ink px-4 py-3 text-xs font-bold uppercase tracking-widest last:border-r-0 ${
-                  tab === value ? "bg-ink text-paper" : "hover:bg-orange hover:text-paper"
+                  tab === value ? "bg-ink text-paper" : "hover:bg-orange hover:text-ink"
                 }`}
               >
                 {label} <span className="tabular">{total ?? "…"}</span>
@@ -196,7 +196,7 @@ export function ReviewQueuePage() {
             ))}
           </div>
 
-          <p className="tabular mb-6 text-xs uppercase tracking-widest text-ink/50">
+          <p className="tabular mb-6 text-xs uppercase tracking-widest text-ink/60">
             {total} images ·{" "}
             {tab === "PENDING" ? "sorted by difficulty, most suspicious first" : "most recently approved first"}
           </p>
@@ -240,7 +240,7 @@ export function ReviewQueuePage() {
                       )}
                     </div>
                     {unresolved[0] && (
-                      <p className="mt-1 truncate text-[9px] uppercase tracking-widest text-ink/40">
+                      <p className="mt-1 truncate text-[9px] uppercase tracking-widest text-ink/60">
                         {unresolved[0].flag_type.replace(/_/g, " ")}
                       </p>
                     )}
@@ -249,7 +249,7 @@ export function ReviewQueuePage() {
               );
             })}
             {items.length === 0 && !queueQuery.isLoading && (
-              <p className="col-span-full py-8 text-sm text-ink/50">
+              <p className="col-span-full py-8 text-sm text-ink/60">
                 {tab === "PENDING"
                   ? "Nothing pending — run quality analysis on this dataset to populate this queue."
                   : "Nothing approved yet — approve an image from its Annotate page and it'll show up here."}
@@ -262,17 +262,17 @@ export function ReviewQueuePage() {
               <button
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
                 disabled={page === 0}
-                className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper disabled:opacity-30"
+                className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink disabled:opacity-30"
               >
                 ← Prev
               </button>
-              <span className="tabular text-xs font-bold uppercase tracking-widest text-ink/50">
+              <span className="tabular text-xs font-bold uppercase tracking-widest text-ink/60">
                 Page {page + 1} of {totalPages} · {total} images
               </span>
               <button
                 onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
                 disabled={page >= totalPages - 1}
-                className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper disabled:opacity-30"
+                className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink disabled:opacity-30"
               >
                 Next →
               </button>

@@ -528,7 +528,7 @@ export function AnnotatePage() {
   if (!projectId || !datasetId || !imageId) return null;
 
   if (imagesQuery.isLoading || annotationsQuery.isLoading || !currentImage) {
-    return <div className="flex h-full items-center justify-center text-sm text-ink/40">Loading…</div>;
+    return <div className="flex h-full items-center justify-center text-sm text-ink/60">Loading…</div>;
   }
 
   return (
@@ -550,12 +550,12 @@ export function AnnotatePage() {
           />
           {showShortcuts && <ShortcutHelp onClose={() => setShowShortcuts(false)} />}
           {pendingShapeWarning && (
-            <p className="absolute left-4 top-4 border-2 border-accent bg-paper px-3 py-2 text-xs font-bold text-accent">
+            <p className="absolute left-4 top-4 border-2 border-accent bg-paper px-3 py-2 text-xs font-bold text-accent-ink">
               Pick a class for the shape you just drew, or press Esc to discard it, before moving on.
             </p>
           )}
           {createMutation.isError && (
-            <p className="absolute left-4 top-4 border-2 border-accent bg-paper px-3 py-2 text-xs font-bold text-accent">
+            <p className="absolute left-4 top-4 border-2 border-accent bg-paper px-3 py-2 text-xs font-bold text-accent-ink">
               {(createMutation.error as Error).message}
             </p>
           )}

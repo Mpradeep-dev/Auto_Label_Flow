@@ -9,7 +9,7 @@ export function AppShell() {
   const [searchOpen, setSearchOpen] = useState(false);
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden bg-paper text-ink">
+    <div className="flex h-[100dvh] w-full overflow-hidden bg-paper text-ink">
       <Sidebar collapsed={collapsed} onToggle={toggle} onOpenSearch={() => setSearchOpen(true)} />
       <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <Breadcrumbs />

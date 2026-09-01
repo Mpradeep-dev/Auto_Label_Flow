@@ -54,7 +54,7 @@ function RoboflowExportControls({ versionId }: { versionId: string }) {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper"
+        className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"
       >
         Export to Roboflow
       </button>
@@ -63,7 +63,7 @@ function RoboflowExportControls({ versionId }: { versionId: string }) {
 
   return (
     <div className="mt-3 max-w-sm border-2 border-ink p-4">
-      <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/50">Export to Roboflow</p>
+      <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/60">Export to Roboflow</p>
       {!job && (
         <div className="space-y-2">
           <RoboflowProjectSelect
@@ -77,12 +77,12 @@ function RoboflowExportControls({ versionId }: { versionId: string }) {
           <button
             onClick={() => exportMutation.mutate()}
             disabled={!workspace || !project || exportMutation.isPending}
-            className="w-full border-2 border-ink bg-ink py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+            className="w-full border-2 border-ink bg-ink py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
           >
             {exportMutation.isPending ? "Starting…" : "Push"}
           </button>
           {exportMutation.isError && (
-            <p className="text-xs text-accent">{(exportMutation.error as Error).message}</p>
+            <p className="text-xs text-accent-ink">{(exportMutation.error as Error).message}</p>
           )}
         </div>
       )}
@@ -108,7 +108,7 @@ function FormatExportButton({
     return (
       <a
         href={downloadUrl}
-        className="inline-block border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange"
+        className="inline-block border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink"
       >
         {downloadLabel}
       </a>
@@ -118,7 +118,7 @@ function FormatExportButton({
     <button
       onClick={onExport}
       disabled={pending}
-      className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper disabled:opacity-40"
+      className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink disabled:opacity-40"
     >
       {pending ? "Exporting…" : label}
     </button>
@@ -156,20 +156,20 @@ function VersionRow({
           {version.status}
         </span>
       </div>
-      <p className="tabular mt-1 text-xs uppercase tracking-widest text-ink/50">
+      <p className="tabular mt-1 text-xs uppercase tracking-widest text-ink/60">
         {version.total_images} images · {version.total_annotations} annotations · split{" "}
         {Math.round(version.train_ratio * 100)}/{Math.round(version.val_ratio * 100)}/
         {Math.round(version.test_ratio * 100)}
         {version.used_frame_level_fallback && " · frame-level fallback (too few source videos to group)"}
       </p>
-      {version.error && <p className="mt-2 text-xs text-accent">{version.error}</p>}
-      {exportError && <p className="mt-2 text-xs text-accent">{exportError}</p>}
+      {version.error && <p className="mt-2 text-xs text-accent-ink">{version.error}</p>}
+      {exportError && <p className="mt-2 text-xs text-accent-ink">{exportError}</p>}
       <div className="mt-3 flex flex-wrap gap-3">
         {version.status === "DRAFT" && (
           <button
             onClick={() => onExport(version.id)}
             disabled={yoloPending}
-            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-paper disabled:opacity-40"
+            className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink disabled:opacity-40"
           >
             {yoloPending ? "Exporting…" : "Export YOLO"}
           </button>
@@ -177,7 +177,7 @@ function VersionRow({
         {version.status === "EXPORTED" && version.download_url && (
           <a
             href={version.download_url}
-            className="inline-block border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange"
+            className="inline-block border-2 border-ink bg-ink px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink"
           >
             Download .zip
           </a>
@@ -185,7 +185,7 @@ function VersionRow({
         {version.status === "EXPORTED" && (
           <Link
             to={`/projects/${projectId}/training?datasetId=${datasetId}&versionId=${version.id}`}
-            className="inline-block border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:border-orange"
+            className="inline-block border-2 border-accent bg-accent px-4 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink hover:border-orange"
           >
             Train with this version →
           </Link>
@@ -279,7 +279,7 @@ export function ExportPage() {
       </h1>
 
       <div className="mb-8 max-w-2xl">
-        <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/50">Dataset</label>
+        <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/60">Dataset</label>
         <select
           value={datasetId}
           onChange={(e) => setDatasetId(e.target.value)}
@@ -304,7 +304,7 @@ export function ExportPage() {
                 ["Test", testRatio, setTestRatio],
               ] as const
             ).map(([label, value, setter]) => (
-              <label key={label} className="text-[10px] font-bold uppercase tracking-widest text-ink/50">
+              <label key={label} className="text-[10px] font-bold uppercase tracking-widest text-ink/60">
                 {label}
                 <input
                   type="number"
@@ -320,13 +320,13 @@ export function ExportPage() {
             <button
               onClick={() => createMutation.mutate()}
               disabled={createMutation.isPending}
-              className="ml-auto border-2 border-ink bg-ink px-6 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange disabled:opacity-40"
+              className="ml-auto border-2 border-ink bg-ink px-6 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
             >
               {createMutation.isPending ? "Creating…" : "Create version"}
             </button>
           </div>
           {createMutation.isError && (
-            <p className="mb-6 max-w-2xl text-xs text-accent">{(createMutation.error as Error).message}</p>
+            <p className="mb-6 max-w-2xl text-xs text-accent-ink">{(createMutation.error as Error).message}</p>
           )}
 
           <div className="max-w-2xl border-t-2 border-ink">
@@ -356,7 +356,7 @@ export function ExportPage() {
               />
             ))}
             {versionsQuery.data?.length === 0 && (
-              <p className="py-8 text-sm text-ink/50">
+              <p className="py-8 text-sm text-ink/60">
                 No versions yet — approve some images, then create one above.
               </p>
             )}

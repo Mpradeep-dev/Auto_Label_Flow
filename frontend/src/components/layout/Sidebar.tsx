@@ -86,14 +86,14 @@ export function Sidebar({
         <img src={logoMark} alt="" className="h-6 w-6 shrink-0" />
         {!collapsed && (
           <span className="truncate text-xs font-bold uppercase tracking-widest">
-            Auto <span className="text-orange group-hover:text-ink">Label</span> Flow
+            Auto <span className="font-black">Label</span> Flow
           </span>
         )}
       </Link>
 
       <button
         onClick={onToggle}
-        className="flex h-12 shrink-0 items-center justify-center border-b-4 border-ink text-xs font-bold uppercase tracking-widest hover:bg-orange hover:text-paper"
+        className="flex h-12 shrink-0 items-center justify-center border-b-4 border-ink text-xs font-bold uppercase tracking-widest hover:bg-orange hover:text-ink"
         aria-label={collapsed ? "Expand navigation" : "Collapse navigation"}
       >
         {collapsed ? "»" : "« Collapse"}
@@ -142,7 +142,7 @@ export function Sidebar({
         className="flex h-11 shrink-0 items-center justify-between border-b-2 border-ink/20 px-4 text-xs font-semibold uppercase tracking-widest hover:bg-orange"
       >
         {collapsed ? "⌕" : "Search"}
-        {!collapsed && <span className="text-[9px] font-normal text-ink/40">⌘K</span>}
+        {!collapsed && <span className="text-[9px] font-normal text-ink/60">⌘K</span>}
       </button>
 
       <ul className="flex-1 overflow-y-auto">
@@ -155,7 +155,7 @@ export function Sidebar({
                   type="button"
                   onClick={() => toggleGroup(group.label)}
                   aria-expanded={open}
-                  className="flex w-full items-center justify-between border-b border-ink/10 bg-muted px-4 py-1.5 text-[9px] font-bold uppercase tracking-widest text-ink/40 hover:text-ink"
+                  className="flex w-full items-center justify-between border-b border-ink/10 bg-muted px-4 py-1.5 text-[9px] font-bold uppercase tracking-widest text-ink/60 hover:text-ink"
                 >
                   {group.label}
                   <span className={`transition-transform duration-150 ${open ? "rotate-0" : "-rotate-90"}`}>▾</span>
@@ -175,7 +175,7 @@ export function Sidebar({
                           className={({ isActive }) =>
                             `flex h-11 items-center px-4 text-xs font-semibold uppercase tracking-widest transition-colors duration-150 ${
                               disabled
-                                ? "cursor-not-allowed text-ink/30"
+                                ? "cursor-not-allowed text-ink/50"
                                 : isActive
                                   ? "bg-ink text-paper"
                                   : "hover:bg-orange"
