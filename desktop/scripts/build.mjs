@@ -40,6 +40,42 @@ function run(cmd, opts = {}) {
   execSync(cmd, { stdio: "inherit", ...opts });
 }
 
+// Windows locks files aggressively (a lingering python.exe from a previous
+// run/smoke-test, Defender mid-scan). Kill known offenders, then retry, then
+// fall back to cmd's rmdir which clears cases Node's rmSync can't.
+function rmrf(target) {
+  if (!existsSync(target)) return;
+  if (process.platform === "win32") {
+    try {
+      execSync(
+        `powershell -NoProfile -Command "Get-CimInstance Win32_Process | ` +
+          `Where-Object { $_.ExecutablePath -like '${target.replace(/\\/g, "\\\\")}*' } | ` +
+          `ForEach-Object { Stop-Process -Id $_.ProcessId -Force -EA SilentlyContinue }"`,
+        { stdio: "ignore" },
+      );
+    } catch {
+      /* nothing to kill */
+    }
+  }
+  for (let i = 0; i < 6; i++) {
+    try {
+      rmSync(target, { recursive: true, force: true, maxRetries: 5, retryDelay: 300 });
+      if (!existsSync(target)) return;
+    } catch {
+      /* retry */
+    }
+    if (process.platform === "win32") {
+      try {
+        execSync(`rmdir /s /q "${target}"`, { stdio: "ignore" });
+      } catch {
+        /* retry */
+      }
+      if (!existsSync(target)) return;
+    }
+  }
+  throw new Error(`could not remove ${target} — close any app/terminal using it and retry`);
+}
+
 // --- 1. version stamp (backend reads app/_version.py; config.py falls back if absent) ---
 const versionPy = `__version__ = "${version}"\n`;
 writeFileSync(join(REPO, "backend", "app", "_version.py"), versionPy);
@@ -47,9 +83,9 @@ writeFileSync(join(REPO, "backend", "app", "_version.py"), versionPy);
 // --- 2. frontend ---
 if (!args.has("--skip-frontend")) {
   const FE = join(REPO, "frontend");
-  run("npm ci", { cwd: FE });
+  if (!existsSync(join(FE, "node_modules"))) run("npm ci", { cwd: FE });
   run("npm run build", { cwd: FE, env: { ...process.env, VITE_DESKTOP: "1" } });
-  rmSync(join(BUILD, "frontend"), { recursive: true, force: true });
+  rmrf(join(BUILD, "frontend"));
   mkdirSync(BUILD, { recursive: true });
   cpSync(join(FE, "dist"), join(BUILD, "frontend"), { recursive: true });
   console.log("  ✓ frontend -> build/frontend");
@@ -57,7 +93,7 @@ if (!args.has("--skip-frontend")) {
 
 // --- 3. python runtime ---
 if (!args.has("--skip-python")) {
-  rmSync(join(BUILD, "python"), { recursive: true, force: true });
+  rmrf(join(BUILD, "python"));
   mkdirSync(BUILD, { recursive: true });
 
   const tgz = join(tmpdir(), `cpython-${PY_VER}-${PBS_TAG}.tar.gz`);
@@ -83,7 +119,7 @@ if (!args.has("--skip-python")) {
 
   // backend source alongside the interpreter
   const appRoot = join(BUILD, "python", "app-root");
-  rmSync(appRoot, { recursive: true, force: true });
+  rmrf(appRoot);
   mkdirSync(appRoot, { recursive: true });
   for (const item of ["app", "alembic", "alembic.ini", "requirements.txt", "requirements-desktop.txt"]) {
     const src = join(REPO, "backend", item);
