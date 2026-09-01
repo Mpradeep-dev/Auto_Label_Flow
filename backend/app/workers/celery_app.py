@@ -53,6 +53,12 @@ VIDEO_TIME_LIMIT_S = 20 * 60
 VIDEO_SOFT_TIME_LIMIT_S = 15 * 60
 ROBOFLOW_TIME_LIMIT_S = 35 * 60
 ROBOFLOW_SOFT_TIME_LIMIT_S = 30 * 60
+# Azure-Blob import walks a whole container prefix (production sets run to
+# tens of thousands of images) doing a small header read + label read per
+# image — no full-image downloads, but still long. Generous ceiling meant
+# only to catch "this is clearly hung," not normal completion.
+BLOB_IMPORT_TIME_LIMIT_S = 3 * 60 * 60
+BLOB_IMPORT_SOFT_TIME_LIMIT_S = 3 * 60 * 60 - 120
 # The dataset-upload readiness poll alone (kaggle_provider.py's
 # `_push_kernel`) can take up to 5 minutes; this bounds the whole
 # export/zip/upload/push sequence generously above that without leaving it
@@ -75,6 +81,7 @@ RECONCILE_STALE_AFTER_S = {
     "training": TRAINING_TIME_LIMIT_S + 10 * 60,
     "video": VIDEO_TIME_LIMIT_S + 10 * 60,
     "roboflow": ROBOFLOW_TIME_LIMIT_S + 10 * 60,
+    "blob_import": BLOB_IMPORT_TIME_LIMIT_S + 10 * 60,
 }
 
 # The three periodic jobs. In `celery` mode this feeds Celery Beat's
@@ -114,6 +121,7 @@ else:
             "app.workers.tasks.modal_training",
             "app.workers.tasks.quality",
             "app.workers.tasks.roboflow",
+            "app.workers.tasks.blob_import",
             "app.workers.tasks.reconcile",
         ],
     )
@@ -130,6 +138,7 @@ else:
             "app.workers.tasks.quality.*": {"queue": "gpu"},
             "app.workers.tasks.video.*": {"queue": "default"},
             "app.workers.tasks.roboflow.*": {"queue": "default"},
+            "app.workers.tasks.blob_import.*": {"queue": "default"},
             "app.workers.tasks.reconcile.*": {"queue": "default"},
             # Polling is just Kaggle API calls, no local CUDA work — belongs
             # on `default`, not `gpu` (concurrency=1, shouldn't wait on

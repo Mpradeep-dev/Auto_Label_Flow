@@ -51,6 +51,32 @@ def test_pack_install_rejected_without_data_dir(client: TestClient) -> None:
     assert resp.status_code == 400
 
 
+def test_sqlite_schema_upgrade_adds_blob_import_bits(tmp_path) -> None:
+    """A desktop DB stamped at the old `user_version` picks up
+    `images.is_external` + `blob_import_jobs` when `init_sqlite_schema`
+    runs, without a full rebuild."""
+    from sqlalchemy import create_engine, inspect as _inspect
+
+    from app.db.base import Base
+    from app.db.init_db import SCHEMA_VERSION, init_sqlite_schema
+
+    eng = create_engine(f"sqlite+pysqlite:///{(tmp_path / 'old.db').as_posix()}", future=True)
+    Base.metadata.create_all(eng)
+    with eng.begin() as conn:
+        conn.exec_driver_sql("DROP TABLE blob_import_jobs")
+        conn.exec_driver_sql("ALTER TABLE images DROP COLUMN is_external")
+        conn.exec_driver_sql("PRAGMA user_version = 1")
+
+    init_sqlite_schema(eng)
+
+    insp = _inspect(eng)
+    assert "blob_import_jobs" in insp.get_table_names()
+    assert "is_external" in {c["name"] for c in insp.get_columns("images")}
+    with eng.begin() as conn:
+        assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == SCHEMA_VERSION
+    eng.dispose()
+
+
 def test_reconcile_stale_jobs_runs_on_sqlite() -> None:
     """Regression: `updated_at < datetime.now(timezone.utc)` raised
     `TypeError: can't compare offset-naive and offset-aware datetimes` on
@@ -58,7 +84,7 @@ def test_reconcile_stale_jobs_runs_on_sqlite() -> None:
     from app.workers.tasks.reconcile import reconcile_stale_jobs
 
     counts = reconcile_stale_jobs()
-    assert set(counts) == {"inference", "training", "video", "roboflow"}
+    assert set(counts) == {"inference", "training", "video", "roboflow", "blob_import"}
 
 
 def test_tzdatetime_roundtrips_aware_on_sqlite(db_session) -> None:

@@ -7,7 +7,7 @@ from __future__ import annotations
 import uuid
 from enum import Enum as PyEnum
 
-from sqlalchemy import JSON, Float, ForeignKey, Integer, String
+from sqlalchemy import JSON, Boolean, Float, ForeignKey, Integer, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
@@ -36,6 +36,17 @@ class Image(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
     storage_key: Mapped[str] = mapped_column(String(1000), nullable=False)
+    # True when `storage_key` points at a blob this app does NOT own — an
+    # image referenced in place from an external Azure Blob prefix (see
+    # `services/integrations/azure_blob_import.py`), not a copy under this
+    # app's own `project/<id>/dataset/<id>/images/` layout. The only
+    # behavioural fork it drives: deleting the Image row (or its Dataset)
+    # must NOT delete the underlying blob — it belongs to whoever put it
+    # there. Every bytes-reading path (`storage.read_bytes`, `get_url`)
+    # works unchanged because the key is still a real blob name.
+    is_external: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false")
+    )
     original_filename: Mapped[str] = mapped_column(String(500), nullable=False)
     width: Mapped[int] = mapped_column(Integer, nullable=False)
     height: Mapped[int] = mapped_column(Integer, nullable=False)

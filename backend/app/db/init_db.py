@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine
 
 import app.models  # noqa: F401  — imports every model so Base.metadata is complete
 from app.db.base import Base
@@ -27,7 +27,8 @@ logger = logging.getLogger(__name__)
 
 # Bump when a released desktop build changes the schema, and add the
 # corresponding upgrade step in `_upgrade()` below.
-SCHEMA_VERSION = 1
+#   2: images.is_external + blob_import_jobs (Azure Blob import by reference)
+SCHEMA_VERSION = 2
 
 
 def init_sqlite_schema(engine: Engine) -> None:
@@ -59,6 +60,15 @@ def init_sqlite_schema(engine: Engine) -> None:
 
 
 def _upgrade(conn, from_version: int) -> None:  # noqa: ANN001
-    """Ordered, idempotent schema steps for the desktop SQLite DB. Empty for
-    now — every released schema so far is `SCHEMA_VERSION == 1`."""
-    _ = (conn, from_version, text)  # placeholder until the first real step
+    """Ordered, idempotent schema steps for the desktop SQLite DB, keyed off
+    the DB's stamped `user_version`."""
+    if from_version < 2:
+        _add_column_if_missing(conn, "images", "is_external", "BOOLEAN NOT NULL DEFAULT 0")
+        # `create()` with checkfirst skips the table if it somehow exists.
+        Base.metadata.tables["blob_import_jobs"].create(bind=conn, checkfirst=True)
+
+
+def _add_column_if_missing(conn, table: str, column: str, ddl_type: str) -> None:  # noqa: ANN001
+    existing = {row[1] for row in conn.exec_driver_sql(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.exec_driver_sql(f"ALTER TABLE {table} ADD COLUMN {column} {ddl_type}")
