@@ -32,8 +32,9 @@ for updates** button pulls new versions from **public GitHub Releases** on
    source, version stamp). ~10–20 min the first time (downloads
    python-build-standalone + CPU torch).
 5. `npx electron-builder --win nsis --publish always` — builds
-   `desktop/dist/AutoLabelFlow-Setup-X.Y.Z.exe` and uploads it plus
-   `latest.yml` to the GitHub Release for the tag.
+   `desktop/dist/AutoLabelFlow-Setup.exe` (versionless on purpose, so the
+   README's `releases/latest/download/AutoLabelFlow-Setup.exe` button keeps
+   working) and uploads it plus `latest.yml` to the GitHub Release for the tag.
 
 `npm run dist` does steps 4–5 with `--publish never` (local artifact only);
 `npm run release` does them with `--publish always`.
@@ -63,7 +64,7 @@ under `%APPDATA%/AutoLabelFlow/` and survives updates and uninstall
 
 | | |
 |---|---|
-| `AutoLabelFlow-Setup-0.2.0.exe` | ~438 MB |
+| `AutoLabelFlow-Setup.exe` | ~438 MB |
 | `win-unpacked/` (installed footprint) | ~2.3 GB |
 | Bundled Python (`build/python`) | ~1.9 GB — torch CPU, OpenCV (×2: headless + the copy ultralytics pulls), matplotlib, polars, numpy, sympy |
 
