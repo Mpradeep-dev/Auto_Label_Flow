@@ -53,9 +53,16 @@ services:
       - path: ./backend/.env
         required: false
     environment:
+      ALF_TASK_QUEUE: celery
       DATABASE_URL: postgresql+psycopg://annotate:annotate@postgres:5432/annotate
       REDIS_URL: redis://redis:6379/0
-      STORAGE_BACKEND: minio
+      # Override via a repo-root .env (Compose var substitution, distinct
+      # from backend/.env) to switch to STORAGE_BACKEND=azure without
+      # editing this file — e.g. STORAGE_BACKEND=azure and
+      # AZURE_STORAGE_CONNECTION_STRING=... in that root .env.
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-}
+      AZURE_STORAGE_CONTAINER: ${AZURE_STORAGE_CONTAINER:-annotate}
       MINIO_ENDPOINT: minio:9000
       # Presigned URLs go to the browser on the host, which can't resolve
       # the "minio" service name — sign them against the published port.
@@ -110,9 +117,12 @@ services:
       - path: ./backend/.env
         required: false
     environment:
+      ALF_TASK_QUEUE: celery
       DATABASE_URL: postgresql+psycopg://annotate:annotate@postgres:5432/annotate
       REDIS_URL: redis://redis:6379/0
-      STORAGE_BACKEND: minio
+      STORAGE_BACKEND: ${STORAGE_BACKEND:-minio}
+      AZURE_STORAGE_CONNECTION_STRING: ${AZURE_STORAGE_CONNECTION_STRING:-}
+      AZURE_STORAGE_CONTAINER: ${AZURE_STORAGE_CONTAINER:-annotate}
       MINIO_ENDPOINT: minio:9000
       ARTIFACTS_DIR: /app/artifacts
     volumes:

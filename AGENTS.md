@@ -43,9 +43,27 @@ DATABASE_URL=postgresql+psycopg://annotate:annotate@localhost:5432/annotate_test
 DATABASE_URL=postgresql+psycopg://annotate:annotate@localhost:5432/annotate_test ./venv/Scripts/python -m pytest tests/test_quality_analyzer.py::test_name -q
 ```
 
-Tests run fully offline against fake model objects, except `test_real_model_integration.py`, which loads real weights from `artifacts/models/pt/` if present and skips otherwise.
+Tests run fully offline against fake model objects, except `test_real_model_integration.py`, which loads real weights from `artifacts/models/pt/` if present and skips otherwise. **`pytest` now defaults to a temp-file SQLite DB** (the desktop profile) and needs no services; set `DATABASE_URL=postgresql+psycopg://...annotate_test` to run against the server stack. `.github/workflows/ci.yml` runs both.
 
 Frontend: `npm run lint` (ESLint), `npx tsc -b && npx vitest run` (typecheck + tests), `npx vitest run path/to/file.test.tsx` for a single file, `npm run build`.
+
+### Two runtime profiles
+
+The same backend code runs two ways, selected by `ALF_TASK_QUEUE`:
+
+| | `celery` (docker-compose / server) | `local` (default; desktop app) |
+|---|---|---|
+| DB | PostgreSQL (`alembic upgrade head`) | SQLite file, schema via `app/db/init_db.py` (`create_all` + `PRAGMA user_version`) |
+| Jobs | Celery worker + Beat + Redis | in-process `ThreadPoolExecutor`s + APScheduler (`app/workers/local_queue.py`, `scheduler.py`) — `celery_app` is a shim, no `celery` import |
+| Live progress | Redis (`app/workers/progress_store.py` → `RedisStore`) | in-process dict (`InMemoryStore`) |
+| Frontend | Vite dev server / separate | FastAPI serves the built SPA (`FRONTEND_DIST_DIR`), one origin |
+| Data dirs | repo / bind mounts | `ALF_DATA_DIR` (`%APPDATA%/AutoLabelFlow`) |
+
+Cross-dialect column types (`GUID`, `TZDateTime`, `enum_column`) live in `app/db/types.py`; Postgres DDL is byte-identical to before, so Alembic sees no diff. `alembic/env.py` refuses a non-Postgres URL.
+
+### Desktop app (`desktop/`)
+
+Electron shell that spawns the bundled Python backend (`local` profile) and opens a window on it; manual "Check for updates" via `electron-updater` + public GitHub Releases. `desktop/RELEASING.md` has the build/release steps; `node desktop/scripts/build.mjs` assembles the payload, `npx electron-builder --win nsis` packages it. Optional add-on packs (GPU CUDA torch, cloud SDKs) are downloaded from **Settings → Desktop app** — specs in `app/workers/tasks/packs.py`. `backend/requirements.txt` is now the shared base; `requirements-server.txt` / `requirements-desktop.txt` / `requirements-dev.txt` layer on top.
 
 ### Windows GPU note
 

@@ -1,0 +1,20 @@
+# Server / Docker deployment: base runtime + the pieces the desktop app
+# does without (Celery + Redis job queue, the Postgres driver, and the cloud
+# integration SDKs, which on the desktop are an optional downloadable pack).
+-r requirements.txt
+
+# Database
+psycopg[binary]==3.2.3
+
+# Background jobs
+celery==5.4.0
+redis==5.2.1
+
+# Storage backends
+boto3==1.35.71
+azure-storage-blob==12.24.0
+
+# Remote training / dataset integrations (import is guarded at runtime)
+kaggle==1.6.17
+modal>=0.64.0
+roboflow==1.4.1

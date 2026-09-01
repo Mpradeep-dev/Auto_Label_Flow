@@ -15,11 +15,11 @@ import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, JSON, String
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy import Float, ForeignKey, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.types import GUID, TZDateTime, enum_column
 
 
 class FlagType(str, PyEnum):
@@ -42,20 +42,20 @@ class AnnotationFlag(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "annotation_flags"
 
     annotation_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("annotations.id", ondelete="CASCADE"), nullable=False, index=True
+        GUID, ForeignKey("annotations.id", ondelete="CASCADE"), nullable=False, index=True
     )
     image_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("images.id", ondelete="CASCADE"), nullable=False, index=True
+        GUID, ForeignKey("images.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    flag_type: Mapped[FlagType] = mapped_column(Enum(FlagType, name="flag_type"), nullable=False, index=True)
+    flag_type: Mapped[FlagType] = mapped_column(enum_column(FlagType, "flag_type"), nullable=False, index=True)
     severity: Mapped[float] = mapped_column(Float, nullable=False)  # 0-1, higher = more suspicious
     reason: Mapped[str] = mapped_column(String(500), nullable=False)  # human-readable, shown in the UI
     details: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)  # numeric evidence, e.g. {"distance_bl": 0.11}
     rule_version: Mapped[str] = mapped_column(String(50), nullable=False, default="v1")
 
-    resolution: Mapped[FlagResolution | None] = mapped_column(Enum(FlagResolution, name="flag_resolution"), nullable=True)
+    resolution: Mapped[FlagResolution | None] = mapped_column(enum_column(FlagResolution, "flag_resolution"), nullable=True)
     resolved_by: Mapped[str | None] = mapped_column(String(200), nullable=True)
-    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    resolved_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
 
 
 class ImagePoseContext(UUIDPrimaryKeyMixin, Base):
@@ -66,12 +66,12 @@ class ImagePoseContext(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "image_pose_context"
 
     image_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("images.id", ondelete="CASCADE"), nullable=False, unique=True
+        GUID, ForeignKey("images.id", ondelete="CASCADE"), nullable=False, unique=True
     )
     model_id: Mapped[uuid.UUID | None] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("models.id", ondelete="SET NULL"), nullable=True
+        GUID, ForeignKey("models.id", ondelete="SET NULL"), nullable=True
     )
     # [{"x1","y1","x2","y2","confidence","keypoints":[{"x","y","confidence"}]*17,
     #   "body_scale","body_scale_source"}, ...] — one entry per detected person.
     persons: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
-    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    computed_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)

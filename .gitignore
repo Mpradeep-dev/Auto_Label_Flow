@@ -13,6 +13,12 @@ backend/.env
 # Node
 frontend/node_modules/
 frontend/dist/
+desktop/node_modules/
+
+# Desktop app build output
+backend/app/_version.py
+desktop/build/
+desktop/dist/
 
 # Storage / artifacts (large binaries, machine-specific)
 storage/local/

@@ -6,11 +6,11 @@ from __future__ import annotations
 import uuid
 from enum import Enum as PyEnum
 
-from sqlalchemy import Enum, ForeignKey, String, Text
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy import ForeignKey, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.types import GUID, enum_column
 
 
 class DatasetStatus(str, PyEnum):
@@ -22,12 +22,12 @@ class Dataset(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "datasets"
 
     project_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+        GUID, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
     status: Mapped[DatasetStatus] = mapped_column(
-        Enum(DatasetStatus, name="dataset_status"), nullable=False, default=DatasetStatus.ACTIVE
+        enum_column(DatasetStatus, "dataset_status"), nullable=False, default=DatasetStatus.ACTIVE
     )
 
     project: Mapped["Project"] = relationship(back_populates="datasets")

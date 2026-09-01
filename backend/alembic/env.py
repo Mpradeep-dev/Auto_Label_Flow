@@ -9,6 +9,18 @@ from app.core.config import settings
 from app.models import Base  # noqa: F401 — imports every model so metadata is complete
 
 config = context.config
+
+# These migrations are Postgres-only: several carry native-enum DDL
+# (`CREATE TYPE`, `ALTER TYPE ... ADD VALUE`, `DROP TYPE`) that SQLite cannot
+# execute. The desktop app's bundled SQLite schema is managed by
+# `app.db.init_db` (a `create_all` keyed off `PRAGMA user_version`), never by
+# Alembic. Fail loudly rather than half-apply a migration and blow up mid-run.
+if not settings.DATABASE_URL.startswith("postgresql"):
+    raise RuntimeError(
+        f"Alembic is Postgres-only; DATABASE_URL is {settings.DATABASE_URL!r}. "
+        "SQLite schema is managed by app.db.init_db, not migrations."
+    )
+
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL)
 
 if config.config_file_name is not None:

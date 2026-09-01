@@ -16,11 +16,11 @@ from __future__ import annotations
 import uuid
 from enum import Enum as PyEnum
 
-from sqlalchemy import JSON, Enum, Float, ForeignKey, Integer, String
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy import JSON, Float, ForeignKey, Integer, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.types import GUID, enum_column
 
 
 class ShapeType(str, PyEnum):
@@ -88,20 +88,20 @@ class AnnotationEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     __tablename__ = "annotation_events"
 
-    annotation_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False, index=True)
+    annotation_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False, index=True)
     revision_seq: Mapped[int] = mapped_column(Integer, nullable=False)
     image_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("images.id", ondelete="CASCADE"), nullable=False, index=True
+        GUID, ForeignKey("images.id", ondelete="CASCADE"), nullable=False, index=True
     )
 
     action: Mapped[AnnotationEventAction] = mapped_column(
-        Enum(AnnotationEventAction, name="annotation_event_action"), nullable=False
+        enum_column(AnnotationEventAction, "annotation_event_action"), nullable=False
     )
 
     class_id: Mapped[int] = mapped_column(Integer, nullable=False)
     class_name: Mapped[str] = mapped_column(String(100), nullable=False)
     shape_type: Mapped[ShapeType] = mapped_column(
-        Enum(ShapeType, name="annotation_shape_type"), nullable=False, default=ShapeType.BBOX
+        enum_column(ShapeType, "annotation_shape_type"), nullable=False, default=ShapeType.BBOX
     )
     # [[x,y], ...] normalized ring, >=3 points; NULL for BBOX rows.
     points: Mapped[list | None] = mapped_column(JSON, nullable=True)
@@ -117,12 +117,12 @@ class AnnotationEvent(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     x2: Mapped[float] = mapped_column(Float, nullable=False)
     y2: Mapped[float] = mapped_column(Float, nullable=False)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
-    source: Mapped[AnnotationSource] = mapped_column(Enum(AnnotationSource, name="annotation_source"), nullable=False)
+    source: Mapped[AnnotationSource] = mapped_column(enum_column(AnnotationSource, "annotation_source"), nullable=False)
 
     error_category: Mapped[ErrorCategory | None] = mapped_column(
-        Enum(ErrorCategory, name="error_category"), nullable=True
+        enum_column(ErrorCategory, "error_category"), nullable=True
     )
-    error_reason: Mapped[ErrorReason | None] = mapped_column(Enum(ErrorReason, name="error_reason"), nullable=True)
+    error_reason: Mapped[ErrorReason | None] = mapped_column(enum_column(ErrorReason, "error_reason"), nullable=True)
 
     actor: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
@@ -136,12 +136,12 @@ class Annotation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "annotations"
 
     image_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("images.id", ondelete="CASCADE"), nullable=False, index=True
+        GUID, ForeignKey("images.id", ondelete="CASCADE"), nullable=False, index=True
     )
     class_id: Mapped[int] = mapped_column(Integer, nullable=False)
     class_name: Mapped[str] = mapped_column(String(100), nullable=False)
     shape_type: Mapped[ShapeType] = mapped_column(
-        Enum(ShapeType, name="annotation_shape_type"), nullable=False, default=ShapeType.BBOX
+        enum_column(ShapeType, "annotation_shape_type"), nullable=False, default=ShapeType.BBOX
     )
     points: Mapped[list | None] = mapped_column(JSON, nullable=True)
     x1: Mapped[float] = mapped_column(Float, nullable=False)
@@ -149,11 +149,11 @@ class Annotation(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     x2: Mapped[float] = mapped_column(Float, nullable=False)
     y2: Mapped[float] = mapped_column(Float, nullable=False)
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
-    source: Mapped[AnnotationSource] = mapped_column(Enum(AnnotationSource, name="annotation_source"), nullable=False)
+    source: Mapped[AnnotationSource] = mapped_column(enum_column(AnnotationSource, "annotation_source"), nullable=False)
     review_status: Mapped[AnnotationReviewStatus] = mapped_column(
-        Enum(AnnotationReviewStatus, name="annotation_review_status"),
+        enum_column(AnnotationReviewStatus, "annotation_review_status"),
         nullable=False,
         default=AnnotationReviewStatus.PENDING,
     )
-    latest_event_id: Mapped[uuid.UUID] = mapped_column(PGUUID(as_uuid=True), nullable=False)
+    latest_event_id: Mapped[uuid.UUID] = mapped_column(GUID, nullable=False)
     revision_seq: Mapped[int] = mapped_column(Integer, nullable=False, default=1)

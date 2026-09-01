@@ -13,6 +13,7 @@ from app.api.v1 import (
     models,
     projects,
     quality,
+    system,
     training_jobs,
     videos,
 )
@@ -30,3 +31,4 @@ api_router.include_router(dataset_versions.router)
 api_router.include_router(training_jobs.router)
 api_router.include_router(quality.router)
 api_router.include_router(integrations.router)
+api_router.include_router(system.router)

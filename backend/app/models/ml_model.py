@@ -12,11 +12,11 @@ from __future__ import annotations
 import uuid
 from enum import Enum as PyEnum
 
-from sqlalchemy import Boolean, Enum, ForeignKey, JSON, String, UniqueConstraint
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy import Boolean, ForeignKey, JSON, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.types import GUID, enum_column
 
 
 class ModelKind(str, PyEnum):
@@ -41,7 +41,7 @@ class MLModel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     version: Mapped[str] = mapped_column(String(50), nullable=False, default="v1")
-    kind: Mapped[ModelKind] = mapped_column(Enum(ModelKind, name="model_kind"), nullable=False)
+    kind: Mapped[ModelKind] = mapped_column(enum_column(ModelKind, "model_kind"), nullable=False)
     framework: Mapped[str] = mapped_column(String(50), nullable=False, default="ultralytics")
 
     # Absolute filesystem path to the weights file (under ARTIFACTS_DIR).
@@ -67,7 +67,7 @@ class MLModel(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # that were fine-tuned from it — it should just drop the now-stale
     # lineage pointer, same as TrainingJob's.
     base_model_id: Mapped[uuid.UUID | None] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("models.id", ondelete="SET NULL"), nullable=True
+        GUID, ForeignKey("models.id", ondelete="SET NULL"), nullable=True
     )
 
     is_active: Mapped[bool] = mapped_column(nullable=False, default=True)

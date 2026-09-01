@@ -1,0 +1,7 @@
+# Local dev / CI: everything the server has, plus the test tooling.
+-r requirements-server.txt
+
+pytest==8.3.3
+pytest-asyncio==0.24.0
+pytest-cov==6.0.0
+# httpx is in the base requirements (runtime dep + the test client uses it)

@@ -18,10 +18,14 @@ import { SettingsPage } from "@/pages/SettingsPage";
 import { IntegrationsPage } from "@/pages/IntegrationsPage";
 import { HelpPage } from "@/pages/HelpPage";
 
+// The marketing landing page (and its three.js/rapier Ballpit background) is
+// pointless inside an installed desktop app — go straight to the workspace.
+const IS_DESKTOP = import.meta.env.VITE_DESKTOP === "1";
+
 export default function App() {
   return (
     <Routes>
-      <Route path="/" element={<LandingPage />} />
+      <Route path="/" element={IS_DESKTOP ? <Navigate to="/projects" replace /> : <LandingPage />} />
       <Route element={<AppShell />}>
         <Route path="/projects" element={<ProjectsPage />} />
         <Route path="/settings" element={<IntegrationsPage />} />

@@ -1,21 +1,21 @@
-"""Redis-backed live progress for jobs, read by the SSE endpoint
-(PLAN "Progress ... written to a Redis hash on a ~0.5s throttle and streamed
-over SSE"). The DB row (`inference_jobs`) is the durable checkpoint at batch
-boundaries — this module is the fast, ephemeral path the UI polls."""
+"""Live progress for jobs, read by the SSE endpoint (PLAN "Progress ...
+written on a ~0.5s throttle and streamed over SSE"). The DB row
+(`inference_jobs`) is the durable checkpoint at batch boundaries — this
+module is the fast, ephemeral path the UI polls.
+
+The backing store is an in-process dict on the desktop app and Redis on the
+server; see `workers/progress_store.py`. This module's public API is
+unchanged."""
 from __future__ import annotations
 
 import json
 import time
 from dataclasses import asdict, dataclass
 
-import redis
-
-from app.core.config import settings
+from app.workers.progress_store import get_store
 
 _PROGRESS_TTL_S = 3600
 _THROTTLE_S = 0.5
-
-_redis = redis.from_url(settings.REDIS_URL, decode_responses=True)
 
 
 @dataclass
@@ -82,23 +82,23 @@ class ThrottledProgressWriter:
 
 
 def set_progress(job_id: str, progress: JobProgress) -> None:
-    _redis.set(_key(job_id), json.dumps(asdict(progress)), ex=_PROGRESS_TTL_S)
+    get_store().set(_key(job_id), json.dumps(asdict(progress)), _PROGRESS_TTL_S)
 
 
 def get_progress(job_id: str) -> JobProgress | None:
-    raw = _redis.get(_key(job_id))
+    raw = get_store().get(_key(job_id))
     if raw is None:
         return None
     return JobProgress(**json.loads(raw))
 
 
 def request_cancel(job_id: str) -> None:
-    _redis.set(_cancel_key(job_id), "1", ex=_PROGRESS_TTL_S)
+    get_store().set(_cancel_key(job_id), "1", _PROGRESS_TTL_S)
 
 
 def is_cancel_requested(job_id: str) -> bool:
-    return _redis.exists(_cancel_key(job_id)) == 1
+    return get_store().exists(_cancel_key(job_id))
 
 
 def clear_cancel(job_id: str) -> None:
-    _redis.delete(_cancel_key(job_id))
+    get_store().delete(_cancel_key(job_id))

@@ -19,6 +19,25 @@ see `frontend/DESIGN.md` and the code comments in
 walks through the six-stage loop, the sidebar layout, and a "why is this
 blocked" troubleshooting table — the same content is also in-app at `/help`.
 
+## Download the desktop app (Windows)
+
+[![Download AutoLabelFlow for Windows](https://img.shields.io/badge/Download-AutoLabelFlow%20for%20Windows-FF3000?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Mpradeep-dev/Auto_Label_Flow/releases/latest/download/AutoLabelFlow-Setup.exe)
+
+[![Latest release](https://img.shields.io/github/v/release/Mpradeep-dev/Auto_Label_Flow?style=flat-square&label=latest)](https://github.com/Mpradeep-dev/Auto_Label_Flow/releases/latest)
+
+A standalone Windows build — no Docker, Postgres or Redis. Installs a bundled
+Python backend + SQLite; the base install does annotate / review / dataset /
+export / local CPU auto-annotation, with **GPU training** and **cloud
+integrations** as optional downloads under Settings → Desktop app. Updates
+come via the in-app **Check for updates** button.
+
+- **Installer** (`.exe`, NSIS): the button above, or the
+  [latest release page](https://github.com/Mpradeep-dev/Auto_Label_Flow/releases/latest).
+- **Unsigned** — Windows SmartScreen will warn on first run: *More info → Run
+  anyway*.
+- Data lives in `%APPDATA%\AutoLabelFlow\` and survives updates/uninstall.
+- Building it yourself: [`desktop/RELEASING.md`](desktop/RELEASING.md).
+
 ## Stack
 
 - **Backend**: FastAPI, Pydantic v2, SQLAlchemy 2.x, PostgreSQL, Alembic, Celery + Redis, Ultralytics YOLO

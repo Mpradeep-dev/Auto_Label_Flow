@@ -1,0 +1,12 @@
+# Desktop bundle: base runtime + CPU-only torch/torchvision, resolved at
+# BUILD time (not on the user's machine). Local GPU training is an optional
+# pack the user downloads later — see app/workers/tasks/packs.py.
+#
+# Install with the CPU index explicitly:
+#   pip install -r requirements-desktop.txt \
+#       --extra-index-url https://download.pytorch.org/whl/cpu
+-r requirements.txt
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.5.1+cpu
+torchvision==0.20.1+cpu

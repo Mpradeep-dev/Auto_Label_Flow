@@ -1,0 +1,50 @@
+appId: co.uk.globaltechprofessionals.autolabelflow
+productName: AutoLabelFlow
+copyright: Copyright (c) 2026 Mpradeep-dev. All Rights Reserved.
+
+directories:
+  output: dist
+  buildResources: build
+
+# The shell's own files + production node_modules (electron-updater) go into
+# app.asar; everything heavy (the Python runtime, the built SPA, ffmpeg)
+# rides along as extraResources, referenced by path from main.js.
+files:
+  - main.js
+  - preload.js
+  - package.json
+  - node_modules/**/*
+  - "!node_modules/.cache"
+
+extraResources:
+  - from: build/python
+    to: python
+  - from: build/frontend
+    to: frontend
+  - from: build/bin
+    to: bin
+
+win:
+  target:
+    - nsis
+  # Versionless so the README's one-click link stays valid across releases:
+  #   github.com/<owner>/<repo>/releases/latest/download/AutoLabelFlow-Setup.exe
+  # electron-updater reads the real version from latest.yml, not the filename.
+  artifactName: ${productName}-Setup.${ext}
+  # Unsigned build. Skip the exe resource-edit/sign pass so electron-builder
+  # does not need its winCodeSign helper package, whose archive carries macOS
+  # symlinks that fail to extract on Windows without Developer Mode / admin.
+  signAndEditExecutable: false
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  deleteAppDataOnUninstall: false
+
+# Manual "Check for updates" button -> electron-updater -> public GitHub Releases.
+publish:
+  provider: github
+  owner: Mpradeep-dev
+  repo: Auto_Label_Flow
+  releaseType: release

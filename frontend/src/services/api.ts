@@ -54,7 +54,30 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export const api = {
-  health: () => request<{ status: string }>("/health"),
+  health: () => request<{ status: string; version?: string; task_queue?: string }>("/health"),
+
+  // --- Desktop app: system info + optional add-on packs ---
+  systemInfo: () =>
+    request<{
+      app_version: string;
+      schema_version: number | null;
+      task_queue: string;
+      storage_backend: string;
+      data_dir: string | null;
+      python_version: string;
+      platform: string;
+      frozen: boolean;
+      gpu_pack_installed: boolean;
+      integrations_pack_installed: boolean;
+    }>("/system/info"),
+  listPacks: () =>
+    request<{
+      packs: { name: "gpu" | "integrations"; installed: boolean; version: string | null; size_bytes: number | null }[];
+    }>("/system/packs"),
+  installPack: (name: "gpu" | "integrations") =>
+    request<{ pack: string; task_id: string }>(`/system/packs/${name}/install`, { method: "POST" }),
+  removePack: (name: "gpu" | "integrations") =>
+    request<void>(`/system/packs/${name}`, { method: "DELETE" }),
 
   // --- Projects ---
   listProjects: () => request<Project[]>("/projects"),

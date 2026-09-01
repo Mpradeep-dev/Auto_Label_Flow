@@ -1,14 +1,17 @@
 """Declarative base + shared column mixins. Every ORM model in `app/models/`
 inherits `Base`, and most inherit `TimestampMixin`/`UUIDPrimaryKeyMixin` too,
-so id/timestamp conventions live in exactly one place."""
+so id/timestamp conventions live in exactly one place.
+
+Column types come from `app.db.types` (`GUID`, `TZDateTime`) so the same
+models build on both PostgreSQL and the desktop app's bundled SQLite."""
 from __future__ import annotations
 
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+
+from app.db.types import GUID, TZDateTime
 
 
 def _utcnow() -> datetime:
@@ -20,13 +23,11 @@ class Base(DeclarativeBase):
 
 
 class UUIDPrimaryKeyMixin:
-    id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
-    )
+    id: Mapped[uuid.UUID] = mapped_column(GUID, primary_key=True, default=uuid.uuid4)
 
 
 class TimestampMixin:
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(TZDateTime, default=_utcnow, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=_utcnow, onupdate=_utcnow, nullable=False
+        TZDateTime, default=_utcnow, onupdate=_utcnow, nullable=False
     )

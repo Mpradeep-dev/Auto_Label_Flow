@@ -9,11 +9,11 @@ import uuid
 from datetime import datetime
 from enum import Enum as PyEnum
 
-from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, JSON, String
-from sqlalchemy.dialects.postgresql import UUID as PGUUID
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, JSON, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
+from app.db.types import GUID, TZDateTime, enum_column
 
 
 class TrainingProviderType(str, PyEnum):
@@ -34,7 +34,7 @@ class TrainingJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "training_jobs"
 
     project_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+        GUID, ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
     # CASCADE, not RESTRICT: there is no standalone "delete this dataset
     # version" endpoint in this app — the only ways a dataset_versions row
@@ -45,13 +45,13 @@ class TrainingJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # project with a training job on one of its versions 500'd with
     # `ForeignKeyViolation: training_jobs_dataset_version_id_fkey`.
     dataset_version_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("dataset_versions.id", ondelete="CASCADE"), nullable=False
+        GUID, ForeignKey("dataset_versions.id", ondelete="CASCADE"), nullable=False
     )
     base_model_id: Mapped[uuid.UUID | None] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("models.id", ondelete="SET NULL"), nullable=True
+        GUID, ForeignKey("models.id", ondelete="SET NULL"), nullable=True
     )
     result_model_id: Mapped[uuid.UUID | None] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("models.id", ondelete="SET NULL"), nullable=True
+        GUID, ForeignKey("models.id", ondelete="SET NULL"), nullable=True
     )
     # User-supplied name for the model this job produces. Every provider's
     # finalize step (train_local_model, kaggle_training._finalize_completed_job,
@@ -64,10 +64,10 @@ class TrainingJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     result_model_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
 
     provider: Mapped[TrainingProviderType] = mapped_column(
-        Enum(TrainingProviderType, name="training_provider_type"), nullable=False
+        enum_column(TrainingProviderType, "training_provider_type"), nullable=False
     )
     status: Mapped[TrainingJobStatus] = mapped_column(
-        Enum(TrainingJobStatus, name="training_job_status"),
+        enum_column(TrainingJobStatus, "training_job_status"),
         nullable=False,
         default=TrainingJobStatus.QUEUED,
         index=True,  # DB-05: the natural filter for "show running/queued jobs" UI polling
@@ -102,9 +102,9 @@ class TrainingJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     artifact_path: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     error: Mapped[str | None] = mapped_column(String(2000), nullable=True)
 
-    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    failed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    started_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
+    failed_at: Mapped[datetime | None] = mapped_column(TZDateTime, nullable=True)
 
 
 class TrainingJobEpoch(UUIDPrimaryKeyMixin, Base):
@@ -116,7 +116,7 @@ class TrainingJobEpoch(UUIDPrimaryKeyMixin, Base):
     __tablename__ = "training_job_epochs"
 
     training_job_id: Mapped[uuid.UUID] = mapped_column(
-        PGUUID(as_uuid=True), ForeignKey("training_jobs.id", ondelete="CASCADE"), nullable=False, index=True
+        GUID, ForeignKey("training_jobs.id", ondelete="CASCADE"), nullable=False, index=True
     )
     epoch: Mapped[int] = mapped_column(Integer, nullable=False)
     box_loss: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -126,4 +126,4 @@ class TrainingJobEpoch(UUIDPrimaryKeyMixin, Base):
     recall: Mapped[float | None] = mapped_column(Float, nullable=True)
     map50: Mapped[float | None] = mapped_column(Float, nullable=True)
     map50_95: Mapped[float | None] = mapped_column(Float, nullable=True)
-    recorded_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    recorded_at: Mapped[datetime] = mapped_column(TZDateTime, nullable=False)
