@@ -28,6 +28,10 @@ win:
   target:
     - nsis
   artifactName: ${productName}-Setup-${version}.${ext}
+  # Unsigned build. Skip the exe resource-edit/sign pass so electron-builder
+  # does not need its winCodeSign helper package, whose archive carries macOS
+  # symlinks that fail to extract on Windows without Developer Mode / admin.
+  signAndEditExecutable: false
 
 nsis:
   oneClick: false
