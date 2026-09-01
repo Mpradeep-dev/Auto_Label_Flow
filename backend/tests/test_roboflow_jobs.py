@@ -296,6 +296,95 @@ def test_rf_search_error_body_surfaces_as_runtime_error(
     assert "HTTP 401" in msg
 
 
+class _SeqResp:
+    """Minimal `requests.Response` stand-in for the retry tests."""
+
+    def __init__(self, status_code: int, payload: dict, text: str = "x") -> None:
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+
+    def json(self) -> dict:
+        return self._payload
+
+
+def test_rf_search_retries_transient_5xx_then_succeeds(monkeypatch) -> None:
+    """A transient 5xx from /search (observed live: Roboflow returned bare
+    HTTP 500s for a few minutes) is retried with backoff, not fatal — the
+    page load recovers as soon as Roboflow returns 200 again."""
+    import app.services.integrations.roboflow_import as mod
+
+    seq = [
+        _SeqResp(500, {"error": "An error occurred with this request"}),
+        _SeqResp(503, {"error": "upstream"}),
+        _SeqResp(200, {"results": [{"id": "a"}]}),
+    ]
+    calls = {"n": 0}
+
+    def fake_post(url, json=None, timeout=30):
+        r = seq[calls["n"]]
+        calls["n"] += 1
+        return r
+
+    slept: list[float] = []
+    monkeypatch.setattr(mod.requests, "post", fake_post)
+    monkeypatch.setattr(mod.time, "sleep", lambda s: slept.append(s))
+
+    rf_project = type("P", (), {"id": "ws/proj"})()
+    out = mod._rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
+
+    assert out == [{"id": "a"}]
+    assert calls["n"] == 3
+    assert slept == [1.0, 2.0]  # exponential backoff between the three attempts
+
+
+def test_rf_search_persistent_5xx_raises_with_retry_hint(monkeypatch) -> None:
+    """When every attempt 5xxs, the raised error keeps the real status/body
+    and tells the user it's a transient Roboflow-side problem to retry."""
+    import app.services.integrations.roboflow_import as mod
+
+    calls = {"n": 0}
+
+    def fake_post(url, json=None, timeout=30):
+        calls["n"] += 1
+        return _SeqResp(500, {"error": "An error occurred with this request, please try again."})
+
+    monkeypatch.setattr(mod.requests, "post", fake_post)
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    rf_project = type("P", (), {"id": "ws/proj"})()
+    with pytest.raises(RuntimeError) as excinfo:
+        mod._rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
+
+    msg = str(excinfo.value)
+    assert calls["n"] == mod._SEARCH_MAX_ATTEMPTS
+    assert "HTTP 500" in msg
+    assert "temporary Roboflow-side issue" in msg
+
+
+def test_rf_search_connection_error_is_retried(monkeypatch) -> None:
+    """A `requests` connection/timeout error is retried the same way, and
+    the final failure is a clear RuntimeError rather than a bare socket
+    exception bubbling out of the job."""
+    import app.services.integrations.roboflow_import as mod
+
+    calls = {"n": 0}
+
+    def fake_post(url, json=None, timeout=30):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise mod.requests.ConnectionError("connection reset")
+        return _SeqResp(200, {"results": []})
+
+    monkeypatch.setattr(mod.requests, "post", fake_post)
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    rf_project = type("P", (), {"id": "ws/proj"})()
+    out = mod._rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
+    assert out == []
+    assert calls["n"] == 3
+
+
 def test_roboflow_import_job_cancel_stops_early(
     connected_roboflow: TestClient, real_db_session, monkeypatch, unique_name: str
 ) -> None:

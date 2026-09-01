@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import logging
 import tempfile
+import time
 import uuid
 from pathlib import Path
 from typing import Callable
@@ -49,6 +50,16 @@ logger = logging.getLogger(__name__)
 
 _SPLIT_DIRS = ("train", "valid", "test")
 _RAW_SEARCH_PAGE_SIZE = 100
+
+# Roboflow's /search occasionally throws a transient 5xx (observed: bare
+# HTTP 500 "contact support" bodies for a few minutes at a time) or a 429.
+# Without a retry, one blip fails the whole multi-page import job. Retry
+# those statuses and connection/timeout errors with exponential backoff;
+# a 4xx or an {"error": ...} envelope is not transient and still raises at
+# once. Backoff between the 4 attempts: 1s, 2s, 4s.
+_SEARCH_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
+_SEARCH_MAX_ATTEMPTS = 4
+_SEARCH_BACKOFF_BASE_S = 1.0
 
 
 def _merge_class_config(project: Project, roboflow_names: list[str]) -> dict[int, tuple[int, str]]:
@@ -241,16 +252,46 @@ def _rf_search_page(
     shape, a permission failure on this one endpoint) surfaces only as an
     opaque `KeyError: 'results'` from deep in the SDK with the real cause
     swallowed. This issues the identical request (same URL the SDK builds
-    from `rf_project.id`, same payload) but inspects the response and keeps
-    the body in both the raised error and the logs.
+    from `rf_project.id`, same payload — including the SDK's `batch: false`)
+    but inspects the response, retries a transient 5xx/429, and keeps the
+    body in both the raised error and the logs.
     """
     from roboflow.config import API_URL
 
-    resp = requests.post(
-        f"{API_URL}/{rf_project.id}/search?api_key={api_key}",
-        json={"offset": offset, "limit": limit, "fields": fields},
-        timeout=30,
-    )
+    url = f"{API_URL}/{rf_project.id}/search?api_key={api_key}"
+    payload = {"offset": offset, "limit": limit, "batch": False, "fields": fields}
+
+    for attempt in range(1, _SEARCH_MAX_ATTEMPTS + 1):
+        try:
+            resp = requests.post(url, json=payload, timeout=30)
+        except requests.RequestException as exc:
+            logger.warning(
+                "Roboflow /search request error (attempt %d/%d): %s",
+                attempt,
+                _SEARCH_MAX_ATTEMPTS,
+                exc,
+            )
+            if attempt == _SEARCH_MAX_ATTEMPTS:
+                raise RuntimeError(
+                    f"Roboflow /search could not be reached after {_SEARCH_MAX_ATTEMPTS} "
+                    f"attempts ({exc}). This is usually a temporary Roboflow-side issue — "
+                    "retry the import in a few minutes."
+                ) from exc
+            time.sleep(_SEARCH_BACKOFF_BASE_S * 2 ** (attempt - 1))
+            continue
+
+        if resp.status_code in _SEARCH_RETRY_STATUSES and attempt < _SEARCH_MAX_ATTEMPTS:
+            logger.warning(
+                "Roboflow /search returned HTTP %s (attempt %d/%d) — retrying",
+                resp.status_code,
+                attempt,
+                _SEARCH_MAX_ATTEMPTS,
+            )
+            time.sleep(_SEARCH_BACKOFF_BASE_S * 2 ** (attempt - 1))
+            continue
+
+        break
+
     try:
         body = resp.json()
     except ValueError as exc:
@@ -264,7 +305,12 @@ def _rf_search_page(
     if resp.status_code != 200 or not isinstance(body, dict) or "results" not in body:
         logger.error("Roboflow /search failed (HTTP %s): %s", resp.status_code, body)
         detail = (body.get("error") or body.get("message") or body) if isinstance(body, dict) else body
-        raise RuntimeError(f"Roboflow /search failed (HTTP {resp.status_code}): {detail}")
+        hint = (
+            " This is usually a temporary Roboflow-side issue — retry the import in a few minutes."
+            if resp.status_code in _SEARCH_RETRY_STATUSES
+            else ""
+        )
+        raise RuntimeError(f"Roboflow /search failed (HTTP {resp.status_code}): {detail}{hint}")
 
     return body["results"]
 
