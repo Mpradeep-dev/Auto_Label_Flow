@@ -59,11 +59,31 @@ All user data (SQLite DB, media, model artifacts, logs, add-on packs) lives
 under `%APPDATA%/AutoLabelFlow/` and survives updates and uninstall
 (`deleteAppDataOnUninstall: false`).
 
+## Observed build output (v0.2.0, first build)
+
+| | |
+|---|---|
+| `AutoLabelFlow-Setup-0.2.0.exe` | ~438 MB |
+| `win-unpacked/` (installed footprint) | ~2.3 GB |
+| Bundled Python (`build/python`) | ~1.9 GB — torch CPU, OpenCV (×2: headless + the copy ultralytics pulls), matplotlib, polars, numpy, sympy |
+
+Trim levers if the installer needs to be smaller: use the
+`install_only_stripped` python-build-standalone asset; drop `matplotlib`
+(only ultralytics training plots need it); carefully remove `opencv-python`
+and keep `opencv-python-headless`. The `.pdb` / `__pycache__` strip is
+already in `build.mjs`.
+
 ## Notes
 
-- **Unsigned** — Windows SmartScreen warns on first run ("More info → Run
-  anyway"). Auto-update still works. To sign later, add a `win.certificateFile`
-  / `certificatePassword` (or an EV token config) to `electron-builder.yml`.
+- **Unsigned** — `win.signAndEditExecutable: false` in `electron-builder.yml`
+  skips the exe resource-edit/sign pass; this also sidesteps electron-builder's
+  `winCodeSign` helper, whose archive carries macOS symlinks that fail to
+  extract on Windows without Developer Mode / an elevated shell. Windows
+  SmartScreen warns on first run ("More info → Run anyway"). Auto-update still
+  works. To sign later, remove that line and add `win.certificateFile` /
+  `certificatePassword` (or an EV token config).
+- **No app icon** — electron-builder falls back to the default Electron icon.
+  Add `desktop/build/icon.ico` (256×256) to brand it.
 - To move updates off public GitHub Releases (the all-rights-reserved LICENSE
   makes the installer publicly downloadable): switch `publish.provider` to
   `generic` with a `url` you host, and point `autoUpdater` at it. Config-only.
