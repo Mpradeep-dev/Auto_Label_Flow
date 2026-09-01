@@ -58,15 +58,19 @@ if (!args.has("--skip-frontend")) {
 // --- 3. python runtime ---
 if (!args.has("--skip-python")) {
   rmSync(join(BUILD, "python"), { recursive: true, force: true });
-  mkdirSync(join(BUILD, "python"), { recursive: true });
+  mkdirSync(BUILD, { recursive: true });
 
   const tgz = join(tmpdir(), `cpython-${PY_VER}-${PBS_TAG}.tar.gz`);
   if (!existsSync(tgz)) {
     console.log(`  ⬇ ${PBS_URL}`);
     run(`curl -L --fail -o "${tgz}" "${PBS_URL}"`);
   }
-  // python-build-standalone "install_only" archives contain a top-level python/
-  run(`tar -xzf "${tgz}" -C "${join(BUILD)}"`); // -> build/python/
+  // python-build-standalone "install_only" archives contain a top-level python/.
+  // Use the Windows system bsdtar (handles C:\ drive paths; GNU tar reads the
+  // colon as a remote host) and extract with cwd rather than -C.
+  const tarExe =
+    process.platform === "win32" ? `${process.env.SystemRoot}\\System32\\tar.exe` : "tar";
+  run(`"${tarExe}" -xf "${tgz}"`, { cwd: BUILD }); // -> build/python/
   const py = join(BUILD, "python", "python.exe");
   if (!existsSync(py)) throw new Error(`expected ${py} after extract`);
 
