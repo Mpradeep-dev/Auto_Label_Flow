@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/services/api";
 import { desktop } from "@/services/desktop";
 import { SectionLabel } from "@/components/layout/SectionLabel";
+import { FieldError } from "@/components/layout/FieldError";
 
 // Desktop-only Settings section: the manual "Check for updates" button and
 // the two optional add-on packs (GPU training support, cloud integrations).
@@ -21,7 +22,25 @@ type UpdateState =
   | { kind: "available"; version: string; notes?: string | null }
   | { kind: "downloading"; percent: number }
   | { kind: "downloaded"; version: string }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string; detail?: string };
+
+// electron-updater rejects (check OR download) with the raw HttpError text —
+// 404 body, response headers and a Node stack trace all concatenated into one
+// string. Collapse the shapes we recognise into a single sentence; the
+// untouched original is kept behind a "Technical details" toggle.
+function humanizeUpdateError(raw: string): string {
+  const s = raw.replace(/^Error invoking remote method '[^']*':\s*/, "").trim();
+  if (/latest\.yml|Cannot find .*\.ya?ml|HttpError: 404|\b404\b/i.test(s))
+    return "A newer version is available, but its installer files aren't published on the release yet. Try again later.";
+  if (/ENOTFOUND|EAI_AGAIN|ETIMEDOUT|ECONNREFUSED|ECONNRESET|getaddrinfo|net::|ERR_INTERNET/i.test(s))
+    return "Couldn't reach the update server. Check your internet connection and try again.";
+  if (/No published versions|Unable to find latest version/i.test(s))
+    return "No published releases are available yet.";
+  if (/sha512|checksum|integrity|signature/i.test(s))
+    return "The downloaded update failed its integrity check. Try again.";
+  if (/ENOSPC|no space/i.test(s)) return "Not enough disk space to download the update.";
+  return "The update couldn't be completed. See technical details below.";
+}
 
 function AppUpdateCard() {
   const infoQuery = useQuery({ queryKey: ["system-info"], queryFn: () => api.systemInfo() });
@@ -33,7 +52,9 @@ function AppUpdateCard() {
     );
     const offProg = desktop.onDownloadProgress((p) => setState({ kind: "downloading", percent: p.percent }));
     const offDone = desktop.onUpdateDownloaded((i) => setState({ kind: "downloaded", version: i.version }));
-    const offErr = desktop.onUpdateError((m) => setState({ kind: "error", message: m }));
+    const offErr = desktop.onUpdateError((m) =>
+      setState({ kind: "error", message: humanizeUpdateError(m), detail: m }),
+    );
     return () => {
       offAvail();
       offProg();
@@ -52,7 +73,8 @@ function AppUpdateCard() {
         setState({ kind: "current" });
       }
     } catch (e) {
-      setState({ kind: "error", message: (e as Error).message });
+      const raw = e instanceof Error ? e.message : String(e);
+      setState({ kind: "error", message: humanizeUpdateError(raw), detail: raw });
     }
   }
 
@@ -83,7 +105,12 @@ function AppUpdateCard() {
           <button
             onClick={() => {
               setState({ kind: "downloading", percent: 0 });
-              desktop.downloadUpdate();
+              // Belt-and-braces: electron-updater also emits `error`, but the
+              // returned promise can reject on its own — don't leave it unhandled.
+              desktop.downloadUpdate().catch((e) => {
+                const raw = e instanceof Error ? e.message : String(e);
+                setState({ kind: "error", message: humanizeUpdateError(raw), detail: raw });
+              });
             }}
             className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-orange hover:border-orange"
           >
@@ -105,9 +132,24 @@ function AppUpdateCard() {
             Restart &amp; install v{state.version}
           </button>
         )}
-
-        {state.kind === "error" && <span className="text-xs text-accent-ink">{state.message}</span>}
       </div>
+
+      {state.kind === "error" && (
+        <div role="alert" className="mt-4 border-2 border-accent-ink p-3">
+          <p className="text-xs font-bold uppercase tracking-widest text-accent-ink">Update failed</p>
+          <p className="mt-1 text-xs text-ink/70">{state.message}</p>
+          {state.detail && (
+            <details className="mt-2">
+              <summary className="cursor-pointer text-[10px] font-bold uppercase tracking-widest text-ink/50 hover:text-ink">
+                Technical details
+              </summary>
+              <pre className="mt-2 max-h-40 overflow-auto border border-ink/20 bg-muted p-3 text-[11px] whitespace-pre-wrap break-words text-ink/60">
+                {state.detail}
+              </pre>
+            </details>
+          )}
+        </div>
+      )}
 
       {state.kind === "available" && state.notes && (
         <pre className="mt-4 max-h-40 overflow-auto border border-ink/20 bg-muted p-3 text-xs whitespace-pre-wrap text-ink/70">
@@ -132,23 +174,32 @@ function PackRow({
   const pack = packsQuery.data?.packs.find((p) => p.name === name);
   const [log, setLog] = useState<string>("");
   const [running, setRunning] = useState(false);
+  const [streamError, setStreamError] = useState<string | null>(null);
   const esRef = useRef<EventSource | null>(null);
+  // Set once the stream reaches a terminal state so the `error` event that
+  // fires on our own es.close() isn't mistaken for a dropped connection.
+  const settledRef = useRef(false);
 
   useEffect(() => () => esRef.current?.close(), []);
 
   const install = useMutation({
     mutationFn: () => api.installPack(name),
+    onMutate: () => setStreamError(null),
     onSuccess: () => {
       setRunning(true);
       setLog("");
+      settledRef.current = false;
       const es = new EventSource(`/api/v1/system/packs/${name}/stream`);
       esRef.current = es;
       es.onmessage = (ev) => {
         const d = JSON.parse(ev.data) as { state: string; detail: string; lines: string[] };
         setLog(d.lines.slice(-8).join("\n"));
         if (d.state === "done" || d.state === "failed") {
+          settledRef.current = true;
           es.close();
           setRunning(false);
+          if (d.state === "failed")
+            setStreamError(d.detail || "The installation failed — see the log below.");
           queryClient.invalidateQueries({ queryKey: ["system-packs"] });
           queryClient.invalidateQueries({ queryKey: ["system-info"] });
           queryClient.invalidateQueries({ queryKey: ["integrations"] });
@@ -157,12 +208,15 @@ function PackRow({
       es.onerror = () => {
         es.close();
         setRunning(false);
+        if (!settledRef.current)
+          setStreamError("Lost the connection to the installer. It may still be running — reopen this page to check.");
       };
     },
   });
 
   const remove = useMutation({
     mutationFn: () => api.removePack(name),
+    onMutate: () => setStreamError(null),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["system-packs"] });
       queryClient.invalidateQueries({ queryKey: ["system-info"] });
@@ -208,8 +262,15 @@ function PackRow({
         )}
       </div>
 
+      <FieldError error={install.error ?? remove.error} />
+      {streamError && (
+        <p role="alert" className="mt-2 text-xs text-accent-ink">
+          {streamError}
+        </p>
+      )}
+
       {log && (
-        <pre className="mt-4 max-h-40 overflow-auto border border-ink/20 bg-muted p-3 text-[11px] whitespace-pre-wrap text-ink/70">
+        <pre className="mt-4 max-h-40 overflow-auto border border-ink/20 bg-muted p-3 text-[11px] whitespace-pre-wrap break-words text-ink/70">
           {log}
         </pre>
       )}
