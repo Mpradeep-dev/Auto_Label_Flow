@@ -193,7 +193,7 @@ def test_roboflow_import_job_completes_and_creates_dataset(
     assert dataset.status_code == 200
     stats = connected_roboflow.get(f"/api/v1/datasets/{job['result_dataset_id']}/stats").json()
     assert stats["total_images"] == 1
-    assert stats["approved_images"] == 1
+    assert stats["approved_images"] == 0
 
 
 def test_roboflow_import_job_raw_pull_when_no_version(
@@ -230,8 +230,7 @@ def test_roboflow_import_job_raw_pull_when_no_version(
     dataset_id = job["result_dataset_id"]
     stats = connected_roboflow.get(f"/api/v1/datasets/{dataset_id}/stats").json()
     assert stats["total_images"] == 2
-    # Unlike a versioned pull, a raw pull is not curated ground truth —
-    # images land pending review, not auto-approved.
+    # Both versioned and raw pulls leave images PENDING for review.
     assert stats["approved_images"] == 0
 
     project = connected_roboflow.get(f"/api/v1/projects/{project_id}").json()

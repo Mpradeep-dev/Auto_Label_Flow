@@ -1,12 +1,11 @@
 """Pull an existing Roboflow project version in as a new Dataset (PLAN
 follow-on: "import source", the other half of the Roboflow integration).
 
-Imported boxes are treated as already-reviewed ground truth, not
-model output: `source=HUMAN` (someone labeled them, just not in this app)
-and the image is approved immediately via the existing `approve_image()`
-service call — reusing it rather than setting `review_status` by hand
-means the per-annotation status and the image status can never drift
-apart (see `annotation/service.py`).
+Imported boxes are treated as ground truth (`source=HUMAN` — someone
+labeled them, just not in this app) but images are left `PENDING` so
+the user must review and approve them before they can be versioned or
+exported, same as auto-annotated images. This ensures every image
+passes through the review flow.
 
 Class identity is resolved by NAME against the project's existing
 `class_config`, never by raw index — Roboflow's own class ids are an
@@ -42,7 +41,7 @@ from app.models.annotation import AnnotationSource
 from app.models.dataset import Dataset
 from app.models.image import Image, ImageSourceType
 from app.models.project import Project
-from app.services.annotation.service import approve_image, create_annotation
+from app.services.annotation.service import create_annotation
 from app.services.integrations.roboflow_connect import get_client
 from app.services.storage.factory import get_storage
 
@@ -216,8 +215,6 @@ def import_roboflow_project(
                         source=AnnotationSource.HUMAN,
                         actor="roboflow-import",
                     )
-            approve_image(db, image_id=image.id)
-
             if progress_cb is not None:
                 progress_cb(i + 1, total)
 
@@ -344,11 +341,9 @@ def import_roboflow_raw_project(
     should_cancel: Callable[[], bool] | None = None,
 ) -> Dataset:
     """Pulls a project's raw uploaded images directly, for a project with
-    no generated Version to `.download()`. Images are left PENDING, not
-    auto-approved like `import_roboflow_project`: a raw Roboflow upload
-    isn't a curated export, so whatever boxes exist on it (there may be
-    none at all) aren't treated as already-reviewed ground truth here —
-    they're a starting point to review in this app instead.
+    no generated Version to `.download()`. Images are left PENDING so
+    the user must review and approve them before they can be versioned
+    or exported — same as `import_roboflow_project`.
 
     `unannotated_only` narrows the pull to images with zero existing
     Roboflow annotations — useful when the point of pulling them in here
