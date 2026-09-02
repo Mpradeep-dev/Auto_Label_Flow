@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import uuid
 
+import cv2
+import numpy as np
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, status
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -11,7 +13,11 @@ from app.db.session import get_db
 from app.models.dataset import Dataset
 from app.models.image import Image, ImageReviewStatus
 from app.schemas.image import ImageListPage, ImageRead
+from app.schemas.sam import SegmentRequest, SegmentResponse
+from app.services.inference.detector import ModelLoadError
+from app.services.inference.sam_adapter import SamSegmentationError, get_segmenter
 from app.services.storage.factory import get_storage
+from app.services.system import sam_models
 
 router = APIRouter(tags=["images"])
 
@@ -109,6 +115,41 @@ def get_image(image_id: uuid.UUID, db: Session = Depends(get_db)) -> ImageRead:
     if image is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Image not found")
     return _to_read(image)
+
+
+@router.post("/images/{image_id}/segment", response_model=SegmentResponse)
+def segment_image(image_id: uuid.UUID, payload: SegmentRequest, db: Session = Depends(get_db)) -> SegmentResponse:
+    """SAM-assisted interactive segmentation: one or more prompt points in,
+    a normalized polygon out — indistinguishable in storage from a
+    hand-drawn one once the caller POSTs it to `/annotations` (see
+    `services/inference/sam_adapter.py`'s module docstring). Synchronous,
+    not a background job: this is a single click-and-wait interaction, the
+    same shape as any other quick request, not a whole-dataset sweep."""
+    image = db.get(Image, image_id)
+    if image is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Image not found")
+
+    if payload.variant not in sam_models.SAM_VARIANTS:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Unknown SAM variant {payload.variant!r}")
+    if not sam_models.is_installed(payload.variant):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            f"{sam_models.SAM_VARIANTS[payload.variant].label} isn't downloaded yet — "
+            "download it from Settings first.",
+        )
+
+    raw = get_storage().read_bytes(image.storage_key)
+    arr = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if arr is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Stored image could not be decoded")
+
+    try:
+        segmenter = get_segmenter(str(sam_models.weights_path(payload.variant)))
+        points = segmenter.segment(arr, payload.points, payload.resolved_labels)
+    except (ModelLoadError, SamSegmentationError) as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+
+    return SegmentResponse(points=points)
 
 
 @router.delete("/images/{image_id}", status_code=status.HTTP_204_NO_CONTENT)

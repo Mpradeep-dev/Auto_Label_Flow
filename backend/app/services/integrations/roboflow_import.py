@@ -241,7 +241,13 @@ def _ensure_class_id(project: Project, name: str) -> int:
 
 
 def _rf_search_page(
-    rf_project, api_key: str, *, offset: int, limit: int, fields: list[str]
+    rf_project,
+    api_key: str,
+    *,
+    offset: int,
+    limit: int,
+    fields: list[str],
+    batch_id: str | None = None,
 ) -> list[dict]:
     """Direct call to Roboflow's `/search` endpoint, in place of
     `rf_project.search()`. The SDK (roboflow==1.4.1) ends `search()` with a
@@ -251,15 +257,25 @@ def _rf_search_page(
     `{"results": [...]}` (an `{"error": ...}` body, a changed response
     shape, a permission failure on this one endpoint) surfaces only as an
     opaque `KeyError: 'results'` from deep in the SDK with the real cause
-    swallowed. This issues the identical request (same URL the SDK builds
-    from `rf_project.id`, same payload — including the SDK's `batch: false`)
-    but inspects the response, retries a transient 5xx/429, and keeps the
-    body in both the raised error and the logs.
+    swallowed. This issues the identical request (same URL and payload
+    shape the SDK builds from `rf_project.id`) but inspects the response,
+    retries a transient 5xx/429, and keeps the body in both the raised
+    error and the logs.
+
+    `batch_id`, when given, narrows results to that one upload batch —
+    same as the SDK's `search(batch=True, batch_id=...)`.
     """
     from roboflow.config import API_URL
 
     url = f"{API_URL}/{rf_project.id}/search?api_key={api_key}"
-    payload = {"offset": offset, "limit": limit, "batch": False, "fields": fields}
+    payload = {
+        "offset": offset,
+        "limit": limit,
+        "batch": batch_id is not None,
+        "fields": fields,
+    }
+    if batch_id is not None:
+        payload["batch_id"] = batch_id
 
     for attempt in range(1, _SEARCH_MAX_ATTEMPTS + 1):
         try:
@@ -323,6 +339,7 @@ def import_roboflow_raw_project(
     project_slug: str,
     dataset_name: str | None,
     unannotated_only: bool = False,
+    batch_id: str | None = None,
     progress_cb: Callable[[int, int], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> Dataset:
@@ -340,6 +357,11 @@ def import_roboflow_raw_project(
     off each item's `annotations.count` (the `search()` endpoint has no
     server-side "has no annotations" filter to push this down to).
 
+    `batch_id`, when given, narrows the pull to one upload batch (as
+    listed by `roboflow_browse.list_batches`) instead of every raw image
+    in the project — pushed down to the `/search` request itself rather
+    than filtered locally, since Roboflow does support it server-side.
+
     `should_cancel()` is checked both between search pages (this path has
     no single giant blocking call the way a version `.download()` does, so
     even the listing phase can stop early) and before each image."""
@@ -349,6 +371,13 @@ def import_roboflow_raw_project(
 
     rf, config = get_client(db)
     rf_project = rf.workspace(workspace).project(project_slug)
+
+    # "annotations" is only asked for when `unannotated_only` actually needs
+    # it (to filter locally on `annotations.count`) — on a project with a
+    # lot of boxes per image, serializing that field for every result is
+    # real extra work on Roboflow's side for no reason the other branch
+    # cares about, so it's left off the payload entirely there.
+    search_fields = ["id", "name"] + (["annotations"] if unannotated_only else [])
 
     items: list[dict] = []
     offset = 0
@@ -360,7 +389,8 @@ def import_roboflow_raw_project(
             config["api_key"],
             offset=offset,
             limit=_RAW_SEARCH_PAGE_SIZE,
-            fields=["id", "name", "annotations"],
+            fields=search_fields,
+            batch_id=batch_id,
         )
         items.extend(page)
         if len(page) < _RAW_SEARCH_PAGE_SIZE:

@@ -20,6 +20,8 @@ from typing import Callable
 
 from sqlalchemy.orm import Session
 
+from app.models.dataset import Dataset
+from app.models.dataset_version import DatasetVersion
 from app.services.dataset.export_yolo import ExportError, write_yolo_dataset
 from app.services.integrations.roboflow_connect import get_client
 
@@ -51,6 +53,22 @@ def push_version_to_roboflow(
 
     rf, _config = get_client(db)
     project = rf.workspace(workspace).project(project_slug)
+
+    # Left unset, the SDK groups every upload under its own hardcoded
+    # `DEFAULT_BATCH_NAME` ("Pip Package Upload") — meaningless in
+    # Roboflow's UI once more than one project or app pushes into the same
+    # Roboflow project. Name the batch after this app and the dataset
+    # version it came from instead, so it's identifiable at a glance.
+    version = db.get(DatasetVersion, version_id)
+    dataset = db.get(Dataset, version.dataset_id) if version is not None else None
+    # `{dataset.name}-v{version_number}` matches the naming already used for
+    # this version's own export filenames (export_yolo.py/export_coco.py/
+    # export_cvat.py) — same identifier, just also visible in Roboflow now.
+    batch_name = (
+        f"AutoLabelFlow ({dataset.name}-v{version.version_number})"
+        if version is not None and dataset is not None
+        else "AutoLabelFlow"
+    )
 
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp) / "dataset"
@@ -85,6 +103,7 @@ def push_version_to_roboflow(
                     annotation_path=str(label_path) if label_path.exists() else None,
                     annotation_labelmap=str(data_yaml_path),
                     split=roboflow_split,
+                    batch_name=batch_name,
                 )
                 uploaded += 1
             except Exception as exc:  # a single bad image shouldn't abort the whole push

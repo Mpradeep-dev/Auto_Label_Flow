@@ -56,3 +56,31 @@ def list_versions(db: Session, *, workspace: str, project_slug: str) -> list[dic
     # Newest first — the version someone most likely wants to import.
     versions.sort(key=lambda v: v["version"], reverse=True)
     return versions
+
+
+def list_batches(db: Session, *, workspace: str, project_slug: str) -> list[dict]:
+    """Upload batches of a project — the groupings Roboflow's own
+    Annotate tab splits raw (unversioned) uploads into. Lets the raw
+    import path (`import_roboflow_raw_project`) narrow to one batch by
+    id instead of always pulling every raw image in the project."""
+    rf, _config = get_client(db)
+    project = rf.workspace(workspace).project(project_slug)
+
+    payload = project.get_batches()
+    # Roboflow's `GET .../batches` wraps the list as {"batches": [...]};
+    # tolerate a bare list too in case that ever changes.
+    raw_batches = payload.get("batches", []) if isinstance(payload, dict) else payload
+
+    batches = []
+    for b in raw_batches or []:
+        batch_id = b.get("id")
+        if not batch_id:
+            continue
+        batches.append(
+            {
+                "id": batch_id,
+                "name": b.get("name") or batch_id,
+                "image_count": b.get("images") or b.get("numImages") or b.get("image_count") or 0,
+            }
+        )
+    return batches

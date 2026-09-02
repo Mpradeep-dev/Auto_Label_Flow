@@ -28,7 +28,8 @@ logger = logging.getLogger(__name__)
 # Bump when a released desktop build changes the schema, and add the
 # corresponding upgrade step in `_upgrade()` below.
 #   2: images.is_external + blob_import_jobs (Azure Blob import by reference)
-SCHEMA_VERSION = 2
+#   3: roboflow_jobs.batch_id (import raw pull, narrow to one upload batch)
+SCHEMA_VERSION = 3
 
 
 def init_sqlite_schema(engine: Engine) -> None:
@@ -66,6 +67,9 @@ def _upgrade(conn, from_version: int) -> None:  # noqa: ANN001
         _add_column_if_missing(conn, "images", "is_external", "BOOLEAN NOT NULL DEFAULT 0")
         # `create()` with checkfirst skips the table if it somehow exists.
         Base.metadata.tables["blob_import_jobs"].create(bind=conn, checkfirst=True)
+
+    if from_version < 3:
+        _add_column_if_missing(conn, "roboflow_jobs", "batch_id", "VARCHAR(200)")
 
 
 def _add_column_if_missing(conn, table: str, column: str, ddl_type: str) -> None:  # noqa: ANN001

@@ -230,6 +230,46 @@ def test_destructive_roboflow_sdk_methods_are_blocked(client: TestClient, monkey
         training.delete()
 
 
+def test_connect_installs_stdout_guard(client: TestClient, monkeypatch) -> None:
+    """`_install_destructive_guards` (run as a side effect of connecting)
+    must also install the stdout guard — see `_CrashProofStdout` and
+    `test_stdout_guard_absorbs_oserror_from_writes` below for why."""
+    import roboflow
+
+    import app.services.integrations.roboflow_connect as roboflow_connect_module
+
+    monkeypatch.setattr(roboflow, "Roboflow", _FakeRoboflow)
+    resp = client.post("/api/v1/integrations/roboflow", json={"api_key": "good-key"})
+    assert resp.status_code == 200
+
+    assert roboflow_connect_module._stdout_guard_installed is True
+
+
+def test_stdout_guard_absorbs_oserror_from_writes() -> None:
+    """Regression: the `roboflow` SDK writes decorative progress messages
+    straight to `sys.stdout` (e.g. `Roboflow.workspace()`'s
+    `sys.stdout.write("\\r" + "loading Roboflow workspace...")`). Under the
+    desktop app, stdout is piped to a log file with PYTHONUNBUFFERED=1, and
+    on Windows a write to that piped (non-console) stdout can raise
+    `OSError: [Errno 22] Invalid argument` from deep inside the SDK —
+    observed live as `list_projects()` failing with "Could not list
+    Roboflow projects: [Errno 22] Invalid argument" with no real Roboflow
+    API failure involved. `_CrashProofStdout` must swallow a write/flush
+    failure from the stream it wraps instead of letting it propagate."""
+    from app.services.integrations.roboflow_connect import _CrashProofStdout
+
+    class _BrokenStream:
+        def write(self, s):
+            raise OSError(22, "Invalid argument")
+
+        def flush(self):
+            raise OSError(22, "Invalid argument")
+
+    guarded = _CrashProofStdout(_BrokenStream())
+    guarded.write("\r" + "loading Roboflow workspace...")  # must not raise
+    guarded.flush()  # must not raise
+
+
 def test_list_roboflow_versions(client: TestClient, monkeypatch) -> None:
     import roboflow
 

@@ -80,13 +80,29 @@ class _FakeRoboflowProject:
         # `_rf_search_page` builds the /search URL from `rf_project.id`
         # (canonical "workspace/project"), mirroring the real SDK.
         self.id = f"my-workspace/{slug}"
-        self.uploads: list[tuple[str, str | None, str]] = []
+        self.uploads: list[tuple[str, str | None, str, str | None]] = []
 
     def version(self, v: int) -> _FakeRoboflowVersion:
         return _FakeRoboflowVersion(v)
 
-    def upload(self, *, image_path: str, annotation_path: str | None, annotation_labelmap: str, split: str) -> None:
-        self.uploads.append((image_path, annotation_path, split))
+    def get_batches(self) -> dict:
+        return {
+            "batches": [
+                {"id": "batch-1", "name": "Batch One", "images": 5},
+                {"id": "batch-2", "name": "Batch Two", "images": 3},
+            ]
+        }
+
+    def upload(
+        self,
+        *,
+        image_path: str,
+        annotation_path: str | None,
+        annotation_labelmap: str,
+        split: str,
+        batch_name: str | None = None,
+    ) -> None:
+        self.uploads.append((image_path, annotation_path, split, batch_name))
 
     # Raw (unversioned) pull path — no `.version()` here. The service no
     # longer calls `rf_project.search()`; it POSTs to /search directly, so
@@ -255,6 +271,73 @@ def test_roboflow_import_job_raw_pull_unannotated_only(
     assert images[0]["original_filename"] == "raw2.jpg"
     annotations = connected_roboflow.get(f"/api/v1/images/{images[0]['id']}/annotations").json()
     assert annotations == []
+
+
+def test_list_roboflow_batches(connected_roboflow: TestClient) -> None:
+    resp = connected_roboflow.get("/api/v1/integrations/roboflow/projects/my-workspace/ground/batches")
+    assert resp.status_code == 200, resp.text
+    batches = resp.json()
+    assert batches == [
+        {"id": "batch-1", "name": "Batch One", "image_count": 5},
+        {"id": "batch-2", "name": "Batch Two", "image_count": 3},
+    ]
+
+
+def test_rf_search_page_forwards_batch_id_in_payload(monkeypatch) -> None:
+    """`batch_id`, when passed, must reach the /search payload as Roboflow's
+    own `search(batch=True, batch_id=...)` would send it — this is the
+    plumbing `import_roboflow_raw_project`'s `batch_id` param relies on to
+    actually narrow the pull server-side."""
+    import app.services.integrations.roboflow_import as mod
+
+    captured: dict = {}
+
+    def fake_post(url, json=None, timeout=30):
+        captured.update(json or {})
+        return _SeqResp(200, {"results": []})
+
+    monkeypatch.setattr(mod.requests, "post", fake_post)
+
+    rf_project = type("P", (), {"id": "ws/proj"})()
+    mod._rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"], batch_id="batch-1")
+
+    assert captured["batch"] is True
+    assert captured["batch_id"] == "batch-1"
+
+
+def test_roboflow_import_job_raw_pull_by_batch_id(
+    connected_roboflow: TestClient, monkeypatch, unique_name: str
+) -> None:
+    """`batch_id` on the import request is stored on the job and forwarded
+    to every /search page — the actual filtering happens server-side on
+    Roboflow, so this only verifies the plumbing through the job."""
+    import app.services.integrations.roboflow_import as roboflow_import_module
+
+    captured_payloads: list[dict] = []
+
+    def _fake_get(url: str, timeout: int = 30) -> _FakeHTTPResponse:
+        return _FakeHTTPResponse(_jpeg_bytes())
+
+    def _fake_post(url: str, json: dict | None = None, timeout: int = 30) -> _FakeSearchResponse:
+        captured_payloads.append(json or {})
+        return _fake_search_post(url, json=json, timeout=timeout)
+
+    monkeypatch.setattr(roboflow_import_module.requests, "get", _fake_get)
+    monkeypatch.setattr(roboflow_import_module.requests, "post", _fake_post)
+
+    project_id = connected_roboflow.post("/api/v1/projects", json={"name": unique_name}).json()["id"]
+
+    resp = connected_roboflow.post(
+        f"/api/v1/projects/{project_id}/import/roboflow",
+        json={"workspace": "my-workspace", "project": "ground", "batch_id": "batch-1"},
+    )
+    assert resp.status_code == 202, resp.text
+    job = resp.json()
+    assert job["batch_id"] == "batch-1"
+    assert job["status"] == "COMPLETED"
+
+    assert captured_payloads, "expected at least one /search call"
+    assert all(p.get("batch") is True and p.get("batch_id") == "batch-1" for p in captured_payloads)
 
 
 def test_rf_search_error_body_surfaces_as_runtime_error(
@@ -538,6 +621,37 @@ def test_roboflow_export_job_completes_and_uploads(
     assert progress is not None
     assert progress.status == "COMPLETED"
     assert progress.current == 1
+
+
+def test_roboflow_export_names_batch_after_app_and_dataset_version(
+    connected_roboflow: TestClient, approved_version: tuple[str, str], monkeypatch
+) -> None:
+    """Regression: pushing to Roboflow left every export under the SDK's own
+    default batch name ("Pip Package Upload") since `push_version_to_roboflow`
+    never passed `batch_name` — indistinguishable in Roboflow's UI from any
+    other tool's uploads. Exports must be grouped under a batch that
+    identifies this app and which dataset version was pushed."""
+    _, version_id = approved_version
+
+    captured: list[dict] = []
+    original_upload = _FakeRoboflowProject.upload
+
+    def _spy_upload(self, **kwargs):
+        captured.append(kwargs)
+        return original_upload(self, **kwargs)
+
+    monkeypatch.setattr(_FakeRoboflowProject, "upload", _spy_upload)
+
+    resp = connected_roboflow.post(
+        f"/api/v1/versions/{version_id}/export/roboflow",
+        json={"workspace": "my-workspace", "project": "cones"},
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["status"] == "COMPLETED"
+
+    assert captured
+    # `approved_version`'s dataset is named "d"; its first version is v1.
+    assert all(c["batch_name"] == "AutoLabelFlow (d-v1)" for c in captured)
 
 
 def test_roboflow_export_job_requires_connection_first(real_client: TestClient, unique_name: str) -> None:

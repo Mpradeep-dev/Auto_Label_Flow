@@ -18,7 +18,8 @@ from fastapi.responses import StreamingResponse
 
 from app.core.config import settings
 from app.db.session import engine
-from app.services.system import packs
+from app.schemas.sam import SamModelStatusRead
+from app.services.system import packs, sam_models
 
 router = APIRouter(prefix="/system", tags=["system"])
 
@@ -102,3 +103,51 @@ def remove_pack(name: str = Path(pattern="^(gpu|integrations)$")) -> None:
         import shutil
 
         shutil.rmtree(d, ignore_errors=True)
+
+
+# --- Optional SAM checkpoints ("Download SAM Lite/Full" on Settings) ---
+#
+# Deliberately a separate mechanism from /packs above: a pack installs a
+# pip dependency set into sys.path, but ultralytics (already a base
+# dependency) ships SAM/MobileSAM support natively — what's optional here
+# is only the checkpoint *file*, tracked by services/system/sam_models.py
+# (present/absent on disk under MODELS_DIR/sam/, not a pack.json marker).
+
+
+@router.get("/sam-models", response_model=list[SamModelStatusRead])
+def list_sam_models() -> list[sam_models.SamModelStatus]:
+    return sam_models.all_status()
+
+
+@router.post("/sam-models/{name}/download", status_code=202)
+def install_sam_model(name: str = Path(pattern="^(sam-lite|sam-full)$")) -> dict:
+    from app.workers.tasks.sam_download import download_sam_model
+
+    result = download_sam_model.delay(name)
+    return {"variant": name, "task_id": result.id}
+
+
+@router.get("/sam-models/{name}/stream")
+async def stream_sam_model_download(name: str = Path(pattern="^(sam-lite|sam-full)$")):
+    """SSE stream of download progress — byte counts, unlike /packs/{name}/stream's
+    pip-log lines, since this is a plain file download."""
+    from app.workers.tasks.sam_download import get_download_progress
+
+    async def event_stream():
+        last = None
+        for _ in range(3600):
+            prog = get_download_progress(name) or {"state": "idle", "detail": "", "downloaded": 0, "total": 0}
+            payload = json.dumps(prog)
+            if payload != last:
+                yield f"data: {payload}\n\n"
+                last = payload
+            if prog["state"] in ("done", "failed"):
+                return
+            await asyncio.sleep(0.5)
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.delete("/sam-models/{name}", status_code=204)
+def remove_sam_model(name: str = Path(pattern="^(sam-lite|sam-full)$")) -> None:
+    sam_models.remove(name)

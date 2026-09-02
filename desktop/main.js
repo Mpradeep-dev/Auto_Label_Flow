@@ -13,6 +13,12 @@
  * Updates are manual: the renderer calls desktop:check-for-updates, then
  * desktop:download-update, then desktop:quit-and-install (electron-updater,
  * public GitHub Releases).
+ *
+ * Dev-frontend mode (`npm run start:dev`, unpackaged only): skips the
+ * `frontend/dist` build. The backend runs API-only (FRONTEND_DIST_DIR unset)
+ * on the fixed port Vite's dev-server proxy already targets by default
+ * (127.0.0.1:8000), and the window loads the Vite dev server URL instead —
+ * so `npm run dev` in frontend/ hot-reloads inside the actual Electron shell.
  */
 const { app, BrowserWindow, ipcMain, dialog, shell } = require("electron");
 const { autoUpdater } = require("electron-updater");
@@ -46,6 +52,10 @@ let backendProc = null;
 let backendPort = 0;
 let win = null;
 
+// See "Dev-frontend mode" above. Only honored when unpackaged.
+const DEV_FRONTEND_URL = !isPackaged && process.env.ALF_DEV_FRONTEND_URL ? process.env.ALF_DEV_FRONTEND_URL : null;
+const DEV_BACKEND_PORT = DEV_FRONTEND_URL ? Number(process.env.ALF_DEV_BACKEND_PORT || 8000) : null;
+
 function findFreePort() {
   return new Promise((resolve, reject) => {
     const srv = net.createServer();
@@ -64,15 +74,18 @@ function startBackend(port) {
     ALF_DATA_DIR: DATA_DIR,
     ALF_TASK_QUEUE: "local",
     ALF_APP_VERSION: app.getVersion(),
-    FRONTEND_DIST_DIR: PATHS.frontendDist,
     PYTHONUNBUFFERED: "1",
     PYTHONDONTWRITEBYTECODE: "1",
   };
+  if (!DEV_FRONTEND_URL) {
+    env.FRONTEND_DIST_DIR = PATHS.frontendDist;
+  }
   if (fs.existsSync(PATHS.binDir)) {
     env.PATH = PATHS.binDir + path.delimiter + (env.PATH || "");
   }
 
   const args = ["-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", String(port)];
+  if (DEV_FRONTEND_URL) args.push("--reload");
   backendProc = spawn(PATHS.python, args, { cwd: PATHS.backendCwd, env, windowsHide: true });
 
   const logDir = path.join(DATA_DIR, "logs");
@@ -121,7 +134,7 @@ function waitForHealth(port, timeoutMs = 60000) {
   });
 }
 
-function createWindow(port) {
+function createWindow(url) {
   win = new BrowserWindow({
     width: 1440,
     height: 900,
@@ -133,7 +146,7 @@ function createWindow(port) {
     webPreferences: { preload: path.join(__dirname, "preload.js"), contextIsolation: true, nodeIntegration: false },
   });
   win.removeMenu();
-  win.loadURL(`http://127.0.0.1:${port}/`);
+  win.loadURL(url);
   win.once("ready-to-show", () => win.show());
   win.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);
@@ -191,11 +204,11 @@ if (!gotLock) {
 
   app.whenReady().then(async () => {
     try {
-      backendPort = await findFreePort();
+      backendPort = DEV_BACKEND_PORT || (await findFreePort());
       startBackend(backendPort);
       await waitForHealth(backendPort);
       wireUpdaterEvents();
-      createWindow(backendPort);
+      createWindow(DEV_FRONTEND_URL || `http://127.0.0.1:${backendPort}/`);
     } catch (err) {
       dialog.showErrorBox("AutoLabelFlow", `Failed to start:\n${err && err.message ? err.message : err}`);
       app.quit();

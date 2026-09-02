@@ -17,9 +17,12 @@ import type {
   ModelKind,
   Project,
   ReviewQueuePage,
+  RoboflowBatchSummary,
   RoboflowJob,
   RoboflowProjectSummary,
   RoboflowVersionSummary,
+  SamModelStatus,
+  SegmentResult,
   TrainingJob,
   TrainingJobEpochRow,
   TrainingProviders,
@@ -80,6 +83,14 @@ export const api = {
     request<{ pack: string; task_id: string }>(`/system/packs/${name}/install`, { method: "POST" }),
   removePack: (name: "gpu" | "integrations") =>
     request<void>(`/system/packs/${name}`, { method: "DELETE" }),
+  // Optional SAM checkpoints — a separate mechanism from the packs above
+  // (a weights-file download, not a pip install; ultralytics already
+  // ships SAM/MobileSAM support). See services/system/sam_models.py.
+  listSamModels: () => request<SamModelStatus[]>("/system/sam-models"),
+  installSamModel: (name: "sam-lite" | "sam-full") =>
+    request<{ variant: string; task_id: string }>(`/system/sam-models/${name}/download`, { method: "POST" }),
+  removeSamModel: (name: "sam-lite" | "sam-full") =>
+    request<void>(`/system/sam-models/${name}`, { method: "DELETE" }),
 
   // --- Projects ---
   listProjects: () => request<Project[]>("/projects"),
@@ -139,6 +150,11 @@ export const api = {
     return request<AnnotationImage>(`/datasets/${datasetId}/images`, { method: "POST", body: form });
   },
   deleteImage: (id: string) => request<void>(`/images/${id}`, { method: "DELETE" }),
+  // SAM-assisted interactive segmentation: one or more prompt points in, a
+  // normalized polygon out (or null if SAM found nothing usable for this
+  // prompt). Synchronous — a single click-and-wait interaction, not a job.
+  segmentImage: (imageId: string, data: { variant: "sam-lite" | "sam-full"; points: [number, number][]; labels?: number[] }) =>
+    request<SegmentResult>(`/images/${imageId}/segment`, { method: "POST", body: JSON.stringify(data) }),
 
   // --- Annotations ---
   listAnnotations: (imageId: string) => request<Annotation[]>(`/images/${imageId}/annotations`),
@@ -365,13 +381,14 @@ export const api = {
     projectId: string,
     // `version: undefined` pulls the project's raw uploaded images instead
     // of a generated Version — see RoboflowImportSection in DatasetsPage.
-    // `unannotated_only` only matters for that raw path.
+    // `unannotated_only`/`batch_id` only matter for that raw path.
     data: {
       workspace: string;
       project: string;
       version?: number;
       dataset_name?: string;
       unannotated_only?: boolean;
+      batch_id?: string;
     },
   ) => request<RoboflowJob>(`/projects/${projectId}/import/roboflow`, { method: "POST", body: JSON.stringify(data) }),
   listRoboflowProjects: (workspace?: string) =>
@@ -381,6 +398,10 @@ export const api = {
   listRoboflowVersions: (workspace: string, project: string) =>
     request<RoboflowVersionSummary[]>(
       `/integrations/roboflow/projects/${encodeURIComponent(workspace)}/${encodeURIComponent(project)}/versions`,
+    ),
+  listRoboflowBatches: (workspace: string, project: string) =>
+    request<RoboflowBatchSummary[]>(
+      `/integrations/roboflow/projects/${encodeURIComponent(workspace)}/${encodeURIComponent(project)}/batches`,
     ),
   getRoboflowJob: (id: string) => request<RoboflowJob>(`/integrations/roboflow/jobs/${id}`),
   // Lets a page reattach to a job it kicked off before a navigation away

@@ -86,6 +86,7 @@ def import_dataset_from_roboflow(
         version=payload.version,
         dataset_name=payload.dataset_name,
         unannotated_only=payload.unannotated_only,
+        batch_id=payload.batch_id,
     )
     db.add(job)
     db.commit()

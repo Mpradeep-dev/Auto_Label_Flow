@@ -331,6 +331,7 @@ export interface RoboflowJob {
   project_slug: string;
   version: number | null;
   unannotated_only: boolean;
+  batch_id: string | null;
   total_items: number;
   processed_items: number;
   uploaded_count: number;
@@ -359,6 +360,20 @@ export interface BlobImportJob {
   created_at: string;
 }
 
+// --- SAM-assisted segmentation ---
+
+export interface SamModelStatus {
+  name: "sam-lite" | "sam-full";
+  label: string;
+  blurb: string;
+  installed: boolean;
+  size_bytes: number | null;
+}
+
+export interface SegmentResult {
+  points: [number, number][] | null;
+}
+
 export interface RoboflowProjectSummary {
   workspace: string;
   project: string;
@@ -369,5 +384,11 @@ export interface RoboflowProjectSummary {
 
 export interface RoboflowVersionSummary {
   version: number;
+  image_count: number;
+}
+
+export interface RoboflowBatchSummary {
+  id: string;
+  name: string;
   image_count: number;
 }

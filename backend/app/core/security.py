@@ -4,16 +4,54 @@ KEYS lives in `services/storage/local.py` (it needs filesystem context this
 module doesn't have) — this module only handles the HTTP upload boundary."""
 from __future__ import annotations
 
+import ipaddress
 import re
+import socket
 import tempfile
 import uuid
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import HTTPException, UploadFile, status
 
 from app.core.config import settings
 
 _CHUNK_SIZE = 1024 * 1024  # 1 MiB
+
+
+class UnsafeUrlError(ValueError):
+    """A URL that resolves to a non-public address (SEC-02) — refused before
+    ever making a request to it."""
+
+
+def assert_public_host(url: str) -> None:
+    """Reject a URL whose host resolves to a loopback/private/link-local/
+    reserved/multicast address. Shared by every "fetch a file from a
+    user-supplied URL" path in the app (model-weights registration, SAM
+    checkpoint downloads) — callers must re-check every redirect hop too, not
+    just the initial URL, since a public-looking URL that redirects to an
+    internal address is exactly as dangerous as one that points there
+    directly."""
+    host = urlsplit(url).hostname
+    if not host:
+        raise UnsafeUrlError(f"URL has no host: {url}")
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError as exc:
+        raise UnsafeUrlError(f"Could not resolve host {host!r}: {exc}") from exc
+    for family, _, _, _, sockaddr in infos:
+        addr = ipaddress.ip_address(sockaddr[0])
+        if (
+            addr.is_loopback
+            or addr.is_private
+            or addr.is_link_local
+            or addr.is_reserved
+            or addr.is_multicast
+            or addr.is_unspecified
+        ):
+            raise UnsafeUrlError(
+                f"Refusing to fetch from {host!r} — it resolves to a non-public address ({addr})"
+            )
 
 _SAFE_STEM = re.compile(r"[^A-Za-z0-9_-]+")
 

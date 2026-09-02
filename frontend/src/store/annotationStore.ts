@@ -1,7 +1,7 @@
 import { create } from "zustand";
 import type { Annotation } from "@/types";
 
-export type CanvasMode = "select" | "draw-bbox" | "draw-polygon";
+export type CanvasMode = "select" | "draw-bbox" | "draw-polygon" | "draw-sam";
 
 export type PendingShape =
   | ({ shape_type: "BBOX" } & Pick<Annotation, "x1" | "y1" | "x2" | "y2">)

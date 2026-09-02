@@ -25,6 +25,17 @@ interface Props {
   /** Fires once a polygon ring is closed (>=3 points) — same "geometry
    * only, class choice happens after" contract as onBoxDrawn. */
   onPolygonDrawn: (points: [number, number][]) => void;
+  /** Fires on a single click in `draw-sam` mode — normalized [0,1] image
+   * coordinates. The caller (AnnotatePage) owns the actual SAM request;
+   * this canvas only reports where the user clicked, same "geometry only"
+   * split as onBoxDrawn/onPolygonDrawn. v1 is one foreground point per
+   * segment, not the multi-point accumulate-then-finish gesture polygon
+   * drawing uses — a future refinement, not needed for a first version. */
+  onSamPoint?: (point: { x: number; y: number }) => void;
+  /** Set while a SAM request for the last click is in flight — renders a
+   * small pulsing marker at that point so the click doesn't feel dropped
+   * during the round trip. Cleared by the caller once the request settles. */
+  samPending?: { x: number; y: number } | null;
   /** A just-drawn shape awaiting a class pick — rendered as a placeholder
    * until the caller either classifies it (it becomes a real annotation)
    * or cancels it (it disappears). Normalized 0..1, same as Annotation. */
@@ -78,6 +89,8 @@ export function AnnotationCanvas({
   onCommitPolygonMove,
   onBoxDrawn,
   onPolygonDrawn,
+  onSamPoint,
+  samPending = null,
   pendingShape,
   controlsRef,
   flagsByAnnotationId = {},
@@ -216,6 +229,16 @@ export function AnnotationCanvas({
     }
     if (mode === "draw-polygon") {
       if (!pendingShape) addPolygonPoint(e);
+      return;
+    }
+    if (mode === "draw-sam") {
+      // Same "one unclassified/in-flight shape at a time" invariant as the
+      // other draw modes — AnnotatePage also guards this on its side (it
+      // owns samPending/the in-flight request), this is defense in depth.
+      if (!pendingShape && !samPending) {
+        const p = stagePointFromEvent(e);
+        onSamPoint?.({ x: p.x / imageWidth, y: p.y / imageHeight });
+      }
       return;
     }
     selectAnnotation(null);
@@ -526,7 +549,8 @@ export function AnnotationCanvas({
     return map[handle];
   }
 
-  const canvasCursor = mode === "draw-bbox" || mode === "draw-polygon" ? "crosshair" : "default";
+  const canvasCursor =
+    mode === "draw-bbox" || mode === "draw-polygon" || mode === "draw-sam" ? "crosshair" : "default";
 
   return (
     <div ref={wrapperRef} className="relative h-full w-full overflow-hidden bg-plate">
@@ -743,6 +767,24 @@ export function AnnotationCanvas({
                 />
               ))}
             </g>
+          )}
+          {/* SAM prompt in flight — a pulsing ring at the clicked point so
+              the click reads as "working on it", not dropped, during the
+              round trip to the backend. */}
+          {samPending && (
+            <circle
+              cx={samPending.x * imageWidth}
+              cy={samPending.y * imageHeight}
+              r={handleSize}
+              fill="none"
+              stroke="#FFB000"
+              strokeWidth={2}
+              vectorEffect="non-scaling-stroke"
+              pointerEvents="none"
+            >
+              <animate attributeName="r" values={`${handleSize};${handleSize * 2.5}`} dur="0.9s" repeatCount="indefinite" />
+              <animate attributeName="opacity" values="1;0" dur="0.9s" repeatCount="indefinite" />
+            </circle>
           )}
           {/* Just-drawn, not-yet-classified shape — held here instead of in
               `annotations` because nothing exists server-side until a class

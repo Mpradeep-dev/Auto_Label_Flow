@@ -19,6 +19,13 @@ export default defineConfig({
     },
   },
   server: {
+    // Explicit IPv4 loopback, not the bare "localhost" default — on this
+    // stack "localhost" can resolve to the IPv6 loopback (::1) first, which
+    // Vite then binds instead of 127.0.0.1. The desktop shell's dev mode
+    // (desktop/scripts/dev.mjs) and Electron's URL load are hardcoded to
+    // http://127.0.0.1:5173, so a mismatch here is a silent
+    // ERR_CONNECTION_REFUSED with the dev server clearly "up".
+    host: "127.0.0.1",
     port: 5173,
     proxy: {
       "/api": { target: apiProxyTarget, changeOrigin: true },

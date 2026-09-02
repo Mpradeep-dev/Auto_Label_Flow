@@ -77,6 +77,31 @@ def test_sqlite_schema_upgrade_adds_blob_import_bits(tmp_path) -> None:
     eng.dispose()
 
 
+def test_sqlite_schema_upgrade_adds_roboflow_batch_id(tmp_path) -> None:
+    """A desktop DB stamped at version 2 (the last released schema before
+    `roboflow_jobs.batch_id` was added) must pick up the new column on the
+    next startup, not silently keep querying a table that no longer matches
+    the model — see `RoboflowJob.batch_id`."""
+    from sqlalchemy import create_engine, inspect as _inspect
+
+    from app.db.base import Base
+    from app.db.init_db import SCHEMA_VERSION, init_sqlite_schema
+
+    eng = create_engine(f"sqlite+pysqlite:///{(tmp_path / 'old.db').as_posix()}", future=True)
+    Base.metadata.create_all(eng)
+    with eng.begin() as conn:
+        conn.exec_driver_sql("ALTER TABLE roboflow_jobs DROP COLUMN batch_id")
+        conn.exec_driver_sql("PRAGMA user_version = 2")
+
+    init_sqlite_schema(eng)
+
+    insp = _inspect(eng)
+    assert "batch_id" in {c["name"] for c in insp.get_columns("roboflow_jobs")}
+    with eng.begin() as conn:
+        assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == SCHEMA_VERSION
+    eng.dispose()
+
+
 def test_reconcile_stale_jobs_runs_on_sqlite() -> None:
     """Regression: `updated_at < datetime.now(timezone.utc)` raised
     `TypeError: can't compare offset-naive and offset-aware datetimes` on

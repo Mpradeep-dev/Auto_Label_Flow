@@ -54,6 +54,9 @@ class RoboflowJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Only meaningful for a raw pull (version is None) — narrows it to
     # images with zero existing annotations, instead of every raw image.
     unannotated_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Only meaningful for a raw pull (version is None) — narrows it to one
+    # upload batch (Roboflow's own batch id), instead of every raw image.
+    batch_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
     result_dataset_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID, ForeignKey("datasets.id", ondelete="SET NULL"), nullable=True
     )
