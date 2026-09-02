@@ -32,6 +32,10 @@ Thumbs.db
 
 # Claude
 .claude/settings.local.json
+.superpowers/
+
+# Git worktrees
+.worktrees/
 
 # Browser-automation test artifacts (screenshots/console logs from
 # interactive verification during development, not project source)
