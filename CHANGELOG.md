@@ -4,6 +4,14 @@ All notable changes to AutoLabelFlow are recorded here. This file is
 maintained automatically by [release-please](https://github.com/googleapis/release-please)
 from [Conventional Commits](https://www.conventionalcommits.org/) on `main`.
 
+## [0.4.1](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.4.0...v0.4.1) (2026-09-02)
+
+
+### Bug Fixes
+
+* stop auto-approving images on Roboflow versioned import ([#13](https://github.com/Mpradeep-dev/Auto_Label_Flow/issues/13)) ([eb39ec5](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/eb39ec56c9ca47a17dd9002a6ff924c63df20149))
+* stop auto-approving images on Roboflow versioned import ([#13](https://github.com/Mpradeep-dev/Auto_Label_Flow/issues/13)) ([d1d86f4](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/d1d86f4220c6d74e8655fb1a439866f7c28a0754))
+
 ## [0.4.0](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.3.0...v0.4.0) (2026-09-02)
 
 
