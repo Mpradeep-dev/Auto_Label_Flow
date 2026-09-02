@@ -17,6 +17,7 @@ import type {
   ModelKind,
   Project,
   ReviewQueuePage,
+  RoboflowBatchSummary,
   RoboflowJob,
   RoboflowProjectSummary,
   RoboflowVersionSummary,
@@ -380,13 +381,14 @@ export const api = {
     projectId: string,
     // `version: undefined` pulls the project's raw uploaded images instead
     // of a generated Version — see RoboflowImportSection in DatasetsPage.
-    // `unannotated_only` only matters for that raw path.
+    // `unannotated_only`/`batch_id` only matter for that raw path.
     data: {
       workspace: string;
       project: string;
       version?: number;
       dataset_name?: string;
       unannotated_only?: boolean;
+      batch_id?: string;
     },
   ) => request<RoboflowJob>(`/projects/${projectId}/import/roboflow`, { method: "POST", body: JSON.stringify(data) }),
   listRoboflowProjects: (workspace?: string) =>
@@ -396,6 +398,10 @@ export const api = {
   listRoboflowVersions: (workspace: string, project: string) =>
     request<RoboflowVersionSummary[]>(
       `/integrations/roboflow/projects/${encodeURIComponent(workspace)}/${encodeURIComponent(project)}/versions`,
+    ),
+  listRoboflowBatches: (workspace: string, project: string) =>
+    request<RoboflowBatchSummary[]>(
+      `/integrations/roboflow/projects/${encodeURIComponent(workspace)}/${encodeURIComponent(project)}/batches`,
     ),
   getRoboflowJob: (id: string) => request<RoboflowJob>(`/integrations/roboflow/jobs/${id}`),
   // Lets a page reattach to a job it kicked off before a navigation away

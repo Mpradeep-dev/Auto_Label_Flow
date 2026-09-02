@@ -331,6 +331,7 @@ export interface RoboflowJob {
   project_slug: string;
   version: number | null;
   unannotated_only: boolean;
+  batch_id: string | null;
   total_items: number;
   processed_items: number;
   uploaded_count: number;
@@ -383,5 +384,11 @@ export interface RoboflowProjectSummary {
 
 export interface RoboflowVersionSummary {
   version: number;
+  image_count: number;
+}
+
+export interface RoboflowBatchSummary {
+  id: string;
+  name: string;
   image_count: number;
 }

@@ -19,7 +19,14 @@ export function RoboflowImportSection({ projectId }: { projectId: string }) {
   // Narrows the raw pull further, to only images with no annotations yet
   // in Roboflow — only meaningful (and only shown) while `usingRaw`.
   const [unannotatedOnly, setUnannotatedOnly] = useState(false);
+  // Narrows the raw pull to one upload batch (Roboflow's own grouping of
+  // raw uploads, split by name in its Annotate tab) — also raw-only.
+  const [batchId, setBatchId] = useState("");
   const [datasetName, setDatasetName] = useState("");
+  // Once the person edits the dataset name themselves, picking a different
+  // batch must stop overwriting it — the batch name is only a starting
+  // point, not a value pinned to the batch selection.
+  const [datasetNameTouched, setDatasetNameTouched] = useState(false);
   const [job, setJob] = useState<RoboflowJob | null>(null);
 
   // Reattaches to a job this page kicked off before a navigation away or a
@@ -47,6 +54,13 @@ export function RoboflowImportSection({ projectId }: { projectId: string }) {
   const noVersions = !!workspace && !!project && !versionsQuery.isLoading && !hasVersions;
   const usingRaw = importRaw || noVersions;
 
+  const batchesQuery = useQuery({
+    queryKey: ["roboflow-batches", workspace, project],
+    queryFn: () => api.listRoboflowBatches(workspace, project),
+    enabled: !!workspace && !!project && usingRaw,
+  });
+  const batches = batchesQuery.data ?? [];
+
   const importMutation = useMutation({
     mutationFn: () =>
       api.importRoboflowDataset(projectId, {
@@ -55,6 +69,7 @@ export function RoboflowImportSection({ projectId }: { projectId: string }) {
         version: usingRaw ? undefined : (version as number),
         dataset_name: datasetName.trim() || undefined,
         unannotated_only: usingRaw ? unannotatedOnly : undefined,
+        batch_id: usingRaw ? batchId || undefined : undefined,
       }),
     onSuccess: (created) => setJob(created),
   });
@@ -74,6 +89,8 @@ export function RoboflowImportSection({ projectId }: { projectId: string }) {
             setVersion("");
             setImportRaw(false);
             setUnannotatedOnly(false);
+            setBatchId("");
+            setDatasetNameTouched(false);
           }}
         />
 
@@ -130,9 +147,34 @@ export function RoboflowImportSection({ projectId }: { projectId: string }) {
           </label>
         )}
 
+        {usingRaw && (batches.length > 0 || batchesQuery.isLoading) && (
+          <select
+            value={batchId}
+            onChange={(e) => {
+              const id = e.target.value;
+              setBatchId(id);
+              if (!datasetNameTouched) {
+                const batch = batches.find((b) => b.id === id);
+                setDatasetName(batch ? batch.name : "");
+              }
+            }}
+            className="w-full border-2 border-ink bg-paper px-3 py-2 text-sm font-semibold uppercase outline-none focus:border-accent"
+          >
+            <option value="">All batches</option>
+            {batches.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name} ({b.image_count} images)
+              </option>
+            ))}
+          </select>
+        )}
+
         <input
           value={datasetName}
-          onChange={(e) => setDatasetName(e.target.value)}
+          onChange={(e) => {
+            setDatasetName(e.target.value);
+            setDatasetNameTouched(true);
+          }}
           aria-label="DATASET NAME (optional)"
           placeholder="DATASET NAME (optional)"
           className="w-full border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"

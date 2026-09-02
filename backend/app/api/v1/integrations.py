@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -21,6 +22,7 @@ from app.schemas.integration import (
     IntegrationStatus,
     KaggleConnectRequest,
     ModalConnectRequest,
+    RoboflowBatchSummary,
     RoboflowConnectRequest,
     RoboflowJobRead,
     RoboflowProjectSummary,
@@ -33,6 +35,7 @@ from app.services.integrations.roboflow_connect import RoboflowNotConnectedError
 from app.workers.progress import get_progress, request_cancel
 
 router = APIRouter(prefix="/integrations", tags=["integrations"])
+logger = logging.getLogger(__name__)
 
 
 @router.get("", response_model=list[IntegrationStatus])
@@ -98,6 +101,7 @@ def list_roboflow_projects(workspace: str | None = None, db: Session = Depends(g
     except RoboflowNotConnectedError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     except Exception as exc:
+        logger.exception("Could not list Roboflow projects")
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Could not list Roboflow projects: {exc}") from exc
 
 
@@ -111,6 +115,18 @@ def list_roboflow_versions(
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Could not list versions for {project!r}: {exc}") from exc
+
+
+@router.get("/roboflow/projects/{workspace}/{project}/batches", response_model=list[RoboflowBatchSummary])
+def list_roboflow_batches(
+    workspace: str, project: str, db: Session = Depends(get_db)
+) -> list[RoboflowBatchSummary]:
+    try:
+        return roboflow_browse.list_batches(db, workspace=workspace, project_slug=project)
+    except RoboflowNotConnectedError as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, f"Could not list batches for {project!r}: {exc}") from exc
 
 
 _TERMINAL_JOB_STATUSES = {"COMPLETED", "FAILED", "CANCELLED"}

@@ -8,6 +8,7 @@ client per call.
 from __future__ import annotations
 
 import logging
+import sys
 from datetime import datetime, timezone
 
 from sqlalchemy import select
@@ -79,7 +80,63 @@ def _install_destructive_guards() -> None:
             if hasattr(cls, method_name):
                 setattr(cls, method_name, _make_blocker(f"{cls.__name__}.{method_name}"))
 
+    _install_stdout_guard()
     _destructive_guards_installed = True
+
+
+_stdout_guard_installed = False
+
+
+class _CrashProofStdout:
+    """Delegates every attribute/write/flush to the real stdout, except a
+    `write()`/`flush()` that raises `OSError` is swallowed instead of
+    propagating.
+
+    The `roboflow` SDK litters its calls (`.workspace()`, `.project()`, the
+    upload/download paths, …) with decorative `sys.stdout.write("\\r...")` /
+    `print(...)` progress messages — see e.g. `Roboflow.workspace()`'s
+    `sys.stdout.write("\\r" + "loading Roboflow workspace...")`. Those are
+    harmless when stdout is a real console, but the desktop app runs the
+    backend with `PYTHONUNBUFFERED=1` and pipes stdout straight to a log
+    file (see desktop/main.js) — and on Windows, a write to a piped (not a
+    real console) stdout in that configuration can raise
+    `OSError: [Errno 22] Invalid argument` from deep inside the SDK, for a
+    reason that has nothing to do with the actual Roboflow API call
+    wrapped around it. Observed live: `list_projects()` failing with
+    "Could not list Roboflow projects: [Errno 22] Invalid argument" purely
+    because of this — no Roboflow request was ever at fault. A cosmetic
+    progress message failing to print must never fail the API call it
+    happens to sit next to."""
+
+    def __init__(self, real):
+        self._real = real
+
+    def write(self, s):
+        try:
+            return self._real.write(s)
+        except OSError:
+            return len(s)
+
+    def flush(self):
+        try:
+            self._real.flush()
+        except OSError:
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def _install_stdout_guard() -> None:
+    """Process-wide, idempotent — wraps `sys.stdout` once so the failure
+    mode above can never happen again, regardless of which SDK call site
+    (present or future) triggers it."""
+    global _stdout_guard_installed
+    if _stdout_guard_installed:
+        return
+    if not isinstance(sys.stdout, _CrashProofStdout):
+        sys.stdout = _CrashProofStdout(sys.stdout)
+    _stdout_guard_installed = True
 
 
 def get_status(db: Session) -> IntegrationStatus:

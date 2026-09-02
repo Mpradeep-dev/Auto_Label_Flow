@@ -57,6 +57,9 @@ class RoboflowImportRequest(BaseModel):
     # Raw pull only (ignored when `version` is set): narrow to images with
     # zero existing Roboflow annotations.
     unannotated_only: bool = False
+    # Raw pull only (ignored when `version` is set): narrow to one upload
+    # batch (from `RoboflowBatchSummary.id`) instead of every raw image.
+    batch_id: str | None = None
 
 
 class RoboflowProjectSummary(BaseModel):
@@ -69,6 +72,12 @@ class RoboflowProjectSummary(BaseModel):
 
 class RoboflowVersionSummary(BaseModel):
     version: int
+    image_count: int
+
+
+class RoboflowBatchSummary(BaseModel):
+    id: str
+    name: str
     image_count: int
 
 
@@ -115,6 +124,7 @@ class RoboflowJobRead(BaseModel):
     project_slug: str
     version: int | None = None
     unannotated_only: bool
+    batch_id: str | None = None
     total_items: int
     processed_items: int
     uploaded_count: int
