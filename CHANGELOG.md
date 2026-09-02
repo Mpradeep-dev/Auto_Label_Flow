@@ -4,6 +4,24 @@ All notable changes to AutoLabelFlow are recorded here. This file is
 maintained automatically by [release-please](https://github.com/googleapis/release-please)
 from [Conventional Commits](https://www.conventionalcommits.org/) on `main`.
 
+## [0.4.0](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.3.0...v0.4.0) (2026-09-02)
+
+
+### Features
+
+* **datasets:** import labelled images from Azure Blob by reference ([6b93e6f](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/6b93e6fb2bb0d8139158cad15c796b4d09536928))
+* included sam and annotation tools ([3e0cf76](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/3e0cf76cdf20cc283b27a802ab687a94b5331b08))
+
+
+### Bug Fixes
+
+* **desktop:** humanize update errors, handle all update/pack button failures ([8a675be](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/8a675be6d7e9d11f81773aaef439ba95e3b9eacc))
+* **desktop:** require torch&gt;=2.7 for ultralytics safe-load, guard on mismatch ([486da81](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/486da81aecf7d18c4c667965e0882db5c9518d63))
+* **frontend:** bind Vite dev server to 127.0.0.1 explicitly ([abed0d1](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/abed0d12ff483ea7a9578ac5942a705b37ca5ce8))
+* **landing:** match Ballpit balls to the app's orange token ([60b6105](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/60b610590a308bd9ac3989d21cb7afc4a517153e))
+* **roboflow:** retry transient 5xx/429 from the /search endpoint ([42f3a38](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/42f3a383208c681878609cebb91a843bec4cd747))
+* **roboflow:** scope raw import to one upload batch, fix SDK crash and default export batch name ([c94416f](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/c94416f2e2974a80f467533e357f3422c95d6556))
+
 ## [0.3.0](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.2.0...v0.3.0) (2026-09-01)
 
 
