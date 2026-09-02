@@ -12,6 +12,7 @@ function makeHandlers(overrides: Partial<ShortcutHandlers> = {}): ShortcutHandle
   return {
     drawBbox: vi.fn(),
     drawPolygon: vi.fn(),
+    drawSam: vi.fn(),
     delete: vi.fn(),
     undo: vi.fn(),
     prev: vi.fn(),
@@ -34,6 +35,13 @@ describe("useKeyboardShortcuts", () => {
     await userEvent.keyboard("p");
     expect(handlers.drawBbox).toHaveBeenCalledTimes(1);
     expect(handlers.drawPolygon).toHaveBeenCalledTimes(1);
+  });
+
+  it("dispatches M to drawSam", async () => {
+    const handlers = makeHandlers();
+    render(<TestHarness handlers={handlers} />);
+    await userEvent.keyboard("m");
+    expect(handlers.drawSam).toHaveBeenCalledTimes(1);
   });
 
   it("dispatches D to delete and arrow keys to prev/next", async () => {

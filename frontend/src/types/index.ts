@@ -359,6 +359,20 @@ export interface BlobImportJob {
   created_at: string;
 }
 
+// --- SAM-assisted segmentation ---
+
+export interface SamModelStatus {
+  name: "sam-lite" | "sam-full";
+  label: string;
+  blurb: string;
+  installed: boolean;
+  size_bytes: number | null;
+}
+
+export interface SegmentResult {
+  points: [number, number][] | null;
+}
+
 export interface RoboflowProjectSummary {
   workspace: string;
   project: string;

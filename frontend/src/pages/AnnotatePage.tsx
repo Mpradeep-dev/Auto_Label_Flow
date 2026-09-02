@@ -53,6 +53,11 @@ export function AnnotatePage() {
   // Fixes the silent-data-loss bug where leaving the image used to discard
   // an unclassified shape with zero warning (audit finding FE-01).
   const [pendingShapeWarning, setPendingShapeWarning] = useState(false);
+  // The last SAM prompt point, while its segment request is in flight —
+  // cleared on success (pendingShape takes over) or failure. Local state,
+  // not the annotation store: it's this page's own request lifecycle, not
+  // canvas interaction state other components need to read.
+  const [samPending, setSamPending] = useState<{ x: number; y: number } | null>(null);
   // Ref, not state — undo doesn't need a re-render on push, only on the
   // rare undo() call itself, and a ref avoids fighting the mutations'
   // own state updates within the same tick.
@@ -92,6 +97,16 @@ export function AnnotatePage() {
     enabled: !!projectId,
   });
   const classEntries = projectQuery.data?.class_config ?? [];
+
+  // Which SAM checkpoint (if any) to use for interactive segmentation —
+  // installed status lives on the Settings page, this just reads it.
+  // "sam-full" is preferred when both are installed (better mask quality).
+  const samModelsQuery = useQuery({ queryKey: ["system-sam-models"], queryFn: () => api.listSamModels() });
+  const installedSamVariant = samModelsQuery.data?.find((m) => m.name === "sam-full" && m.installed)
+    ? "sam-full"
+    : samModelsQuery.data?.find((m) => m.name === "sam-lite" && m.installed)
+      ? "sam-lite"
+      : null;
 
   // `drawClassId` defaults to 0 in the store, which only accidentally means
   // something once real classes exist (see createMutation below) — once
@@ -271,6 +286,28 @@ export function AnnotatePage() {
       pushUndo({ type: "create", annotationId: ann.id });
     },
   });
+
+  // A SAM prompt point in, a traced polygon out — same "geometry only, class
+  // choice happens after" contract onBoxDrawn/onPolygonDrawn already use:
+  // success stages the result as pendingShape rather than creating anything.
+  const samSegmentMutation = useMutation({
+    mutationFn: (point: { x: number; y: number }) =>
+      api.segmentImage(imageId!, { variant: installedSamVariant!, points: [[point.x, point.y]] }),
+    onSuccess: (result) => {
+      setSamPending(null);
+      if (result.points) setPendingShape({ shape_type: "POLYGON", points: result.points });
+      // else: SAM found nothing usable — samSegmentMutation.isError stays
+      // false (this wasn't a failure), the click marker just disappears
+      // and the tool stays active for another attempt.
+    },
+    onError: () => setSamPending(null),
+  });
+
+  function handleSamPoint(point: { x: number; y: number }) {
+    if (pendingShape || samPending || !installedSamVariant) return;
+    setSamPending(point);
+    samSegmentMutation.mutate(point);
+  }
 
   // Picking a class in the right panel means one of two things depending on
   // whether a shape is waiting to be classified: with a pendingShape, it
@@ -486,6 +523,7 @@ export function AnnotatePage() {
     {
       drawBbox: () => setMode(mode === "draw-bbox" ? "select" : "draw-bbox"),
       drawPolygon: () => setMode(mode === "draw-polygon" ? "select" : "draw-polygon"),
+      drawSam: () => installedSamVariant && setMode(mode === "draw-sam" ? "select" : "draw-sam"),
       delete: () => selected && commitDelete(selected.id),
       undo,
       prev: () => goTo(prevImage?.id),
@@ -545,6 +583,8 @@ export function AnnotatePage() {
             onCommitPolygonMove={(id, points) => commitUpdate(id, { points })}
             onBoxDrawn={(box) => setPendingShape({ shape_type: "BBOX", ...box })}
             onPolygonDrawn={(points) => setPendingShape({ shape_type: "POLYGON", points })}
+            onSamPoint={handleSamPoint}
+            samPending={samPending}
             pendingShape={pendingShape}
             flagsByAnnotationId={flagsByAnnotationId}
           />
@@ -557,6 +597,11 @@ export function AnnotatePage() {
           {createMutation.isError && (
             <p className="absolute left-4 top-4 border-2 border-accent bg-paper px-3 py-2 text-xs font-bold text-accent-ink">
               {(createMutation.error as Error).message}
+            </p>
+          )}
+          {samSegmentMutation.isError && (
+            <p className="absolute left-4 top-4 border-2 border-accent bg-paper px-3 py-2 text-xs font-bold text-accent-ink">
+              {(samSegmentMutation.error as Error).message}
             </p>
           )}
         </div>
@@ -589,7 +634,7 @@ export function AnnotatePage() {
         position={`${currentIndex + 1} / ${orderedImages.length}`}
         hasSelection={!!selected}
         activeTool={
-          mode === "draw-bbox" ? "bbox" : mode === "draw-polygon" ? "polygon" : "select"
+          mode === "draw-bbox" ? "bbox" : mode === "draw-polygon" ? "polygon" : mode === "draw-sam" ? "sam" : "select"
         }
         reviewStatus={currentImage.review_status}
         approving={approveMutation.isPending}
@@ -605,6 +650,8 @@ export function AnnotatePage() {
         onDeleteSelected={() => selected && commitDelete(selected.id)}
         onSelectBboxTool={() => setMode(mode === "draw-bbox" ? "select" : "draw-bbox")}
         onSelectPolygonTool={() => setMode(mode === "draw-polygon" ? "select" : "draw-polygon")}
+        onSelectSamTool={() => installedSamVariant && setMode(mode === "draw-sam" ? "select" : "draw-sam")}
+        samDisabledReason={installedSamVariant ? null : "Download a SAM model in Settings → Desktop app first"}
         onZoomIn={() => controlsRef.current?.zoomIn()}
         onZoomOut={() => controlsRef.current?.zoomOut()}
         onFit={() => controlsRef.current?.fit()}

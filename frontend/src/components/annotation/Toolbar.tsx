@@ -1,4 +1,4 @@
-export type ActiveTool = "select" | "bbox" | "polygon";
+export type ActiveTool = "select" | "bbox" | "polygon" | "sam";
 
 interface Props {
   onPrev: () => void;
@@ -9,6 +9,10 @@ interface Props {
   onDeleteSelected: () => void;
   onSelectBboxTool: () => void;
   onSelectPolygonTool: () => void;
+  onSelectSamTool: () => void;
+  /** `null` when at least one SAM model is downloaded and the tool is
+   * usable; otherwise the tooltip explaining why it's disabled. */
+  samDisabledReason: string | null;
   onZoomIn: () => void;
   onZoomOut: () => void;
   onFit: () => void;
@@ -75,6 +79,13 @@ export function Toolbar(props: Props) {
         shortcut="P"
         onClick={props.onSelectPolygonTool}
         active={props.activeTool === "polygon"}
+      />
+      <ToolButton
+        label="SAM"
+        onClick={props.onSelectSamTool}
+        active={props.activeTool === "sam"}
+        disabled={!!props.samDisabledReason}
+        title={props.samDisabledReason ?? "Click a point to auto-trace an outline"}
       />
       <ToolButton label="Delete" shortcut="D" onClick={props.onDeleteSelected} disabled={!props.hasSelection} />
       <div className="flex-1" />

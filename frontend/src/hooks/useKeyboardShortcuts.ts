@@ -3,6 +3,7 @@ import { useEffect } from "react";
 export interface ShortcutHandlers {
   drawBbox: () => void;
   drawPolygon: () => void;
+  drawSam: () => void;
   delete: () => void;
   undo: () => void;
   prev: () => void;
@@ -47,6 +48,10 @@ export function useKeyboardShortcuts(handlers: ShortcutHandlers, enabled: boolea
         case "p":
         case "P":
           handlers.drawPolygon();
+          break;
+        case "m":
+        case "M":
+          handlers.drawSam();
           break;
         case "d":
         case "D":

@@ -20,6 +20,8 @@ import type {
   RoboflowJob,
   RoboflowProjectSummary,
   RoboflowVersionSummary,
+  SamModelStatus,
+  SegmentResult,
   TrainingJob,
   TrainingJobEpochRow,
   TrainingProviders,
@@ -80,6 +82,14 @@ export const api = {
     request<{ pack: string; task_id: string }>(`/system/packs/${name}/install`, { method: "POST" }),
   removePack: (name: "gpu" | "integrations") =>
     request<void>(`/system/packs/${name}`, { method: "DELETE" }),
+  // Optional SAM checkpoints — a separate mechanism from the packs above
+  // (a weights-file download, not a pip install; ultralytics already
+  // ships SAM/MobileSAM support). See services/system/sam_models.py.
+  listSamModels: () => request<SamModelStatus[]>("/system/sam-models"),
+  installSamModel: (name: "sam-lite" | "sam-full") =>
+    request<{ variant: string; task_id: string }>(`/system/sam-models/${name}/download`, { method: "POST" }),
+  removeSamModel: (name: "sam-lite" | "sam-full") =>
+    request<void>(`/system/sam-models/${name}`, { method: "DELETE" }),
 
   // --- Projects ---
   listProjects: () => request<Project[]>("/projects"),
@@ -139,6 +149,11 @@ export const api = {
     return request<AnnotationImage>(`/datasets/${datasetId}/images`, { method: "POST", body: form });
   },
   deleteImage: (id: string) => request<void>(`/images/${id}`, { method: "DELETE" }),
+  // SAM-assisted interactive segmentation: one or more prompt points in, a
+  // normalized polygon out (or null if SAM found nothing usable for this
+  // prompt). Synchronous — a single click-and-wait interaction, not a job.
+  segmentImage: (imageId: string, data: { variant: "sam-lite" | "sam-full"; points: [number, number][]; labels?: number[] }) =>
+    request<SegmentResult>(`/images/${imageId}/segment`, { method: "POST", body: JSON.stringify(data) }),
 
   // --- Annotations ---
   listAnnotations: (imageId: string) => request<Annotation[]>(`/images/${imageId}/annotations`),

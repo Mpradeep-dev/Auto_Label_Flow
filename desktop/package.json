@@ -9,6 +9,7 @@
   "main": "main.js",
   "scripts": {
     "start": "electron .",
+    "start:dev": "node scripts/dev.mjs",
     "build": "node scripts/build.mjs",
     "dist": "node scripts/build.mjs && electron-builder --win nsis --publish never",
     "release": "node scripts/build.mjs && electron-builder --win nsis --publish always"

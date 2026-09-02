@@ -278,6 +278,113 @@ function PackRow({
   );
 }
 
+function fmtBytes(bytes: number): string {
+  const mb = bytes / 1_000_000;
+  return mb >= 1000 ? `${(mb / 1000).toFixed(1)} GB` : `${mb.toFixed(0)} MB`;
+}
+
+// SAM checkpoints — a separate mechanism from PackRow above: not a pip
+// install, just a weights file (ultralytics already ships SAM/MobileSAM
+// support). Same card shape, different progress payload (byte counts, not
+// a pip log) and available on the server profile too, not desktop-only.
+function SamModelRow({ name }: { name: "sam-lite" | "sam-full" }) {
+  const queryClient = useQueryClient();
+  const modelsQuery = useQuery({ queryKey: ["system-sam-models"], queryFn: () => api.listSamModels() });
+  const model = modelsQuery.data?.find((m) => m.name === name);
+  const [progress, setProgress] = useState<{ downloaded: number; total: number } | null>(null);
+  const [running, setRunning] = useState(false);
+  const [streamError, setStreamError] = useState<string | null>(null);
+  const esRef = useRef<EventSource | null>(null);
+  const settledRef = useRef(false);
+
+  useEffect(() => () => esRef.current?.close(), []);
+
+  const install = useMutation({
+    mutationFn: () => api.installSamModel(name),
+    onMutate: () => setStreamError(null),
+    onSuccess: () => {
+      setRunning(true);
+      setProgress({ downloaded: 0, total: 0 });
+      settledRef.current = false;
+      const es = new EventSource(`/api/v1/system/sam-models/${name}/stream`);
+      esRef.current = es;
+      es.onmessage = (ev) => {
+        const d = JSON.parse(ev.data) as { state: string; detail: string; downloaded: number; total: number };
+        setProgress({ downloaded: d.downloaded, total: d.total });
+        if (d.state === "done" || d.state === "failed") {
+          settledRef.current = true;
+          es.close();
+          setRunning(false);
+          if (d.state === "failed") setStreamError(d.detail || "The download failed.");
+          queryClient.invalidateQueries({ queryKey: ["system-sam-models"] });
+        }
+      };
+      es.onerror = () => {
+        es.close();
+        setRunning(false);
+        if (!settledRef.current)
+          setStreamError("Lost the connection to the download. It may still be running — reopen this page to check.");
+      };
+    },
+  });
+
+  const remove = useMutation({
+    mutationFn: () => api.removeSamModel(name),
+    onMutate: () => setStreamError(null),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["system-sam-models"] }),
+  });
+
+  const pct = progress && progress.total > 0 ? Math.round((progress.downloaded / progress.total) * 100) : null;
+
+  return (
+    <div className="border-2 border-ink p-6">
+      <div className="mb-4 flex items-center justify-between">
+        <p className="text-lg font-bold uppercase tracking-tight">{model?.label ?? name}</p>
+        <span
+          className={`px-2 py-1 text-[10px] font-bold uppercase tracking-widest ${
+            model?.installed ? "bg-ink text-paper" : "bg-muted text-ink/60"
+          }`}
+        >
+          {model?.installed ? "Installed" : "Not installed"}
+        </span>
+      </div>
+      <p className="mb-4 text-sm text-ink/60">{model?.blurb}</p>
+
+      <div className="flex flex-wrap items-center gap-3 border-t border-ink/20 pt-4">
+        {model?.installed ? (
+          <>
+            <span className="tabular text-xs uppercase tracking-widest text-ink/60">
+              {model.size_bytes ? fmtBytes(model.size_bytes) : ""}
+            </span>
+            <button
+              onClick={() => remove.mutate()}
+              disabled={remove.isPending}
+              className="border-2 border-ink px-4 py-2 text-xs font-bold uppercase tracking-widest hover:bg-orange hover:border-orange disabled:opacity-40"
+            >
+              Remove
+            </button>
+          </>
+        ) : (
+          <button
+            onClick={() => install.mutate()}
+            disabled={running || install.isPending}
+            className="border-2 border-ink bg-ink px-6 py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
+          >
+            {running ? (pct != null ? `Downloading… ${pct}%` : "Downloading…") : "Download"}
+          </button>
+        )}
+      </div>
+
+      <FieldError error={install.error ?? remove.error} />
+      {streamError && (
+        <p role="alert" className="mt-2 text-xs text-accent-ink">
+          {streamError}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export function DesktopPanel({ sectionIndex = 2 }: { sectionIndex?: number }) {
   return (
     <section className="mb-16">
@@ -294,6 +401,8 @@ export function DesktopPanel({ sectionIndex = 2 }: { sectionIndex?: number }) {
           title="Cloud integrations"
           blurb="Adds the Kaggle, Modal and Roboflow SDKs so those connections become available below. ~80 MB."
         />
+        <SamModelRow name="sam-lite" />
+        <SamModelRow name="sam-full" />
       </div>
     </section>
   );

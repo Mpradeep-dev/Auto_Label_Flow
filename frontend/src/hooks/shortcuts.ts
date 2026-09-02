@@ -12,6 +12,7 @@ export interface ShortcutDef {
 export const SHORTCUTS: ShortcutDef[] = [
   { id: "drawBbox", key: "B", label: "Draw box" },
   { id: "drawPolygon", key: "P", label: "Draw polygon" },
+  { id: "drawSam", key: "M", label: "SAM: click to trace an outline" },
   { id: "delete", key: "D", label: "Delete selected annotation" },
   { id: "undo", key: "Ctrl/⌘+Z", label: "Undo last edit" },
   { id: "prev", key: "←", label: "Previous image" },

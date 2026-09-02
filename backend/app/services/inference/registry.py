@@ -9,9 +9,7 @@ process; see PLAN "Jobs: Celery + Redis" for why this matters for the
 """
 from __future__ import annotations
 
-import ipaddress
 import shutil
-import socket
 import threading
 import uuid
 from pathlib import Path
@@ -22,6 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.core.security import UnsafeUrlError, assert_public_host
 from app.core.slugify import slugify
 from app.models.ml_model import MLModel, ModelKind
 from app.models.project import Project
@@ -99,31 +98,17 @@ _MAX_REDIRECTS = 5
 
 
 def _assert_public_host(url: str) -> None:
-    """Reject a URL whose host resolves to a loopback/private/link-local/
-    reserved/multicast address (SEC-02). Runs on the initial URL *and* on
-    every redirect hop in `_download_weights` — a public-looking URL that
-    redirects to an internal address is exactly as dangerous as one that
-    points there directly, so both must be checked, not just the first."""
-    host = urlsplit(url).hostname
-    if not host:
-        raise ModelLoadError(f"URL has no host: {url}")
+    """Runs on the initial URL *and* on every redirect hop in
+    `_download_weights` (SEC-02) — a public-looking URL that redirects to an
+    internal address is exactly as dangerous as one that points there
+    directly, so both must be checked, not just the first. Thin wrapper over
+    the shared `core.security` guard: translates its generic
+    `UnsafeUrlError` into this module's `ModelLoadError`, so callers of
+    `register_model_from_url` see the exception type they already do."""
     try:
-        infos = socket.getaddrinfo(host, None)
-    except OSError as exc:
-        raise ModelLoadError(f"Could not resolve host {host!r}: {exc}") from exc
-    for family, _, _, _, sockaddr in infos:
-        addr = ipaddress.ip_address(sockaddr[0])
-        if (
-            addr.is_loopback
-            or addr.is_private
-            or addr.is_link_local
-            or addr.is_reserved
-            or addr.is_multicast
-            or addr.is_unspecified
-        ):
-            raise ModelLoadError(
-                f"Refusing to fetch weights from {host!r} — it resolves to a non-public address ({addr})"
-            )
+        assert_public_host(url)
+    except UnsafeUrlError as exc:
+        raise ModelLoadError(str(exc)) from exc
 
 
 def _download_weights(url: str, name: str) -> Path:

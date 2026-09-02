@@ -122,6 +122,7 @@ else:
             "app.workers.tasks.quality",
             "app.workers.tasks.roboflow",
             "app.workers.tasks.blob_import",
+            "app.workers.tasks.sam_download",
             "app.workers.tasks.reconcile",
         ],
     )
@@ -139,6 +140,7 @@ else:
             "app.workers.tasks.video.*": {"queue": "default"},
             "app.workers.tasks.roboflow.*": {"queue": "default"},
             "app.workers.tasks.blob_import.*": {"queue": "default"},
+            "app.workers.tasks.sam_download.*": {"queue": "default"},
             "app.workers.tasks.reconcile.*": {"queue": "default"},
             # Polling is just Kaggle API calls, no local CUDA work — belongs
             # on `default`, not `gpu` (concurrency=1, shouldn't wait on
