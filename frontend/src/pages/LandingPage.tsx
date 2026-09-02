@@ -14,10 +14,12 @@ export function LandingPage() {
 
   return (
     <div className="relative flex min-h-[100dvh] flex-col overflow-hidden bg-paper text-ink">
-      {/* Signature element: a physically-simulated field of glossy amber/black
+      {/* Signature element: a physically-simulated field of glossy orange/black
           instances, floating (gravity 0) so it fills the whole hero. Sits
           behind the copy. Under prefers-reduced-motion it's dropped entirely
-          and the static Swiss grid ground stands in for it. */}
+          and the static Swiss grid ground stands in for it. Orange here is
+          the same `orange` token as everywhere else in the app (tailwind.config.ts),
+          not a one-off amber pulled in just for this component. */}
       {reducedMotion ? (
         <div className="swiss-grid-pattern absolute inset-0 z-0 bg-muted" aria-hidden="true" />
       ) : (
@@ -26,7 +28,7 @@ export function LandingPage() {
             <Ballpit
               className="h-full w-full"
               count={110}
-              colors={["#FFB000", "#000000", "#FFB000", "#000000", "#FFB000", "#000000", "#FFB000", "#000000"]}
+              colors={["#FF4500", "#000000", "#FF4500", "#000000", "#FF4500", "#000000", "#FF4500", "#000000"]}
               ambientColor={0xffffff}
               ambientIntensity={0.55}
               lightIntensity={340}
