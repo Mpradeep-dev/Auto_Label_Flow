@@ -210,6 +210,7 @@ async def stream_roboflow_job(job_id: uuid.UUID, db: Session = Depends(get_db)):
                         "eta_s": None,
                         "status": fresh.status.value if fresh else "UNKNOWN",
                         "error": fresh.error if fresh else None,
+                        "failed": fresh.failed_count if fresh else 0,
                     }
                 )
                 status_value = fresh.status.value if fresh else "UNKNOWN"
