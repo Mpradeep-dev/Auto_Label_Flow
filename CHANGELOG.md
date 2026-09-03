@@ -4,6 +4,15 @@ All notable changes to AutoLabelFlow are recorded here. This file is
 maintained automatically by [release-please](https://github.com/googleapis/release-please)
 from [Conventional Commits](https://www.conventionalcommits.org/) on `main`.
 
+## [0.4.2](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.4.1...v0.4.2) (2026-09-03)
+
+
+### Bug Fixes
+
+* **datasets:** put the create-from-scratch form inside the empty state ([e753e5a](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/e753e5aebc4741d47a5e75380c5a4c670e14bd05))
+* Roboflow export reliability — retry, fail-fast, honest progress, unannotated-image upload ([8b054e2](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/8b054e298a5237c5847472bdc734b5bf084aa18b))
+* **roboflow:** retry transient uploads, fail fast on real ones, report honest progress, stop orphaning unannotated images ([461fecc](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/461fecca868102e1bf87f7be6be6cc49aa0ffa7d))
+
 ## [0.4.1](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.4.0...v0.4.1) (2026-09-02)
 
 
