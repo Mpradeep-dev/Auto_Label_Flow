@@ -200,7 +200,6 @@ export function DatasetsPage() {
   const { projectId } = useParams<{ projectId: string }>();
   const [name, setName] = useState("");
   const queryClient = useQueryClient();
-  const nameInputRef = useRef<HTMLInputElement>(null);
   const roboflowRef = useRef<HTMLDivElement>(null);
 
   const datasetsQuery = useQuery({
@@ -224,23 +223,24 @@ export function DatasetsPage() {
 
   if (!projectId) return null;
 
-  return (
-    <div className="min-h-full px-8 py-12 sm:px-16 sm:py-20">
-      <SectionLabel index={2}>Datasets</SectionLabel>
-      <h1 className="mb-4 border-b-4 border-ink pb-8 text-5xl font-black uppercase tracking-tightest sm:text-7xl">
-        Datasets
-      </h1>
+  // While the project has zero datasets the empty state below carries its own
+  // create form (right where the user is looking) — showing this one too would
+  // just be a second, identical form bound to the same state.
+  const noDatasets = datasetsQuery.data?.length === 0;
+
+  const createForm = (
+    <>
       <form
         onSubmit={(e) => {
           e.preventDefault();
           if (name.trim()) createMutation.mutate();
         }}
-        className="mb-12 flex max-w-xl border-2 border-ink"
+        className="flex w-full max-w-xl border-2 border-ink"
       >
         <input
-          ref={nameInputRef}
           value={name}
           onChange={(e) => setName(e.target.value)}
+          autoFocus={noDatasets}
           aria-label="NEW DATASET NAME"
           placeholder="NEW DATASET NAME"
           className="flex-1 bg-paper px-4 py-3 text-sm font-semibold uppercase tracking-wide outline-none placeholder:text-ink/50 focus:bg-muted"
@@ -254,6 +254,16 @@ export function DatasetsPage() {
         </button>
       </form>
       {createMutation.isError && <FieldError error={createMutation.error} />}
+    </>
+  );
+
+  return (
+    <div className="min-h-full px-8 py-12 sm:px-16 sm:py-20">
+      <SectionLabel index={2}>Datasets</SectionLabel>
+      <h1 className="mb-4 border-b-4 border-ink pb-8 text-5xl font-black uppercase tracking-tightest sm:text-7xl">
+        Datasets
+      </h1>
+      {!noDatasets && <div className="mb-12">{createForm}</div>}
 
       <div className="mb-12 flex flex-wrap gap-8">
         <FileImportSection projectId={projectId} />
@@ -274,17 +284,12 @@ export function DatasetsPage() {
         {(datasetsQuery.data ?? []).map((dataset) => (
           <DatasetCard key={dataset.id} dataset={dataset} />
         ))}
-        {datasetsQuery.data?.length === 0 && (
+        {noDatasets && (
           <EmptyState
             title="No datasets yet"
-            description="Create your first dataset from scratch, or import one from Roboflow — either way, you'll land here ready to upload images."
+            description="Name a dataset and hit Create to start one from scratch — you'll land on its Images page ready to upload your local files. Or import an existing one from a file or Roboflow above."
           >
-            <button
-              onClick={() => nameInputRef.current?.focus()}
-              className="border-2 border-ink bg-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink"
-            >
-              Create a dataset
-            </button>
+            {createForm}
             <button
               onClick={() => roboflowRef.current?.scrollIntoView({ behavior: "smooth", block: "center" })}
               className="border-2 border-ink px-5 py-2.5 text-xs font-bold uppercase tracking-widest hover:border-orange hover:bg-orange hover:text-ink"

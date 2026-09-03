@@ -9,6 +9,7 @@ test env, so these hit COMPLETED synchronously within the request."""
 from __future__ import annotations
 
 import io
+import re
 from pathlib import Path
 
 import pytest
@@ -629,7 +630,9 @@ def test_roboflow_export_names_batch_after_app_and_dataset_version(
     default batch name ("Pip Package Upload") since `push_version_to_roboflow`
     never passed `batch_name` — indistinguishable in Roboflow's UI from any
     other tool's uploads. Exports must be grouped under a batch that
-    identifies this app and which dataset version was pushed."""
+    identifies this app and which dataset version was pushed — and the name
+    must be Roboflow-safe (`^[a-z0-9_-]{1,64}$`), or the upload is dropped
+    server-side and the image never reaches the Annotate tab."""
     _, version_id = approved_version
 
     captured: list[dict] = []
@@ -650,7 +653,297 @@ def test_roboflow_export_names_batch_after_app_and_dataset_version(
 
     assert captured
     # `approved_version`'s dataset is named "d"; its first version is v1.
-    assert all(c["batch_name"] == "AutoLabelFlow (d-v1)" for c in captured)
+    assert all(c["batch_name"] == "autolabelflow-d-v1" for c in captured)
+    assert all(re.fullmatch(r"[a-z0-9_-]{1,64}", c["batch_name"]) for c in captured)
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("AutoLabelFlow-d-v1", "autolabelflow-d-v1"),
+        ("AutoLabelFlow (My Cones Set-v3)", "autolabelflow-my-cones-set-v3"),
+        ("  spaces & (parens!) ", "spaces-parens"),
+        ("A" * 80, "a" * 64),
+        ("////", "autolabelflow"),
+        ("日本語データ", "autolabelflow"),
+    ],
+)
+def test_sanitize_batch_name_matches_roboflow_rule(raw: str, expected: str) -> None:
+    from app.services.integrations.roboflow_export import _sanitize_batch_name
+
+    out = _sanitize_batch_name(raw)
+    assert out == expected
+    assert re.fullmatch(r"[a-z0-9_-]{1,64}", out)
+
+
+# --- upload retry / fail-fast on a Roboflow-side 5xx -----------------------
+#
+# Roboflow's /dataset/{project}/upload endpoint intermittently answers with
+# a bare "500 Server Error" page (Google Frontend, no JSON) — and, when a
+# workspace is out of monthly upload quota or on an expired plan, does so
+# for *every* image. Without this handling a multi-thousand-image push
+# grinds for hours, uploads nothing, and leaves the job "RUNNING" with a
+# useless `f.jpg: <Response [500]>` per row.
+
+
+def _upload_error(status_code: int):
+    from roboflow.adapters.rfapi import ImageUploadError
+
+    return ImageUploadError(f"<Response [{status_code}]>", status_code=status_code)
+
+
+def test_upload_one_image_retries_transient_5xx_then_succeeds(monkeypatch) -> None:
+    from app.services.integrations import roboflow_export as mod
+
+    slept: list[float] = []
+    monkeypatch.setattr(mod.time, "sleep", lambda s: slept.append(s))
+
+    calls = {"n": 0}
+
+    class _Proj:
+        def upload(self, **kwargs):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise _upload_error(500)
+
+    mod._upload_one_image(_Proj(), image_path="a.jpg")
+
+    assert calls["n"] == 3
+    assert slept == [1.0, 2.0]  # backoff between attempts 1->2 and 2->3
+
+
+def test_upload_one_image_gives_up_after_max_attempts(monkeypatch) -> None:
+    from roboflow.adapters.rfapi import ImageUploadError
+
+    from app.services.integrations import roboflow_export as mod
+
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    class _Proj:
+        def upload(self, **kwargs):
+            raise _upload_error(503)
+
+    with pytest.raises(ImageUploadError):
+        mod._upload_one_image(_Proj(), image_path="a.jpg")
+
+
+def test_upload_one_image_does_not_retry_4xx(monkeypatch) -> None:
+    from roboflow.adapters.rfapi import ImageUploadError
+
+    from app.services.integrations import roboflow_export as mod
+
+    monkeypatch.setattr(mod.time, "sleep", lambda s: pytest.fail("should not back off on a 4xx"))
+
+    calls = {"n": 0}
+
+    class _Proj:
+        def upload(self, **kwargs):
+            calls["n"] += 1
+            raise _upload_error(400)
+
+    with pytest.raises(ImageUploadError):
+        mod._upload_one_image(_Proj(), image_path="a.jpg")
+    assert calls["n"] == 1
+
+
+def test_fail_fast_message_points_at_quota_for_all_5xx() -> None:
+    from app.services.integrations.roboflow_export import _fail_fast_message
+
+    msg = _fail_fast_message([500, 500, 502, 500, 503], ["a.jpg: HTTP 500: x"] * 5)
+    assert "quota" in msg.lower()
+    assert "status.roboflow.com" in msg
+    assert "Export page" in msg
+
+
+def test_fail_fast_message_points_at_api_key_for_auth_failures() -> None:
+    from app.services.integrations.roboflow_export import _fail_fast_message
+
+    msg = _fail_fast_message([403, 403, 403, 403, 403], ["a.jpg: HTTP 403: nope"] * 5)
+    assert "Private API Key" in msg
+
+
+def test_push_version_fails_fast_after_threshold(real_db_session, monkeypatch) -> None:
+    """A run where nothing uploads and the first `_FAIL_FAST_AFTER` images
+    all 5xx must abort with an actionable error — not attempt every image."""
+    import uuid as _uuid
+
+    from app.services.integrations import roboflow_export as mod
+
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        for split in ("train", "valid", "test"):
+            (root / "images" / split).mkdir(parents=True)
+            (root / "labels" / split).mkdir(parents=True)
+        for i in range(20):
+            (root / "images" / "train" / f"img{i:02d}.jpg").write_bytes(_jpeg_bytes())
+            (root / "labels" / "train" / f"img{i:02d}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        data_yaml = root / "data.yaml"
+        data_yaml.write_text("names: ['cone']\n", encoding="utf-8")
+        return data_yaml
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    attempted: set[str] = set()
+
+    class _Proj:
+        def upload(self, *, image_path, **kwargs):
+            attempted.add(image_path)
+            raise _upload_error(500)
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {}))
+
+    with pytest.raises(mod.RoboflowExportError) as excinfo:
+        mod.push_version_to_roboflow(
+            real_db_session,
+            version_id=_uuid.uuid4(),
+            workspace="ws",
+            project_slug="proj",
+        )
+
+    assert "quota" in str(excinfo.value).lower()
+    # Bailed after the threshold — did NOT try all 20 images.
+    assert len(attempted) == mod._FAIL_FAST_AFTER
+
+
+def test_push_version_progress_counts_successes_not_attempts(real_db_session, monkeypatch) -> None:
+    """The progress callback's first arg must be the running count of images
+    that actually reached Roboflow — never the loop index — so a half-failing
+    push can't show a bar racing ahead of what landed."""
+    import uuid as _uuid
+
+    from app.services.integrations import roboflow_export as mod
+
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        for split in ("train", "valid", "test"):
+            (root / "images" / split).mkdir(parents=True)
+            (root / "labels" / split).mkdir(parents=True)
+        for i in range(6):
+            (root / "images" / "train" / f"img{i}.jpg").write_bytes(_jpeg_bytes())
+        (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+        return root / "data.yaml"
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    n = {"i": 0}
+
+    class _Proj:
+        def upload(self, **kwargs):
+            i = n["i"]
+            n["i"] += 1
+            if i % 2 == 1:  # every other image is rejected (400: no retry, no fail-fast — one already landed)
+                raise _upload_error(400)
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {}))
+
+    seen: list[tuple[int, int, int]] = []
+    uploaded, failed, _ = mod.push_version_to_roboflow(
+        real_db_session,
+        version_id=_uuid.uuid4(),
+        workspace="ws",
+        project_slug="proj",
+        progress_cb=lambda cur, total, fail: seen.append((cur, total, fail)),
+    )
+
+    assert (uploaded, failed) == (3, 3)
+    assert seen[0] == (0, 6, 0)  # primed once the count is known
+    assert [c for c, _, _ in seen] == [0, 1, 1, 2, 2, 3, 3]  # success count, monotonic, never the index
+    assert [f for _, _, f in seen] == [0, 0, 1, 1, 2, 2, 3]
+
+
+def test_roboflow_export_all_uploads_fail_marks_job_failed(
+    connected_roboflow: TestClient, approved_version: tuple[str, str], monkeypatch
+) -> None:
+    """A version too small to trip fail-fast, but with every image failing,
+    must still land as FAILED with a real message — not COMPLETED / 0
+    uploaded."""
+    _, version_id = approved_version
+
+    def _always_500(self, **kwargs):
+        raise _upload_error(500)
+
+    monkeypatch.setattr(_FakeRoboflowProject, "upload", _always_500)
+
+    resp = connected_roboflow.post(
+        f"/api/v1/versions/{version_id}/export/roboflow",
+        json={"workspace": "my-workspace", "project": "cones"},
+    )
+    assert resp.status_code == 202, resp.text
+    job = resp.json()
+    assert job["status"] == "FAILED"
+    assert job["uploaded_count"] == 0
+    assert job["failed_count"] == 1
+    # Honest progress: the one image that failed must NOT count as processed.
+    assert job["processed_items"] == 0
+    assert "roboflow" in job["error"].lower()
+    assert "HTTP 500" in job["error"]
+
+    progress = get_progress(job["id"])
+    assert progress is not None
+    assert progress.status == "FAILED"
+    assert progress.current == 0
+    assert progress.failed == 1
+
+
+def test_roboflow_export_omits_annotation_path_for_unannotated_image(
+    connected_roboflow: TestClient, unique_name: str, monkeypatch
+) -> None:
+    """Regression: `write_yolo_dataset` writes labels/*.txt for every image,
+    including an approved image with zero annotations (a legitimate
+    "background" image — versioning only filters on APPROVED, not on
+    having annotations) — that file exists but is empty, not absent. Every
+    such image failed to push with Roboflow's own `HTTP 400: Unrecognized
+    annotation format` (confirmed 1:1 against every zero-annotation image
+    in a real 73-image push) because `annotation_path` was set to that
+    empty file instead of None."""
+    project = connected_roboflow.post("/api/v1/projects", json={"name": unique_name}).json()
+    connected_roboflow.patch(
+        f"/api/v1/projects/{project['id']}", json={"class_config": [{"id": 0, "name": "cone"}]}
+    )
+    dataset = connected_roboflow.post(f"/api/v1/projects/{project['id']}/datasets", json={"name": "d"}).json()
+    image = connected_roboflow.post(
+        f"/api/v1/datasets/{dataset['id']}/images", files={"file": ("f.jpg", _jpeg_bytes(), "image/jpeg")}
+    ).json()
+    connected_roboflow.post(f"/api/v1/images/{image['id']}/approve")  # approved, no annotation added
+    version = connected_roboflow.post(f"/api/v1/datasets/{dataset['id']}/versions", json={}).json()
+
+    captured: list[dict] = []
+    original_upload = _FakeRoboflowProject.upload
+
+    def _spy_upload(self, **kwargs):
+        captured.append(kwargs)
+        return original_upload(self, **kwargs)
+
+    monkeypatch.setattr(_FakeRoboflowProject, "upload", _spy_upload)
+
+    resp = connected_roboflow.post(
+        f"/api/v1/versions/{version['id']}/export/roboflow",
+        json={"workspace": "my-workspace", "project": "cones"},
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["status"] == "COMPLETED"
+    assert resp.json()["uploaded_count"] == 1
+
+    assert captured
+    assert captured[0]["annotation_path"] is None
 
 
 def test_roboflow_export_job_requires_connection_first(real_client: TestClient, unique_name: str) -> None:

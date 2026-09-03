@@ -13,6 +13,10 @@ interface StreamPayload {
   total: number;
   status: string;
   error: string | null;
+  // Attempts that failed. `current` is successes only, so an export where
+  // every image is rejected stays at current=0 with failed climbing —
+  // the bar never advances on work that didn't reach Roboflow.
+  failed?: number;
 }
 
 const SETTLED: RoboflowJobStatus[] = ["COMPLETED", "FAILED", "CANCELLED"];
@@ -29,6 +33,7 @@ export function RoboflowJobProgress({
     total: job.total_items,
     status: job.status,
     error: job.error,
+    failed: job.failed_count,
   });
   const [cancelling, setCancelling] = useState(false);
   const settledRef = useRef(false);
@@ -54,8 +59,13 @@ export function RoboflowJobProgress({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [job.id]);
 
+  const failed = progress.failed ?? 0;
+  // Bar tracks confirmed successes only — never failed attempts.
   const pct = progress.total > 0 ? Math.round((progress.current / progress.total) * 100) : 0;
   const running = progress.status === "RUNNING" || progress.status === "QUEUED";
+  // Running, but every attempt so far has bounced and nothing has landed —
+  // don't imply forward motion; say plainly that it isn't reaching Roboflow.
+  const stalled = running && failed > 0 && progress.current === 0;
 
   async function cancel() {
     setCancelling(true);
@@ -71,13 +81,22 @@ export function RoboflowJobProgress({
 
   return (
     <div className="mt-3">
-      <div className="h-2 w-full border border-ink">
+      <div className={`h-2 w-full border ${stalled ? "border-accent" : "border-ink"}`}>
         <div className="h-full bg-ink transition-all duration-150" style={{ width: `${pct}%` }} />
       </div>
       <div className="mt-2 flex items-center justify-between gap-3">
         <p className="tabular text-xs text-ink/60">
-          {progress.current} / {progress.total} images
-          {running && " · working…"}
+          {failed > 0 ? (
+            <>
+              {progress.current} uploaded · <span className="text-accent-ink">{failed} failed</span> ·{" "}
+              {progress.current + failed} / {progress.total}
+            </>
+          ) : (
+            <>
+              {progress.current} / {progress.total} images
+            </>
+          )}
+          {running && !stalled && " · working…"}
           {!running && (
             <>
               {" · "}
@@ -95,6 +114,13 @@ export function RoboflowJobProgress({
           </button>
         )}
       </div>
+      {stalled && !progress.error && (
+        <p className="mt-1 text-xs text-accent-ink">
+          Not reaching Roboflow — {failed} upload{failed === 1 ? "" : "s"} rejected so far, nothing
+          stored yet. If this keeps up the export stops and shows why (usually an out-of-quota or
+          expired Roboflow plan).
+        </p>
+      )}
       {progress.error && <p className="mt-1 text-xs text-accent-ink">{progress.error}</p>}
     </div>
   );

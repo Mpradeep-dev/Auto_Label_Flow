@@ -27,6 +27,10 @@ class JobProgress:
     eta_s: float | None = None
     status: str = "RUNNING"
     error: str | None = None
+    # Items that were attempted and failed. `current` counts only real
+    # successes, so a job where every item fails sits at current=0 with
+    # failed climbing — never a bar that advances as if work landed.
+    failed: int = 0
 
 
 def _key(job_id: str) -> str:
@@ -49,9 +53,13 @@ class ThrottledProgressWriter:
         self._last_write = 0.0
         self._current = 0
         self._predictions = 0
+        self._failed = 0
 
-    def update(self, current: int, predictions_delta: int = 0, force: bool = False) -> None:
+    def update(
+        self, current: int, predictions_delta: int = 0, force: bool = False, failed: int = 0
+    ) -> None:
         self._current = current
+        self._failed = failed
         self._predictions += predictions_delta
         now = time.monotonic()
         if not force and (now - self._last_write) < _THROTTLE_S:
@@ -63,7 +71,14 @@ class ThrottledProgressWriter:
         eta = remaining / fps if fps > 0 else None
         set_progress(
             self.job_id,
-            JobProgress(current=current, total=self.total, predictions=self._predictions, fps=fps, eta_s=eta),
+            JobProgress(
+                current=current,
+                total=self.total,
+                predictions=self._predictions,
+                fps=fps,
+                eta_s=eta,
+                failed=self._failed,
+            ),
         )
 
     def finish(self, status: str = "COMPLETED", error: str | None = None) -> None:
@@ -77,6 +92,7 @@ class ThrottledProgressWriter:
                 eta_s=0.0,
                 status=status,
                 error=error,
+                failed=self._failed,
             ),
         )
 
