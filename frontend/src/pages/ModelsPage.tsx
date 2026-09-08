@@ -4,6 +4,7 @@ import { api, ApiError } from "@/services/api";
 import { SectionLabel } from "@/components/layout/SectionLabel";
 import { EmptyState } from "@/components/layout/EmptyState";
 import { Skeleton } from "@/components/layout/Skeleton";
+import { PRETRAINED_MODEL_FAMILIES, type PretrainedModel } from "@/config/pretrainedModels";
 import type { MLModel, ModelKind } from "@/types";
 
 type Framework = "ultralytics" | "yolo-world";
@@ -17,8 +18,65 @@ function stripExtension(filename: string): string {
   return filename.replace(/\.[^./\\]+$/, "");
 }
 
+function PretrainedModelsPanel() {
+  const queryClient = useQueryClient();
+  const [activeName, setActiveName] = useState<string | null>(null);
+
+  const downloadMutation = useMutation({
+    mutationFn: (model: PretrainedModel) =>
+      api.downloadModel({ name: model.name, url: model.url, kind: "DETECTOR", framework: model.framework }),
+    onMutate: (model) => setActiveName(model.name),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["models"] });
+      setActiveName(null);
+    },
+    onError: () => setActiveName(null),
+  });
+
+  return (
+    <div className="divide-y-2 divide-ink border-b-2 border-ink">
+      {PRETRAINED_MODEL_FAMILIES.map((group) => (
+        <div key={group.family} className="p-4">
+          <p className="mb-2 text-[10px] font-bold uppercase tracking-widest text-ink/60">{group.family}</p>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {group.models.map((model) => {
+              const isActive = activeName === model.name;
+              const isPending = downloadMutation.isPending && isActive;
+              const isError = downloadMutation.isError && isActive;
+              return (
+                <div
+                  key={model.name}
+                  className="flex items-center justify-between gap-3 border-2 border-ink/20 px-3 py-2"
+                >
+                  <div>
+                    <p className="text-xs font-bold uppercase tracking-wide">{model.name}</p>
+                    <p className="text-[10px] uppercase tracking-widest text-ink/50">{model.hint}</p>
+                    {isError && (
+                      <p className="mt-1 text-[10px] text-accent-ink">
+                        {(downloadMutation.error as Error).message}
+                      </p>
+                    )}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => downloadMutation.mutate(model)}
+                    disabled={downloadMutation.isPending}
+                    className="shrink-0 border-2 border-ink px-3 py-1.5 text-[10px] font-bold uppercase tracking-widest hover:bg-orange hover:text-ink disabled:opacity-40"
+                  >
+                    {isPending ? "Downloading…" : `Register ${model.name}`}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function RegisterModelForm() {
-  const [source, setSource] = useState<"upload" | "url">("upload");
+  const [source, setSource] = useState<"upload" | "pretrained" | "url">("upload");
   const [name, setName] = useState("");
   const [url, setUrl] = useState("");
   const [file, setFile] = useState<File | null>(null);
@@ -60,48 +118,53 @@ function RegisterModelForm() {
       className="mb-12 max-w-2xl border-2 border-ink"
     >
       <div className="flex divide-x-2 divide-ink border-b-2 border-ink text-[10px] font-bold uppercase tracking-widest">
-        {(["upload", "url"] as const).map((s) => (
+        {(["upload", "pretrained", "url"] as const).map((s) => (
           <button
             key={s}
             type="button"
             onClick={() => setSource(s)}
             className={`flex-1 py-2 ${source === s ? "bg-ink text-paper" : "bg-paper hover:bg-orange hover:text-ink"}`}
           >
-            {s === "upload" ? "Upload from this computer" : "Download from link"}
+            {s === "upload" ? "Upload from this computer" : s === "pretrained" ? "Pretrained" : "Custom URL"}
           </button>
         ))}
       </div>
-      <div className="grid grid-cols-[1fr_auto_auto] divide-x-2 divide-ink border-b-2 border-ink">
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          aria-label="NAME (E.G. detect_v1)"
-          placeholder="NAME (E.G. detect_v1)"
-          className="bg-paper px-3 py-3 text-xs font-semibold uppercase tracking-wide outline-none placeholder:text-ink/50 focus:bg-muted"
-        />
-        <select
-          value={kind}
-          onChange={(e) => {
-            const nextKind = e.target.value as ModelKind;
-            setKind(nextKind);
-            setFramework(DEFAULT_FRAMEWORK_BY_KIND[nextKind]);
-          }}
-          className="bg-paper px-3 py-3 text-xs font-bold uppercase tracking-widest outline-none"
-        >
-          <option value="DETECTOR">Detector</option>
-          <option value="POSE">Pose (auxiliary)</option>
-        </select>
-        <select
-          value={framework}
-          onChange={(e) => setFramework(e.target.value as Framework)}
-          disabled={kind !== "DETECTOR"}
-          title="YOLO-World is open-vocabulary: it detects whatever classes the current project is configured with, instead of a fixed set baked into the weights."
-          className="bg-paper px-3 py-3 text-xs font-bold uppercase tracking-widest outline-none disabled:opacity-40"
-        >
-          <option value="ultralytics">Ultralytics YOLO</option>
-          <option value="yolo-world">YOLO-World (open-vocab)</option>
-        </select>
-      </div>
+
+      {source === "pretrained" && <PretrainedModelsPanel />}
+
+      {source !== "pretrained" && (
+        <div className="grid grid-cols-[1fr_auto_auto] divide-x-2 divide-ink border-b-2 border-ink">
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            aria-label="NAME (E.G. detect_v1)"
+            placeholder="NAME (E.G. detect_v1)"
+            className="bg-paper px-3 py-3 text-xs font-semibold uppercase tracking-wide outline-none placeholder:text-ink/50 focus:bg-muted"
+          />
+          <select
+            value={kind}
+            onChange={(e) => {
+              const nextKind = e.target.value as ModelKind;
+              setKind(nextKind);
+              setFramework(DEFAULT_FRAMEWORK_BY_KIND[nextKind]);
+            }}
+            className="bg-paper px-3 py-3 text-xs font-bold uppercase tracking-widest outline-none"
+          >
+            <option value="DETECTOR">Detector</option>
+            <option value="POSE">Pose (auxiliary)</option>
+          </select>
+          <select
+            value={framework}
+            onChange={(e) => setFramework(e.target.value as Framework)}
+            disabled={kind !== "DETECTOR"}
+            title="YOLO-World is open-vocabulary: it detects whatever classes the current project is configured with, instead of a fixed set baked into the weights."
+            className="bg-paper px-3 py-3 text-xs font-bold uppercase tracking-widest outline-none disabled:opacity-40"
+          >
+            <option value="ultralytics">Ultralytics YOLO</option>
+            <option value="yolo-world">YOLO-World (open-vocab)</option>
+          </select>
+        </div>
+      )}
 
       {source === "upload" ? (
         <div className="border-b-2 border-ink p-4">
@@ -144,7 +207,7 @@ function RegisterModelForm() {
             )}
           </button>
         </div>
-      ) : (
+      ) : source === "url" ? (
         <input
           value={url}
           onChange={(e) => setUrl(e.target.value)}
@@ -152,20 +215,22 @@ function RegisterModelForm() {
           placeholder="DIRECT LINK TO .PT FILE (e.g. https://.../detect_v1.pt)"
           className="w-full border-b-2 border-ink bg-paper px-3 py-3 text-xs font-semibold tracking-wide outline-none placeholder:text-ink/50 focus:bg-muted"
         />
-      )}
+      ) : null}
 
-      <button
-        type="submit"
-        disabled={!canSubmit}
-        className="w-full bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
-      >
-        {registerMutation.isPending
-          ? source === "url"
-            ? "Downloading…"
-            : "Uploading…"
-          : "Register model"}
-      </button>
-      {registerMutation.isError && (
+      {source !== "pretrained" && (
+        <button
+          type="submit"
+          disabled={!canSubmit}
+          className="w-full bg-ink py-3 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
+        >
+          {registerMutation.isPending
+            ? source === "url"
+              ? "Downloading…"
+              : "Uploading…"
+            : "Register model"}
+        </button>
+      )}
+      {source !== "pretrained" && registerMutation.isError && (
         <p className="border-t-2 border-ink bg-muted px-3 py-2 text-xs text-accent-ink">
           {(registerMutation.error as Error).message}
         </p>
