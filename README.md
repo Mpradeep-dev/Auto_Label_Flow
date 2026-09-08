@@ -19,6 +19,13 @@ see `frontend/DESIGN.md` and the code comments in
 walks through the six-stage loop, the sidebar layout, and a "why is this
 blocked" troubleshooting table — the same content is also in-app at `/help`.
 
+## Like this project?
+
+- ⭐ **[Star the repo](https://github.com/Mpradeep-dev/Auto_Label_Flow)** — helps others find it.
+- 👀 **[Watch releases](https://github.com/Mpradeep-dev/Auto_Label_Flow/subscription)** to get notified about new versions.
+- 🤝 **Contribute** — see [`CONTRIBUTING.md`](CONTRIBUTING.md) for how to set up a dev environment and send a PR.
+- 🐛 **[Raise an issue](https://github.com/Mpradeep-dev/Auto_Label_Flow/issues/new)** for bugs, or start a [discussion](https://github.com/Mpradeep-dev/Auto_Label_Flow/discussions) for feature ideas and questions.
+
 ## Download the desktop app (Windows)
 
 [![Download AutoLabelFlow for Windows](https://img.shields.io/badge/Download-AutoLabelFlow%20for%20Windows-FF3000?style=for-the-badge&logo=windows&logoColor=white)](https://github.com/Mpradeep-dev/Auto_Label_Flow/releases/latest/download/AutoLabelFlow-Setup.exe)
