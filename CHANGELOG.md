@@ -4,6 +4,13 @@ All notable changes to AutoLabelFlow are recorded here. This file is
 maintained automatically by [release-please](https://github.com/googleapis/release-please)
 from [Conventional Commits](https://www.conventionalcommits.org/) on `main`.
 
+## [0.4.3](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.4.2...v0.4.3) (2026-09-08)
+
+
+### Bug Fixes
+
+* roboflow progress fix ([ebb62b1](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/ebb62b185da2088631c72322ce28823d56a57289))
+
 ## [0.4.2](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.4.1...v0.4.2) (2026-09-03)
 
 
