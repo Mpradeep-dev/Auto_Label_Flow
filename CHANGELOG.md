@@ -4,6 +4,16 @@ All notable changes to AutoLabelFlow are recorded here. This file is
 maintained automatically by [release-please](https://github.com/googleapis/release-please)
 from [Conventional Commits](https://www.conventionalcommits.org/) on `main`.
 
+## [0.4.4](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.4.3...v0.4.4) (2026-09-17)
+
+
+### Bug Fixes
+
+* issues ([b3c1277](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/b3c1277b088046ad62b8b6a2cbbdab5825b9641c))
+* **roboflow:** let export create a new project instead of reusing an already-annotated one ([cfd6972](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/cfd6972b14843f319ae82140a8a9c8d92ce60c18))
+* **roboflow:** let export use a custom batch name instead of creating a new project ([0f72ca4](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/0f72ca4223b70b6a7557cd8894fde1b2eceac9f7))
+* **roboflow:** reliable export — retries, honest progress, custom batch name ([8b892be](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/8b892be3237ab11706e1362797e254da821ff363))
+
 ## [0.4.3](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.4.2...v0.4.3) (2026-09-08)
 
 
