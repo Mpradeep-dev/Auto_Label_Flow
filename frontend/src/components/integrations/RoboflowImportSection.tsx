@@ -22,6 +22,10 @@ export function RoboflowImportSection({ projectId }: { projectId: string }) {
   // Narrows the raw pull to one upload batch (Roboflow's own grouping of
   // raw uploads, split by name in its Annotate tab) — also raw-only.
   const [batchId, setBatchId] = useState("");
+  // Independent of `usingRaw` — either path can bring in Roboflow's
+  // existing labels, so this can strip them from either. Pulled images
+  // still land, just with zero annotations, ready for auto-annotate.
+  const [imagesOnly, setImagesOnly] = useState(false);
   const [datasetName, setDatasetName] = useState("");
   // Once the person edits the dataset name themselves, picking a different
   // batch must stop overwriting it — the batch name is only a starting
@@ -70,6 +74,7 @@ export function RoboflowImportSection({ projectId }: { projectId: string }) {
         dataset_name: datasetName.trim() || undefined,
         unannotated_only: usingRaw ? unannotatedOnly : undefined,
         batch_id: usingRaw ? batchId || undefined : undefined,
+        images_only: imagesOnly,
       }),
     onSuccess: (created) => setJob(created),
   });
@@ -90,6 +95,7 @@ export function RoboflowImportSection({ projectId }: { projectId: string }) {
             setImportRaw(false);
             setUnannotatedOnly(false);
             setBatchId("");
+            setImagesOnly(false);
             setDatasetNameTouched(false);
           }}
         />
@@ -167,6 +173,20 @@ export function RoboflowImportSection({ projectId }: { projectId: string }) {
               </option>
             ))}
           </select>
+        )}
+
+        {workspace && project && !versionsQuery.isLoading && (
+          <label className="flex items-start gap-2 border-2 border-ink p-3 text-xs">
+            <input
+              type="checkbox"
+              checked={imagesOnly}
+              onChange={(e) => setImagesOnly(e.target.checked)}
+              className="mt-0.5 accent-accent"
+            />
+            <span>
+              Only pull images — skip Roboflow's existing labels, so auto-annotate can label them fresh.
+            </span>
+          </label>
         )}
 
         <input

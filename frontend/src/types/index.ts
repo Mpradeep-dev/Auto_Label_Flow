@@ -332,6 +332,7 @@ export interface RoboflowJob {
   version: number | null;
   unannotated_only: boolean;
   batch_id: string | null;
+  images_only: boolean;
   total_items: number;
   processed_items: number;
   uploaded_count: number;

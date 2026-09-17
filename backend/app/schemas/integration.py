@@ -60,6 +60,10 @@ class RoboflowImportRequest(BaseModel):
     # Raw pull only (ignored when `version` is set): narrow to one upload
     # batch (from `RoboflowBatchSummary.id`) instead of every raw image.
     batch_id: str | None = None
+    # Both paths: pull the images but skip importing whatever labels
+    # Roboflow already has on them, so auto-annotate starts from a clean
+    # slate instead of fighting existing boxes (issue #22).
+    images_only: bool = False
 
 
 class RoboflowProjectSummary(BaseModel):
@@ -125,6 +129,7 @@ class RoboflowJobRead(BaseModel):
     version: int | None = None
     unannotated_only: bool
     batch_id: str | None = None
+    images_only: bool
     total_items: int
     processed_items: int
     uploaded_count: int

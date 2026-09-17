@@ -61,6 +61,27 @@ _SEARCH_MAX_ATTEMPTS = 4
 _SEARCH_BACKOFF_BASE_S = 1.0
 
 
+def _describe_unreachable(exc: requests.RequestException, attempts: int) -> str:
+    """A `requests.exceptions.ConnectionError` (which is what a DNS
+    resolution failure like `NameResolutionError` surfaces as) means the
+    request never reached Roboflow at all — that's a local network/DNS/
+    firewall/proxy problem on this machine, not "Roboflow is having a bad
+    moment", and telling the user to just retry in a few minutes is wrong
+    advice for it (observed live: users read that hint, wait, and hit the
+    exact same DNS failure again). Anything else (timeouts, etc.) keeps the
+    original "transient, retry later" framing, which is accurate for those."""
+    if isinstance(exc, requests.exceptions.ConnectionError):
+        return (
+            f"Could not reach Roboflow (api.roboflow.com) after {attempts} attempts — this "
+            "machine was unable to connect at all, which usually means a local internet, DNS, "
+            f"or firewall/proxy problem rather than an issue on Roboflow's side. ({exc})"
+        )
+    return (
+        f"Roboflow /search could not be reached after {attempts} attempts ({exc}). This is "
+        "usually a temporary Roboflow-side issue — retry the import in a few minutes."
+    )
+
+
 def _merge_class_config(project: Project, roboflow_names: list[str]) -> dict[int, tuple[int, str]]:
     """Returns {roboflow_class_index: (project_class_id, class_name)}.
     Extends `project.class_config` in place (caller commits) for any name
@@ -91,10 +112,17 @@ def import_roboflow_project(
     project_slug: str,
     version: int,
     dataset_name: str | None,
+    images_only: bool = False,
     progress_cb: Callable[[int, int], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> Dataset:
-    """`progress_cb(current, total)`, if given, is called once with
+    """`images_only` still downloads and persists every image but skips
+    turning its YOLO label file into annotations, so it lands with zero
+    boxes for auto-annotate to start fresh on (issue #22: existing
+    Roboflow labels get in the way of using auto-annotate on pulled-in
+    images).
+
+    `progress_cb(current, total)`, if given, is called once with
     `current=0` as soon as the image count is known (download finished),
     then once per image as it's persisted. `should_cancel()` is checked
     before each image, stopping the loop early (partial dataset kept, not
@@ -193,7 +221,7 @@ def import_roboflow_project(
             db.refresh(image)
 
             label_path = labels_dir / f"{image_path.stem}.txt"
-            if label_path.exists():
+            if not images_only and label_path.exists():
                 for line in label_path.read_text(encoding="utf-8").splitlines():
                     parts = line.split()
                     if len(parts) != 5:
@@ -285,11 +313,7 @@ def _rf_search_page(
                 exc,
             )
             if attempt == _SEARCH_MAX_ATTEMPTS:
-                raise RuntimeError(
-                    f"Roboflow /search could not be reached after {_SEARCH_MAX_ATTEMPTS} "
-                    f"attempts ({exc}). This is usually a temporary Roboflow-side issue — "
-                    "retry the import in a few minutes."
-                ) from exc
+                raise RuntimeError(_describe_unreachable(exc, _SEARCH_MAX_ATTEMPTS)) from exc
             time.sleep(_SEARCH_BACKOFF_BASE_S * 2 ** (attempt - 1))
             continue
 
@@ -337,10 +361,16 @@ def import_roboflow_raw_project(
     dataset_name: str | None,
     unannotated_only: bool = False,
     batch_id: str | None = None,
+    images_only: bool = False,
     progress_cb: Callable[[int, int], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> Dataset:
-    """Pulls a project's raw uploaded images directly, for a project with
+    """`images_only` still downloads and persists every pulled image but
+    skips turning its `annotation.boxes` into annotations, so it lands with
+    zero boxes for auto-annotate to start fresh on (issue #22) — orthogonal
+    to `unannotated_only`, which instead narrows *which* images get pulled.
+
+    Pulls a project's raw uploaded images directly, for a project with
     no generated Version to `.download()`. Images are left PENDING so
     the user must review and approve them before they can be versioned
     or exported — same as `import_roboflow_project`.
@@ -450,7 +480,7 @@ def import_roboflow_raw_project(
         annotation = details.get("annotation") or {}
         ann_w = annotation.get("width") or width
         ann_h = annotation.get("height") or height
-        for box in annotation.get("boxes") or []:
+        for box in ([] if images_only else annotation.get("boxes") or []):
             class_id = _ensure_class_id(project, box["label"])
             cx = float(box["x"]) / ann_w
             cy = float(box["y"]) / ann_h

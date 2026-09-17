@@ -382,6 +382,8 @@ export const api = {
     // `version: undefined` pulls the project's raw uploaded images instead
     // of a generated Version — see RoboflowImportSection in DatasetsPage.
     // `unannotated_only`/`batch_id` only matter for that raw path.
+    // `images_only` applies to both — pulls images without their existing
+    // Roboflow labels.
     data: {
       workspace: string;
       project: string;
@@ -389,6 +391,7 @@ export const api = {
       dataset_name?: string;
       unannotated_only?: boolean;
       batch_id?: string;
+      images_only?: boolean;
     },
   ) => request<RoboflowJob>(`/projects/${projectId}/import/roboflow`, { method: "POST", body: JSON.stringify(data) }),
   listRoboflowProjects: (workspace?: string) =>

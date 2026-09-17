@@ -197,6 +197,31 @@ def test_roboflow_import_job_completes_and_creates_dataset(
     assert stats["approved_images"] == 0
 
 
+def test_roboflow_import_job_images_only_skips_labels_versioned(
+    connected_roboflow: TestClient, unique_name: str
+) -> None:
+    """`images_only: true` on a versioned pull still downloads the image but
+    must not create the annotation the fake version's label file carries —
+    the whole point is letting auto-annotate start from a clean slate."""
+    project_id = connected_roboflow.post("/api/v1/projects", json={"name": unique_name}).json()["id"]
+
+    resp = connected_roboflow.post(
+        f"/api/v1/projects/{project_id}/import/roboflow",
+        json={"workspace": "my-workspace", "project": "cones", "version": 1, "images_only": True},
+    )
+    assert resp.status_code == 202, resp.text
+    job = resp.json()
+    assert job["images_only"] is True
+    assert job["status"] == "COMPLETED"
+    assert job["total_items"] == 1
+
+    dataset_id = job["result_dataset_id"]
+    images = connected_roboflow.get(f"/api/v1/datasets/{dataset_id}/images").json()["items"]
+    assert len(images) == 1
+    annotations = connected_roboflow.get(f"/api/v1/images/{images[0]['id']}/annotations").json()
+    assert annotations == []
+
+
 def test_roboflow_import_job_raw_pull_when_no_version(
     connected_roboflow: TestClient, monkeypatch, unique_name: str
 ) -> None:
@@ -271,6 +296,40 @@ def test_roboflow_import_job_raw_pull_unannotated_only(
     assert images[0]["original_filename"] == "raw2.jpg"
     annotations = connected_roboflow.get(f"/api/v1/images/{images[0]['id']}/annotations").json()
     assert annotations == []
+
+
+def test_roboflow_import_job_raw_pull_images_only_skips_labels(
+    connected_roboflow: TestClient, monkeypatch, unique_name: str
+) -> None:
+    """`images_only: true` on a raw pull brings in every image (unlike
+    `unannotated_only`, nothing is filtered out) but must not create the
+    annotation that raw-img-1's fake `annotation.boxes` carries."""
+    import app.services.integrations.roboflow_import as roboflow_import_module
+
+    def _fake_get(url: str, timeout: int = 30) -> _FakeHTTPResponse:
+        return _FakeHTTPResponse(_jpeg_bytes())
+
+    monkeypatch.setattr(roboflow_import_module.requests, "get", _fake_get)
+    monkeypatch.setattr(roboflow_import_module.requests, "post", _fake_search_post)
+
+    project_id = connected_roboflow.post("/api/v1/projects", json={"name": unique_name}).json()["id"]
+
+    resp = connected_roboflow.post(
+        f"/api/v1/projects/{project_id}/import/roboflow",
+        json={"workspace": "my-workspace", "project": "ground", "images_only": True},
+    )
+    assert resp.status_code == 202, resp.text
+    job = resp.json()
+    assert job["images_only"] is True
+    assert job["status"] == "COMPLETED"
+    assert job["total_items"] == 2
+
+    dataset_id = job["result_dataset_id"]
+    images = connected_roboflow.get(f"/api/v1/datasets/{dataset_id}/images").json()["items"]
+    assert len(images) == 2
+    for image in images:
+        annotations = connected_roboflow.get(f"/api/v1/images/{image['id']}/annotations").json()
+        assert annotations == []
 
 
 def test_list_roboflow_batches(connected_roboflow: TestClient) -> None:
@@ -466,6 +525,33 @@ def test_rf_search_connection_error_is_retried(monkeypatch) -> None:
     out = mod._rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
     assert out == []
     assert calls["n"] == 3
+
+
+def test_rf_search_dns_failure_raises_local_network_hint(monkeypatch) -> None:
+    """A connection error that never recovers (observed live: DNS resolution
+    failure for api.roboflow.com) must NOT tell the user it's a "temporary
+    Roboflow-side issue" — that's actively misleading when the request never
+    reached Roboflow at all. It should point at this machine's network/DNS
+    instead."""
+    import app.services.integrations.roboflow_import as mod
+
+    def fake_post(url, json=None, timeout=30):
+        raise mod.requests.ConnectionError(
+            "HTTPSConnectionPool(host='api.roboflow.com', port=443): Max retries exceeded "
+            "(Caused by NameResolutionError: Failed to resolve 'api.roboflow.com' "
+            "([Errno 11001] getaddrinfo failed))"
+        )
+
+    monkeypatch.setattr(mod.requests, "post", fake_post)
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    rf_project = type("P", (), {"id": "ws/proj"})()
+    with pytest.raises(RuntimeError) as excinfo:
+        mod._rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
+
+    msg = str(excinfo.value)
+    assert "temporary Roboflow-side issue" not in msg
+    assert "network" in msg.lower() or "dns" in msg.lower()
 
 
 def test_roboflow_import_job_cancel_stops_early(
