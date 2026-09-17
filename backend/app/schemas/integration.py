@@ -38,7 +38,16 @@ class RoboflowConnectRequest(BaseModel):
 
 class RoboflowExportRequest(BaseModel):
     workspace: str = Field(min_length=1)
-    project: str = Field(min_length=1)
+    # Push into this existing project — ignored when `new_project_name` is
+    # set. One of the two is required (enforced in the endpoint, since
+    # Pydantic can't express "at least one of" as cleanly as a plain check).
+    project: str | None = None
+    # Optional: create a brand-new Roboflow project under `workspace` with
+    # this name instead of reusing whatever project the dropdown had
+    # selected — that project may already carry annotations from a prior
+    # push/import, and mixing new auto-labels into it is exactly the
+    # confusion this field exists to avoid.
+    new_project_name: str | None = None
 
 
 class RoboflowExportResult(BaseModel):

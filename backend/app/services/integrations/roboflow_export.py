@@ -84,6 +84,42 @@ class RoboflowExportError(RuntimeError):
     `run_roboflow_export`."""
 
 
+class RoboflowProjectCreationError(RuntimeError):
+    """Raised when Roboflow rejects creating a new project (name already
+    taken in the workspace, invalid license tier, bad workspace, ...).
+    Caught by the export endpoint and turned into a 400 before any
+    `RoboflowJob` row (and its non-nullable `project_slug`) is created."""
+
+
+def create_project(db: Session, *, workspace: str, name: str) -> str:
+    """Creates a fresh object-detection project named `name` under
+    `workspace` and returns the slug Roboflow assigned it, for use as the
+    export job's `project_slug`. Roboflow derives the slug from `name`
+    server-side (lowercasing, deduplicating collisions, ...), so the caller
+    can't compute it locally — the returned `project.id` (`workspace/slug`)
+    is the only source of truth for it.
+
+    Every export here writes YOLO bbox labels (`export_yolo.py` is bbox-only
+    — see its docstring), so `project_type="object-detection"` always
+    matches what's actually being pushed. `annotation` just needs to be a
+    stable, Roboflow-safe label for the project's default annotation group;
+    reusing `_sanitize_batch_name` keeps it consistent with how batch names
+    are already derived from free-text names elsewhere in this module."""
+    rf, _config = get_client(db)
+    try:
+        project = rf.workspace(workspace).create_project(
+            project_name=name,
+            project_type="object-detection",
+            project_license="MIT",
+            annotation=_sanitize_batch_name(name),
+        )
+    except Exception as exc:  # noqa: BLE001 - message is user-facing, not a control-flow signal
+        raise RoboflowProjectCreationError(
+            f"Could not create Roboflow project {name!r} in workspace {workspace!r}: {exc}"
+        ) from exc
+    return project.id.rsplit("/", 1)[1]
+
+
 def _describe_upload_error(exc: Exception) -> str:
     """`ImageUploadError` (and its `RoboflowError` base) carry an HTTP
     `status_code` and `message`; anything else just stringifies."""
@@ -243,6 +279,13 @@ def push_version_to_roboflow(
                     annotation_labelmap=str(data_yaml_path),
                     split=roboflow_split,
                     batch_name=batch_name,
+                    # Ground truth (the SDK's default) is auto-confirmed by
+                    # Roboflow and skips straight to the "Dataset" column of
+                    # the Annotate board. These labels come from our
+                    # pipeline, not a human, so push them as a prediction
+                    # instead: Roboflow then queues the image for review in
+                    # "Annotating" rather than treating it as already done.
+                    is_prediction=True,
                 )
                 uploaded += 1
             except Exception as exc:  # a single bad image shouldn't abort the whole push

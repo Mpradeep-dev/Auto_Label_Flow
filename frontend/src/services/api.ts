@@ -372,7 +372,13 @@ export const api = {
   connectRoboflow: (data: { api_key: string; default_workspace?: string }) =>
     request<IntegrationStatus>("/integrations/roboflow", { method: "POST", body: JSON.stringify(data) }),
   disconnectRoboflow: () => request<void>("/integrations/roboflow", { method: "DELETE" }),
-  exportVersionToRoboflow: (versionId: string, data: { workspace: string; project: string }) =>
+  exportVersionToRoboflow: (
+    versionId: string,
+    // `new_project_name` set creates a fresh Roboflow project under
+    // `workspace` and pushes into that instead — `project` is then ignored
+    // server-side. Exactly one of the two must be given.
+    data: { workspace: string; project?: string; new_project_name?: string },
+  ) =>
     request<RoboflowJob>(`/versions/${versionId}/export/roboflow`, {
       method: "POST",
       body: JSON.stringify(data),

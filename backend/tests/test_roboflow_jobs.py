@@ -81,7 +81,7 @@ class _FakeRoboflowProject:
         # `_rf_search_page` builds the /search URL from `rf_project.id`
         # (canonical "workspace/project"), mirroring the real SDK.
         self.id = f"my-workspace/{slug}"
-        self.uploads: list[tuple[str, str | None, str, str | None]] = []
+        self.uploads: list[tuple[str, str | None, str, str | None, bool]] = []
 
     def version(self, v: int) -> _FakeRoboflowVersion:
         return _FakeRoboflowVersion(v)
@@ -102,8 +102,9 @@ class _FakeRoboflowProject:
         annotation_labelmap: str,
         split: str,
         batch_name: str | None = None,
+        is_prediction: bool = False,
     ) -> None:
-        self.uploads.append((image_path, annotation_path, split, batch_name))
+        self.uploads.append((image_path, annotation_path, split, batch_name, is_prediction))
 
     # Raw (unversioned) pull path — no `.version()` here. The service no
     # longer calls `rf_project.search()`; it POSTs to /search directly, so
@@ -140,6 +141,16 @@ class _FakeHTTPResponse:
 class _FakeRoboflowWorkspace:
     def project(self, slug: str) -> _FakeRoboflowProject:
         return _FakeRoboflowProject(slug)
+
+    def create_project(self, *, project_name: str, project_type: str, project_license: str, annotation: str):
+        """Stands in for the SDK's `Workspace.create_project` — Roboflow
+        assigns the slug server-side from the name, so simulate that (rather
+        than echoing the input) to catch a caller that wrongly assumes it
+        can guess the slug itself."""
+        if project_name == "duplicate-name":
+            raise RuntimeError("A project with that name already exists in this workspace")
+        slug = re.sub(r"[^a-z0-9]+", "-", project_name.lower()).strip("-") or "project"
+        return _FakeRoboflowProject(f"rf-{slug}")
 
 
 class _FakeRoboflow:
@@ -741,6 +752,106 @@ def test_roboflow_export_names_batch_after_app_and_dataset_version(
     # `approved_version`'s dataset is named "d"; its first version is v1.
     assert all(c["batch_name"] == "autolabelflow-d-v1" for c in captured)
     assert all(re.fullmatch(r"[a-z0-9_-]{1,64}", c["batch_name"]) for c in captured)
+
+
+def test_roboflow_export_uploads_annotations_as_predictions_not_ground_truth(
+    connected_roboflow: TestClient, approved_version: tuple[str, str], monkeypatch
+) -> None:
+    """Regression: pushing to Roboflow uploaded annotations as ground truth,
+    which Roboflow auto-confirms — every pushed image landed straight in the
+    "Dataset" column of the Annotate board, fully "Annotated", with no
+    chance for a human to review labels that came from our pipeline, not a
+    person. Uploads must set `is_prediction=True` so Roboflow queues the
+    image for review under "Annotating" instead."""
+    _, version_id = approved_version
+
+    captured: list[dict] = []
+    original_upload = _FakeRoboflowProject.upload
+
+    def _spy_upload(self, **kwargs):
+        captured.append(kwargs)
+        return original_upload(self, **kwargs)
+
+    monkeypatch.setattr(_FakeRoboflowProject, "upload", _spy_upload)
+
+    resp = connected_roboflow.post(
+        f"/api/v1/versions/{version_id}/export/roboflow",
+        json={"workspace": "my-workspace", "project": "cones"},
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["status"] == "COMPLETED"
+
+    assert captured
+    assert all(c["is_prediction"] is True for c in captured)
+
+
+def test_roboflow_export_with_new_project_name_creates_project_and_uses_its_slug(
+    connected_roboflow: TestClient, approved_version: tuple[str, str], monkeypatch
+) -> None:
+    """Regression: exporting always pushed into whatever *existing* project
+    the dropdown had selected, so re-exporting landed in a project that
+    already had annotations from a prior push/import — confusing new
+    auto-labels with old ones. Passing `new_project_name` instead must
+    create a fresh Roboflow project and push into *that*, ignoring
+    `project` entirely (Roboflow assigns the slug server-side, so the job
+    must end up using whatever slug creation actually returned, not a
+    locally-guessed one)."""
+    _, version_id = approved_version
+
+    created: list[dict] = []
+    original_create = _FakeRoboflowWorkspace.create_project
+
+    def _spy_create(self, **kwargs):
+        created.append(kwargs)
+        return original_create(self, **kwargs)
+
+    monkeypatch.setattr(_FakeRoboflowWorkspace, "create_project", _spy_create)
+
+    resp = connected_roboflow.post(
+        f"/api/v1/versions/{version_id}/export/roboflow",
+        json={"workspace": "my-workspace", "project": "some-already-annotated-project", "new_project_name": "Brand New Set"},
+    )
+    assert resp.status_code == 202, resp.text
+    job = resp.json()
+    assert job["status"] == "COMPLETED", job.get("error")
+    assert job["uploaded_count"] == 1
+
+    assert created == [
+        {
+            "project_name": "Brand New Set",
+            "project_type": "object-detection",
+            "project_license": "MIT",
+            "annotation": "brand-new-set",
+        }
+    ]
+    # Server-assigned slug ("rf-brand-new-set" per the fake), not the
+    # existing project the dropdown had selected.
+    assert job["project_slug"] == "rf-brand-new-set"
+
+
+def test_roboflow_export_new_project_creation_failure_returns_400(
+    connected_roboflow: TestClient, approved_version: tuple[str, str]
+) -> None:
+    _, version_id = approved_version
+
+    resp = connected_roboflow.post(
+        f"/api/v1/versions/{version_id}/export/roboflow",
+        json={"workspace": "my-workspace", "new_project_name": "duplicate-name"},
+    )
+    assert resp.status_code == 400
+    assert "duplicate-name" in resp.json()["detail"] or "already exists" in resp.json()["detail"]
+
+
+def test_roboflow_export_requires_project_or_new_project_name(
+    connected_roboflow: TestClient, approved_version: tuple[str, str]
+) -> None:
+    _, version_id = approved_version
+
+    resp = connected_roboflow.post(
+        f"/api/v1/versions/{version_id}/export/roboflow",
+        json={"workspace": "my-workspace"},
+    )
+    assert resp.status_code == 400
 
 
 @pytest.mark.parametrize(
