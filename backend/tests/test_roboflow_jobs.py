@@ -142,16 +142,6 @@ class _FakeRoboflowWorkspace:
     def project(self, slug: str) -> _FakeRoboflowProject:
         return _FakeRoboflowProject(slug)
 
-    def create_project(self, *, project_name: str, project_type: str, project_license: str, annotation: str):
-        """Stands in for the SDK's `Workspace.create_project` — Roboflow
-        assigns the slug server-side from the name, so simulate that (rather
-        than echoing the input) to catch a caller that wrongly assumes it
-        can guess the slug itself."""
-        if project_name == "duplicate-name":
-            raise RuntimeError("A project with that name already exists in this workspace")
-        slug = re.sub(r"[^a-z0-9]+", "-", project_name.lower()).strip("-") or "project"
-        return _FakeRoboflowProject(f"rf-{slug}")
-
 
 class _FakeRoboflow:
     def __init__(self, api_key: str) -> None:
@@ -785,73 +775,37 @@ def test_roboflow_export_uploads_annotations_as_predictions_not_ground_truth(
     assert all(c["is_prediction"] is True for c in captured)
 
 
-def test_roboflow_export_with_new_project_name_creates_project_and_uses_its_slug(
+def test_roboflow_export_uses_custom_batch_name_when_given(
     connected_roboflow: TestClient, approved_version: tuple[str, str], monkeypatch
 ) -> None:
-    """Regression: exporting always pushed into whatever *existing* project
-    the dropdown had selected, so re-exporting landed in a project that
-    already had annotations from a prior push/import — confusing new
-    auto-labels with old ones. Passing `new_project_name` instead must
-    create a fresh Roboflow project and push into *that*, ignoring
-    `project` entirely (Roboflow assigns the slug server-side, so the job
-    must end up using whatever slug creation actually returned, not a
-    locally-guessed one)."""
+    """Regression: exporting always pushed into whatever existing project the
+    dropdown had selected under an auto-generated batch label, so re-runs
+    into a project that already carried annotations from a prior push/import
+    were indistinguishable from those older uploads. A user-supplied
+    `batch_name` must be used (Roboflow-sanitized) instead of the
+    auto-generated `AutoLabelFlow-{dataset}-v{n}` one, so a push can be
+    labeled/grouped however the user wants without needing a whole separate
+    Roboflow project."""
     _, version_id = approved_version
 
-    created: list[dict] = []
-    original_create = _FakeRoboflowWorkspace.create_project
+    captured: list[dict] = []
+    original_upload = _FakeRoboflowProject.upload
 
-    def _spy_create(self, **kwargs):
-        created.append(kwargs)
-        return original_create(self, **kwargs)
+    def _spy_upload(self, **kwargs):
+        captured.append(kwargs)
+        return original_upload(self, **kwargs)
 
-    monkeypatch.setattr(_FakeRoboflowWorkspace, "create_project", _spy_create)
+    monkeypatch.setattr(_FakeRoboflowProject, "upload", _spy_upload)
 
     resp = connected_roboflow.post(
         f"/api/v1/versions/{version_id}/export/roboflow",
-        json={"workspace": "my-workspace", "project": "some-already-annotated-project", "new_project_name": "Brand New Set"},
+        json={"workspace": "my-workspace", "project": "cones", "batch_name": "My Cool Batch!"},
     )
     assert resp.status_code == 202, resp.text
-    job = resp.json()
-    assert job["status"] == "COMPLETED", job.get("error")
-    assert job["uploaded_count"] == 1
+    assert resp.json()["status"] == "COMPLETED"
 
-    assert created == [
-        {
-            "project_name": "Brand New Set",
-            "project_type": "object-detection",
-            "project_license": "MIT",
-            "annotation": "brand-new-set",
-        }
-    ]
-    # Server-assigned slug ("rf-brand-new-set" per the fake), not the
-    # existing project the dropdown had selected.
-    assert job["project_slug"] == "rf-brand-new-set"
-
-
-def test_roboflow_export_new_project_creation_failure_returns_400(
-    connected_roboflow: TestClient, approved_version: tuple[str, str]
-) -> None:
-    _, version_id = approved_version
-
-    resp = connected_roboflow.post(
-        f"/api/v1/versions/{version_id}/export/roboflow",
-        json={"workspace": "my-workspace", "new_project_name": "duplicate-name"},
-    )
-    assert resp.status_code == 400
-    assert "duplicate-name" in resp.json()["detail"] or "already exists" in resp.json()["detail"]
-
-
-def test_roboflow_export_requires_project_or_new_project_name(
-    connected_roboflow: TestClient, approved_version: tuple[str, str]
-) -> None:
-    _, version_id = approved_version
-
-    resp = connected_roboflow.post(
-        f"/api/v1/versions/{version_id}/export/roboflow",
-        json={"workspace": "my-workspace"},
-    )
-    assert resp.status_code == 400
+    assert captured
+    assert all(c["batch_name"] == "my-cool-batch" for c in captured)
 
 
 @pytest.mark.parametrize(

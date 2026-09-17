@@ -26,11 +26,12 @@ function RoboflowExportControls({ versionId }: { versionId: string }) {
   const [open, setOpen] = useState(false);
   const [workspace, setWorkspace] = useState("");
   const [project, setProject] = useState("");
-  // Optional: create a brand-new Roboflow project instead of pushing into
-  // whichever existing one is selected above — that project may already
-  // carry annotations from a prior push/import, and mixing new auto-labels
-  // into it is exactly the confusion this field exists to avoid.
-  const [newProjectName, setNewProjectName] = useState("");
+  // Optional: label this upload batch instead of the auto-generated
+  // "AutoLabelFlow-{dataset}-v{n}" one — still pushes into the project
+  // selected above either way. Lets a push into a project that already has
+  // annotations from a prior push/import stay distinguishable in
+  // Roboflow's Annotate tab.
+  const [batchName, setBatchName] = useState("");
   const [job, setJob] = useState<RoboflowJob | null>(null);
 
   // Reattaches to a job this row kicked off before a navigation away or a
@@ -50,14 +51,10 @@ function RoboflowExportControls({ versionId }: { versionId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latestJobQuery.data]);
 
-  const trimmedNewProjectName = newProjectName.trim();
+  const trimmedBatchName = batchName.trim();
   const exportMutation = useMutation({
     mutationFn: () =>
-      api.exportVersionToRoboflow(versionId, {
-        workspace,
-        project: project || undefined,
-        new_project_name: trimmedNewProjectName || undefined,
-      }),
+      api.exportVersionToRoboflow(versionId, { workspace, project, batch_name: trimmedBatchName || undefined }),
     onSuccess: (created) => setJob(created),
   });
 
@@ -85,23 +82,16 @@ function RoboflowExportControls({ versionId }: { versionId: string }) {
               setProject(proj);
             }}
           />
-          <div>
-            <input
-              type="text"
-              value={newProjectName}
-              onChange={(e) => setNewProjectName(e.target.value)}
-              placeholder="Or create a new project named…"
-              className="w-full border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
-            />
-            {trimmedNewProjectName && (
-              <p className="mt-1 text-[10px] text-ink/60">
-                Pushes into a brand-new project — the selected project above is only used for its workspace.
-              </p>
-            )}
-          </div>
+          <input
+            type="text"
+            value={batchName}
+            onChange={(e) => setBatchName(e.target.value)}
+            placeholder="Custom batch name (optional)"
+            className="w-full border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
+          />
           <button
             onClick={() => exportMutation.mutate()}
-            disabled={!workspace || (!project && !trimmedNewProjectName) || exportMutation.isPending}
+            disabled={!workspace || !project || exportMutation.isPending}
             className="w-full border-2 border-ink bg-ink py-2 text-xs font-bold uppercase tracking-widest text-paper hover:bg-orange hover:text-ink disabled:opacity-40"
           >
             {exportMutation.isPending ? "Starting…" : "Push"}

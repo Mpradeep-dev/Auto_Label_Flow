@@ -38,16 +38,15 @@ class RoboflowConnectRequest(BaseModel):
 
 class RoboflowExportRequest(BaseModel):
     workspace: str = Field(min_length=1)
-    # Push into this existing project — ignored when `new_project_name` is
-    # set. One of the two is required (enforced in the endpoint, since
-    # Pydantic can't express "at least one of" as cleanly as a plain check).
-    project: str | None = None
-    # Optional: create a brand-new Roboflow project under `workspace` with
-    # this name instead of reusing whatever project the dropdown had
-    # selected — that project may already carry annotations from a prior
-    # push/import, and mixing new auto-labels into it is exactly the
-    # confusion this field exists to avoid.
-    new_project_name: str | None = None
+    project: str = Field(min_length=1)
+    # Optional: label the upload batch with this instead of the
+    # auto-generated `AutoLabelFlow-{dataset}-v{n}` name (still sanitized to
+    # Roboflow's `^[a-z0-9_-]{1,64}$` rule at the upload boundary — see
+    # `roboflow_export._sanitize_batch_name`). Lets a push into a project
+    # that already has annotations from a prior push/import stay
+    # distinguishable in Roboflow's Annotate tab without needing a whole
+    # separate project.
+    batch_name: str | None = None
 
 
 class RoboflowExportResult(BaseModel):
@@ -138,6 +137,7 @@ class RoboflowJobRead(BaseModel):
     version: int | None = None
     unannotated_only: bool
     batch_id: str | None = None
+    batch_name: str | None = None
     images_only: bool
     total_items: int
     processed_items: int

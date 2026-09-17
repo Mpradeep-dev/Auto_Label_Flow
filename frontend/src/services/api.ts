@@ -374,10 +374,10 @@ export const api = {
   disconnectRoboflow: () => request<void>("/integrations/roboflow", { method: "DELETE" }),
   exportVersionToRoboflow: (
     versionId: string,
-    // `new_project_name` set creates a fresh Roboflow project under
-    // `workspace` and pushes into that instead — `project` is then ignored
-    // server-side. Exactly one of the two must be given.
-    data: { workspace: string; project?: string; new_project_name?: string },
+    // `batch_name` labels the upload batch in Roboflow's Annotate tab
+    // instead of the auto-generated "AutoLabelFlow-{dataset}-v{n}" one —
+    // still pushes into `project` either way.
+    data: { workspace: string; project: string; batch_name?: string },
   ) =>
     request<RoboflowJob>(`/versions/${versionId}/export/roboflow`, {
       method: "POST",

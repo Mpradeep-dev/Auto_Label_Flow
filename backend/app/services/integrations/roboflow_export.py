@@ -84,42 +84,6 @@ class RoboflowExportError(RuntimeError):
     `run_roboflow_export`."""
 
 
-class RoboflowProjectCreationError(RuntimeError):
-    """Raised when Roboflow rejects creating a new project (name already
-    taken in the workspace, invalid license tier, bad workspace, ...).
-    Caught by the export endpoint and turned into a 400 before any
-    `RoboflowJob` row (and its non-nullable `project_slug`) is created."""
-
-
-def create_project(db: Session, *, workspace: str, name: str) -> str:
-    """Creates a fresh object-detection project named `name` under
-    `workspace` and returns the slug Roboflow assigned it, for use as the
-    export job's `project_slug`. Roboflow derives the slug from `name`
-    server-side (lowercasing, deduplicating collisions, ...), so the caller
-    can't compute it locally — the returned `project.id` (`workspace/slug`)
-    is the only source of truth for it.
-
-    Every export here writes YOLO bbox labels (`export_yolo.py` is bbox-only
-    — see its docstring), so `project_type="object-detection"` always
-    matches what's actually being pushed. `annotation` just needs to be a
-    stable, Roboflow-safe label for the project's default annotation group;
-    reusing `_sanitize_batch_name` keeps it consistent with how batch names
-    are already derived from free-text names elsewhere in this module."""
-    rf, _config = get_client(db)
-    try:
-        project = rf.workspace(workspace).create_project(
-            project_name=name,
-            project_type="object-detection",
-            project_license="MIT",
-            annotation=_sanitize_batch_name(name),
-        )
-    except Exception as exc:  # noqa: BLE001 - message is user-facing, not a control-flow signal
-        raise RoboflowProjectCreationError(
-            f"Could not create Roboflow project {name!r} in workspace {workspace!r}: {exc}"
-        ) from exc
-    return project.id.rsplit("/", 1)[1]
-
-
 def _describe_upload_error(exc: Exception) -> str:
     """`ImageUploadError` (and its `RoboflowError` base) carry an HTTP
     `status_code` and `message`; anything else just stringifies."""
@@ -187,6 +151,7 @@ def push_version_to_roboflow(
     version_id: uuid.UUID,
     workspace: str,
     project_slug: str,
+    custom_batch_name: str | None = None,
     progress_cb: Callable[[int, int, int], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[int, int, list[str]]:
@@ -211,15 +176,19 @@ def push_version_to_roboflow(
     # `DEFAULT_BATCH_NAME` ("Pip Package Upload") — meaningless in
     # Roboflow's UI once more than one project or app pushes into the same
     # Roboflow project. Name the batch after this app and the dataset
-    # version it came from instead, so it's identifiable at a glance.
+    # version it came from by default, so it's identifiable at a glance —
+    # or, if the caller gave one, a user-chosen name instead: pushing into a
+    # project that already carries annotations from a prior push/import
+    # stays distinguishable from that older upload without needing a whole
+    # separate Roboflow project.
     version = db.get(DatasetVersion, version_id)
     dataset = db.get(Dataset, version.dataset_id) if version is not None else None
     # `{dataset.name}-v{version_number}` matches the naming already used for
     # this version's own export filenames (export_yolo.py/export_coco.py/
     # export_cvat.py) — same identifier, just also visible in Roboflow now.
-    # Slugified before use: Roboflow silently drops uploads whose `batch`
-    # isn't `^[a-z0-9_-]{1,64}$` (see `_sanitize_batch_name`).
-    raw_batch_name = (
+    # Slugified before use either way: Roboflow silently drops uploads whose
+    # `batch` isn't `^[a-z0-9_-]{1,64}$` (see `_sanitize_batch_name`).
+    raw_batch_name = (custom_batch_name or "").strip() or (
         f"AutoLabelFlow-{dataset.name}-v{version.version_number}"
         if version is not None and dataset is not None
         else "AutoLabelFlow"

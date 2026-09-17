@@ -139,6 +139,7 @@ def run_roboflow_export(self, job_id: str) -> None:
             version_id=job.dataset_version_id,
             workspace=job.workspace,
             project_slug=job.project_slug,
+            custom_batch_name=job.batch_name,
             progress_cb=_make_progress_cb(job, db, writer),
             should_cancel=lambda: is_cancel_requested(job_id),
         )

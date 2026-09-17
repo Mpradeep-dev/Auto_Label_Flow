@@ -17,7 +17,6 @@ from app.services.dataset.export_cvat import ExportError as CvatExportError, exp
 from app.services.dataset.export_yolo import ExportError, export_yolo
 from app.services.dataset.versioning import NoApprovedImagesError, VersionNumberConflictError, create_version
 from app.services.integrations.roboflow_connect import RoboflowNotConnectedError, get_client
-from app.services.integrations.roboflow_export import RoboflowProjectCreationError, create_project
 from app.services.storage.factory import get_storage
 from app.workers.tasks.roboflow import run_roboflow_export
 
@@ -172,25 +171,12 @@ def export_dataset_version_to_roboflow(
     except RoboflowNotConnectedError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
 
-    new_project_name = (payload.new_project_name or "").strip()
-    if new_project_name:
-        # A name here means the dropdown's `project` (likely already carrying
-        # annotations from a prior push/import) must be ignored entirely —
-        # this export lands in a fresh project instead.
-        try:
-            project_slug = create_project(db, workspace=payload.workspace, name=new_project_name)
-        except RoboflowProjectCreationError as exc:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
-    elif payload.project:
-        project_slug = payload.project
-    else:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Provide either project or new_project_name")
-
     job = RoboflowJob(
         project_id=dataset.project_id,
         kind=RoboflowJobKind.EXPORT,
         workspace=payload.workspace,
-        project_slug=project_slug,
+        project_slug=payload.project,
+        batch_name=payload.batch_name,
         dataset_version_id=version_id,
     )
     db.add(job)
