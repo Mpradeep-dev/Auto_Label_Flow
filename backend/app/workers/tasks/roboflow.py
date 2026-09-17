@@ -76,6 +76,7 @@ def run_roboflow_import(self, job_id: str) -> None:
                 dataset_name=job.dataset_name,
                 unannotated_only=job.unannotated_only,
                 batch_id=job.batch_id,
+                images_only=job.images_only,
                 progress_cb=_make_progress_cb(job, db, writer),
                 should_cancel=should_cancel,
             )
@@ -87,6 +88,7 @@ def run_roboflow_import(self, job_id: str) -> None:
                 project_slug=job.project_slug,
                 version=job.version,
                 dataset_name=job.dataset_name,
+                images_only=job.images_only,
                 progress_cb=_make_progress_cb(job, db, writer),
                 should_cancel=should_cancel,
             )
@@ -137,6 +139,7 @@ def run_roboflow_export(self, job_id: str) -> None:
             version_id=job.dataset_version_id,
             workspace=job.workspace,
             project_slug=job.project_slug,
+            custom_batch_name=job.batch_name,
             progress_cb=_make_progress_cb(job, db, writer),
             should_cancel=lambda: is_cancel_requested(job_id),
         )

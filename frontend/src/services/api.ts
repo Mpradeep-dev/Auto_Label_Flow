@@ -372,7 +372,13 @@ export const api = {
   connectRoboflow: (data: { api_key: string; default_workspace?: string }) =>
     request<IntegrationStatus>("/integrations/roboflow", { method: "POST", body: JSON.stringify(data) }),
   disconnectRoboflow: () => request<void>("/integrations/roboflow", { method: "DELETE" }),
-  exportVersionToRoboflow: (versionId: string, data: { workspace: string; project: string }) =>
+  exportVersionToRoboflow: (
+    versionId: string,
+    // `batch_name` labels the upload batch in Roboflow's Annotate tab
+    // instead of the auto-generated "AutoLabelFlow-{dataset}-v{n}" one —
+    // still pushes into `project` either way.
+    data: { workspace: string; project: string; batch_name?: string },
+  ) =>
     request<RoboflowJob>(`/versions/${versionId}/export/roboflow`, {
       method: "POST",
       body: JSON.stringify(data),
@@ -382,6 +388,8 @@ export const api = {
     // `version: undefined` pulls the project's raw uploaded images instead
     // of a generated Version — see RoboflowImportSection in DatasetsPage.
     // `unannotated_only`/`batch_id` only matter for that raw path.
+    // `images_only` applies to both — pulls images without their existing
+    // Roboflow labels.
     data: {
       workspace: string;
       project: string;
@@ -389,6 +397,7 @@ export const api = {
       dataset_name?: string;
       unannotated_only?: boolean;
       batch_id?: string;
+      images_only?: boolean;
     },
   ) => request<RoboflowJob>(`/projects/${projectId}/import/roboflow`, { method: "POST", body: JSON.stringify(data) }),
   listRoboflowProjects: (workspace?: string) =>

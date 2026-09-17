@@ -39,6 +39,14 @@ class RoboflowConnectRequest(BaseModel):
 class RoboflowExportRequest(BaseModel):
     workspace: str = Field(min_length=1)
     project: str = Field(min_length=1)
+    # Optional: label the upload batch with this instead of the
+    # auto-generated `AutoLabelFlow-{dataset}-v{n}` name (still sanitized to
+    # Roboflow's `^[a-z0-9_-]{1,64}$` rule at the upload boundary — see
+    # `roboflow_export._sanitize_batch_name`). Lets a push into a project
+    # that already has annotations from a prior push/import stay
+    # distinguishable in Roboflow's Annotate tab without needing a whole
+    # separate project.
+    batch_name: str | None = None
 
 
 class RoboflowExportResult(BaseModel):
@@ -60,6 +68,10 @@ class RoboflowImportRequest(BaseModel):
     # Raw pull only (ignored when `version` is set): narrow to one upload
     # batch (from `RoboflowBatchSummary.id`) instead of every raw image.
     batch_id: str | None = None
+    # Both paths: pull the images but skip importing whatever labels
+    # Roboflow already has on them, so auto-annotate starts from a clean
+    # slate instead of fighting existing boxes (issue #22).
+    images_only: bool = False
 
 
 class RoboflowProjectSummary(BaseModel):
@@ -125,6 +137,8 @@ class RoboflowJobRead(BaseModel):
     version: int | None = None
     unannotated_only: bool
     batch_id: str | None = None
+    batch_name: str | None = None
+    images_only: bool
     total_items: int
     processed_items: int
     uploaded_count: int

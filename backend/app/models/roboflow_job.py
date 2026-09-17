@@ -57,6 +57,11 @@ class RoboflowJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # Only meaningful for a raw pull (version is None) — narrows it to one
     # upload batch (Roboflow's own batch id), instead of every raw image.
     batch_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Applies to both versioned and raw pulls — the image is still pulled
+    # and stored, but whatever labels Roboflow already has on it are not
+    # imported, so it lands with zero annotations for auto-annotate to
+    # start fresh on (issue #22: existing Roboflow labels get in the way).
+    images_only: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     result_dataset_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID, ForeignKey("datasets.id", ondelete="SET NULL"), nullable=True
     )
@@ -65,6 +70,10 @@ class RoboflowJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     dataset_version_id: Mapped[uuid.UUID | None] = mapped_column(
         GUID, ForeignKey("dataset_versions.id", ondelete="SET NULL"), nullable=True
     )
+    # User-chosen upload batch label — overrides the auto-generated
+    # `AutoLabelFlow-{dataset}-v{n}` one when set (see roboflow_export.py's
+    # push_version_to_roboflow). None means "use the default".
+    batch_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
     uploaded_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failures: Mapped[list] = mapped_column(JSON, nullable=False, default=list)

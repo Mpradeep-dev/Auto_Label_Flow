@@ -151,6 +151,7 @@ def push_version_to_roboflow(
     version_id: uuid.UUID,
     workspace: str,
     project_slug: str,
+    custom_batch_name: str | None = None,
     progress_cb: Callable[[int, int, int], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
 ) -> tuple[int, int, list[str]]:
@@ -175,15 +176,19 @@ def push_version_to_roboflow(
     # `DEFAULT_BATCH_NAME` ("Pip Package Upload") — meaningless in
     # Roboflow's UI once more than one project or app pushes into the same
     # Roboflow project. Name the batch after this app and the dataset
-    # version it came from instead, so it's identifiable at a glance.
+    # version it came from by default, so it's identifiable at a glance —
+    # or, if the caller gave one, a user-chosen name instead: pushing into a
+    # project that already carries annotations from a prior push/import
+    # stays distinguishable from that older upload without needing a whole
+    # separate Roboflow project.
     version = db.get(DatasetVersion, version_id)
     dataset = db.get(Dataset, version.dataset_id) if version is not None else None
     # `{dataset.name}-v{version_number}` matches the naming already used for
     # this version's own export filenames (export_yolo.py/export_coco.py/
     # export_cvat.py) — same identifier, just also visible in Roboflow now.
-    # Slugified before use: Roboflow silently drops uploads whose `batch`
-    # isn't `^[a-z0-9_-]{1,64}$` (see `_sanitize_batch_name`).
-    raw_batch_name = (
+    # Slugified before use either way: Roboflow silently drops uploads whose
+    # `batch` isn't `^[a-z0-9_-]{1,64}$` (see `_sanitize_batch_name`).
+    raw_batch_name = (custom_batch_name or "").strip() or (
         f"AutoLabelFlow-{dataset.name}-v{version.version_number}"
         if version is not None and dataset is not None
         else "AutoLabelFlow"
@@ -243,6 +248,13 @@ def push_version_to_roboflow(
                     annotation_labelmap=str(data_yaml_path),
                     split=roboflow_split,
                     batch_name=batch_name,
+                    # Ground truth (the SDK's default) is auto-confirmed by
+                    # Roboflow and skips straight to the "Dataset" column of
+                    # the Annotate board. These labels come from our
+                    # pipeline, not a human, so push them as a prediction
+                    # instead: Roboflow then queues the image for review in
+                    # "Annotating" rather than treating it as already done.
+                    is_prediction=True,
                 )
                 uploaded += 1
             except Exception as exc:  # a single bad image shouldn't abort the whole push

@@ -26,6 +26,12 @@ function RoboflowExportControls({ versionId }: { versionId: string }) {
   const [open, setOpen] = useState(false);
   const [workspace, setWorkspace] = useState("");
   const [project, setProject] = useState("");
+  // Optional: label this upload batch instead of the auto-generated
+  // "AutoLabelFlow-{dataset}-v{n}" one — still pushes into the project
+  // selected above either way. Lets a push into a project that already has
+  // annotations from a prior push/import stay distinguishable in
+  // Roboflow's Annotate tab.
+  const [batchName, setBatchName] = useState("");
   const [job, setJob] = useState<RoboflowJob | null>(null);
 
   // Reattaches to a job this row kicked off before a navigation away or a
@@ -45,8 +51,10 @@ function RoboflowExportControls({ versionId }: { versionId: string }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [latestJobQuery.data]);
 
+  const trimmedBatchName = batchName.trim();
   const exportMutation = useMutation({
-    mutationFn: () => api.exportVersionToRoboflow(versionId, { workspace, project }),
+    mutationFn: () =>
+      api.exportVersionToRoboflow(versionId, { workspace, project, batch_name: trimmedBatchName || undefined }),
     onSuccess: (created) => setJob(created),
   });
 
@@ -73,6 +81,13 @@ function RoboflowExportControls({ versionId }: { versionId: string }) {
               setWorkspace(ws);
               setProject(proj);
             }}
+          />
+          <input
+            type="text"
+            value={batchName}
+            onChange={(e) => setBatchName(e.target.value)}
+            placeholder="Custom batch name (optional)"
+            className="w-full border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
           />
           <button
             onClick={() => exportMutation.mutate()}
