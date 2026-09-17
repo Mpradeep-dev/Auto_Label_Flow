@@ -4,6 +4,14 @@ All notable changes to AutoLabelFlow are recorded here. This file is
 maintained automatically by [release-please](https://github.com/googleapis/release-please)
 from [Conventional Commits](https://www.conventionalcommits.org/) on `main`.
 
+## [0.4.5](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.4.4...v0.4.5) (2026-09-17)
+
+
+### Bug Fixes
+
+* **desktop:** backfill roboflow_jobs.images_only/batch_name on existing SQLite DBs ([da71fb0](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/da71fb01eb2f71908903de728b817043db8d26ea))
+* **desktop:** backfill roboflow_jobs.images_only/batch_name on existing SQLite DBs ([4ecb505](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/4ecb5051a03d25007b0147791d98855291b3244d))
+
 ## [0.4.4](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.4.3...v0.4.4) (2026-09-17)
 
 
