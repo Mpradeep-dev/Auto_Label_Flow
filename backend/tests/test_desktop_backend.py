@@ -102,6 +102,37 @@ def test_sqlite_schema_upgrade_adds_roboflow_batch_id(tmp_path) -> None:
     eng.dispose()
 
 
+def test_sqlite_schema_upgrade_adds_roboflow_images_only_and_batch_name(tmp_path) -> None:
+    """Regression: `roboflow_jobs.images_only` shipped on the Postgres/Alembic
+    side (a3e7c1f9d245) without a matching desktop upgrade step, so an
+    existing desktop DB stamped at version 3 kept querying a table missing
+    that column — `sqlite3.OperationalError: no such column`, surfaced as a
+    500 on every Roboflow import/export/list-jobs call. `batch_name` is the
+    same shape of change added alongside this fix, so both are covered
+    together — see `RoboflowJob.images_only` / `RoboflowJob.batch_name`."""
+    from sqlalchemy import create_engine, inspect as _inspect
+
+    from app.db.base import Base
+    from app.db.init_db import SCHEMA_VERSION, init_sqlite_schema
+
+    eng = create_engine(f"sqlite+pysqlite:///{(tmp_path / 'old.db').as_posix()}", future=True)
+    Base.metadata.create_all(eng)
+    with eng.begin() as conn:
+        conn.exec_driver_sql("ALTER TABLE roboflow_jobs DROP COLUMN images_only")
+        conn.exec_driver_sql("ALTER TABLE roboflow_jobs DROP COLUMN batch_name")
+        conn.exec_driver_sql("PRAGMA user_version = 3")
+
+    init_sqlite_schema(eng)
+
+    insp = _inspect(eng)
+    columns = {c["name"] for c in insp.get_columns("roboflow_jobs")}
+    assert "images_only" in columns
+    assert "batch_name" in columns
+    with eng.begin() as conn:
+        assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == SCHEMA_VERSION
+    eng.dispose()
+
+
 def test_reconcile_stale_jobs_runs_on_sqlite() -> None:
     """Regression: `updated_at < datetime.now(timezone.utc)` raised
     `TypeError: can't compare offset-naive and offset-aware datetimes` on

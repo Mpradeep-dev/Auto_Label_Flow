@@ -29,7 +29,11 @@ logger = logging.getLogger(__name__)
 # corresponding upgrade step in `_upgrade()` below.
 #   2: images.is_external + blob_import_jobs (Azure Blob import by reference)
 #   3: roboflow_jobs.batch_id (import raw pull, narrow to one upload batch)
-SCHEMA_VERSION = 3
+#   4: roboflow_jobs.images_only (import, skip Roboflow's existing labels —
+#      shipped on the Postgres/Alembic side via a3e7c1f9d245 without a
+#      matching step here, so an existing desktop DB never got the column)
+#   5: roboflow_jobs.batch_name (export: user-chosen upload batch label)
+SCHEMA_VERSION = 5
 
 
 def init_sqlite_schema(engine: Engine) -> None:
@@ -70,6 +74,12 @@ def _upgrade(conn, from_version: int) -> None:  # noqa: ANN001
 
     if from_version < 3:
         _add_column_if_missing(conn, "roboflow_jobs", "batch_id", "VARCHAR(200)")
+
+    if from_version < 4:
+        _add_column_if_missing(conn, "roboflow_jobs", "images_only", "BOOLEAN NOT NULL DEFAULT 0")
+
+    if from_version < 5:
+        _add_column_if_missing(conn, "roboflow_jobs", "batch_name", "VARCHAR(200)")
 
 
 def _add_column_if_missing(conn, table: str, column: str, ddl_type: str) -> None:  # noqa: ANN001
