@@ -93,3 +93,27 @@ def test_reconcile_fails_a_stale_extracting_video(real_client: TestClient, real_
     real_db_session.refresh(video)
     assert video.status == VideoStatus.FAILED
     assert video.error
+
+
+def test_local_scheduler_runs_reconcile_directly_not_via_delay(monkeypatch) -> None:
+    """Regression: `reconcile_stale_jobs` — the safety net for a task stuck
+    in the `default` thread pool (e.g. a network call with no socket
+    timeout, which no Python API can force-kill) — must run independently
+    of that same pool. Scheduling it with `.delay()` would queue it behind
+    the very tasks it exists to detect and fail, so if all `default`
+    workers are ever stuck that way, the sweep meant to rescue the app
+    would itself never get a turn."""
+    from app.core.config import settings
+    from app.workers import scheduler as scheduler_module
+    from app.workers.tasks.reconcile import reconcile_stale_jobs
+
+    monkeypatch.setattr(settings, "ENV", "not-test")
+    monkeypatch.setattr(settings, "ALF_TASK_QUEUE", "local")
+    scheduler_module._scheduler = None
+
+    try:
+        scheduler_module.start_scheduler()
+        jobs = {job.id: job for job in scheduler_module._scheduler.get_jobs()}
+        assert jobs["reconcile-stale-jobs"].func is reconcile_stale_jobs
+    finally:
+        scheduler_module.shutdown_scheduler()

@@ -1314,6 +1314,31 @@ def test_upload_one_image_does_not_retry_4xx(monkeypatch) -> None:
     assert calls["n"] == 1
 
 
+def test_upload_one_image_retries_bare_connection_error(monkeypatch) -> None:
+    """Regression: a plain `requests.ConnectionError`/timeout during
+    `project.upload()` has no `status_code` at all, so
+    `getattr(exc, "status_code", None)` is `None` — which isn't in
+    `_UPLOAD_RETRY_STATUSES`, so this used to be treated as non-transient
+    and fail the image on the first attempt instead of retrying."""
+    from app.services.integrations import roboflow_export as mod
+
+    slept: list[float] = []
+    monkeypatch.setattr(mod.time, "sleep", lambda s: slept.append(s))
+
+    calls = {"n": 0}
+
+    class _Proj:
+        def upload(self, **kwargs):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise mod.requests.ConnectionError("connection reset")
+
+    mod._upload_one_image(_Proj(), image_path="a.jpg")
+
+    assert calls["n"] == 3
+    assert slept == [1.0, 2.0]
+
+
 def test_fail_fast_message_points_at_quota_for_all_5xx() -> None:
     from app.services.integrations.roboflow_export import _fail_fast_message
 

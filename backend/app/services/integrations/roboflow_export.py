@@ -21,6 +21,7 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
+import requests
 from sqlalchemy.orm import Session
 
 from app.models.dataset import Dataset
@@ -175,20 +176,27 @@ def _assign_annotating_review_job(project, *, batch_name: str, labeler_email: st
 
 def _upload_one_image(project, **upload_kwargs) -> None:
     """`project.upload(**upload_kwargs)` with a bounded retry on a transient
-    5xx/429. Re-raises the last error once attempts are exhausted, and
-    immediately for any non-transient status."""
+    5xx/429 (classified via `status_code`) or a bare connection/timeout
+    error (no `status_code` at all — `getattr(exc, "status_code", None)`
+    used to fall through to `None`, which isn't in `_UPLOAD_RETRY_STATUSES`,
+    so a plain network blip was never retried and immediately failed the
+    image). Re-raises the last error once attempts are exhausted, and
+    immediately for any non-transient HTTP status."""
     for attempt in range(1, _UPLOAD_MAX_ATTEMPTS + 1):
         try:
             project.upload(**upload_kwargs)
             return
         except Exception as exc:  # noqa: BLE001 - re-raised below, classified by status
             status = getattr(exc, "status_code", None)
-            if status not in _UPLOAD_RETRY_STATUSES or attempt == _UPLOAD_MAX_ATTEMPTS:
+            transient = status in _UPLOAD_RETRY_STATUSES or (
+                status is None and isinstance(exc, requests.RequestException)
+            )
+            if not transient or attempt == _UPLOAD_MAX_ATTEMPTS:
                 raise
             logger.warning(
-                "Roboflow export: %s failed HTTP %s (attempt %d/%d) — retrying",
+                "Roboflow export: %s failed %s (attempt %d/%d) — retrying",
                 upload_kwargs.get("image_path"),
-                status,
+                f"HTTP {status}" if status is not None else repr(exc),
                 attempt,
                 _UPLOAD_MAX_ATTEMPTS,
             )

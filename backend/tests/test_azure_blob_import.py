@@ -153,6 +153,63 @@ def test_coco_prefix_uses_json_dims_and_resolves_by_name(
     assert anns[0]["x2"] == pytest.approx(30 / 64)
 
 
+_DUPLICATE_BASENAME_COCO_DOC = {
+    "images": [
+        {"id": 1, "file_name": "batch1/img_0001.jpg", "width": 64, "height": 48},
+        {"id": 2, "file_name": "batch2/img_0001.jpg", "width": 64, "height": 48},
+    ],
+    "annotations": [
+        {"id": 1, "image_id": 1, "category_id": 7, "bbox": [1, 1, 2, 2], "segmentation": []},
+        {"id": 2, "image_id": 2, "category_id": 7, "bbox": [40, 40, 5, 5], "segmentation": []},
+    ],
+    "categories": [{"id": 7, "name": "ball"}],
+}
+_DUPLICATE_BASENAME_COCO_BLOBS: dict[str, bytes] = {
+    "dup-coco/_annotations.coco.json": json.dumps(_DUPLICATE_BASENAME_COCO_DOC).encode("utf-8"),
+    "dup-coco/batch1/img_0001.jpg": _jpeg(),
+    "dup-coco/batch2/img_0001.jpg": _jpeg(),
+}
+
+
+@pytest.fixture()
+def fake_coco_duplicate_basenames(monkeypatch) -> _FakeContainer:
+    container = _FakeContainer(_DUPLICATE_BASENAME_COCO_BLOBS)
+    monkeypatch.setattr(blob_import_mod, "_container_client", lambda: container)
+    return container
+
+
+def test_coco_prefix_resolves_duplicate_basenames_by_full_path(
+    real_client: TestClient, real_db_session, unique_name, fake_coco_duplicate_basenames
+) -> None:
+    """Regression: two COCO images sharing a basename across different
+    subfolders (a plausible per-batch layout) used to resolve to whichever
+    blob a basename-only lookup happened to return last, silently attaching
+    one image's annotations to the other image. Each must resolve to its
+    own blob by full path, keeping its own annotation."""
+    project_id = _project(real_client, unique_name)
+
+    dataset = import_azure_blob_prefix(
+        real_db_session,
+        project_id=uuid.UUID(project_id),
+        prefix="dup-coco/",
+        label_format="auto",
+    )
+
+    from app.models.image import Image
+
+    images = {
+        i.storage_key: i
+        for i in real_db_session.query(Image).filter(Image.dataset_id == dataset.id)
+    }
+    assert set(images) == {"dup-coco/batch1/img_0001.jpg", "dup-coco/batch2/img_0001.jpg"}
+
+    batch1_anns = real_client.get(f"/api/v1/images/{images['dup-coco/batch1/img_0001.jpg'].id}/annotations").json()
+    batch2_anns = real_client.get(f"/api/v1/images/{images['dup-coco/batch2/img_0001.jpg'].id}/annotations").json()
+    assert len(batch1_anns) == 1 and len(batch2_anns) == 1
+    assert batch1_anns[0]["x1"] == pytest.approx(1 / 64)
+    assert batch2_anns[0]["x1"] == pytest.approx(40 / 64)
+
+
 def test_cancel_stops_before_first_image_but_keeps_dataset(
     real_client: TestClient, real_db_session, unique_name, fake_yolo
 ) -> None:

@@ -38,8 +38,16 @@ def start_scheduler() -> None:
     from app.workers.tasks.reconcile import reconcile_stale_jobs
 
     sched = BackgroundScheduler(timezone="UTC")
+    # Called directly (APScheduler's own thread), not `.delay()`: that would
+    # land it on the same bounded `default` ThreadPoolExecutor
+    # (max_workers=3) as the video/roboflow/blob-import tasks it exists to
+    # detect and fail. A thread blocked in a synchronous network call with
+    # no socket timeout can never be force-killed (no such API for Python
+    # threads) — if all 3 workers end up stuck that way, `.delay()`-ing the
+    # sweep would just queue it behind them forever, so the one thing meant
+    # to notice and unstick the situation would itself never run.
     sched.add_job(
-        reconcile_stale_jobs.delay, "interval", seconds=300, id="reconcile-stale-jobs",
+        reconcile_stale_jobs, "interval", seconds=300, id="reconcile-stale-jobs",
         max_instances=1, coalesce=True,
     )
     if settings.kaggle_configured:
