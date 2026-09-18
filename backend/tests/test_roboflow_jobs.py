@@ -222,6 +222,41 @@ def connected_roboflow(real_client: TestClient, monkeypatch):
     return real_client
 
 
+def test_image_model_has_roboflow_provenance_columns(real_db_session, unique_name: str) -> None:
+    """New columns exist and round-trip — the foundation Task 3 (import)
+    writes to and Task 5 (export) reads from."""
+    from app.models.image import Image, ImageSourceType
+    from app.models.project import Project
+    from app.models.dataset import Dataset
+
+    project = Project(name=unique_name, slug=unique_name, class_config=[{"id": 0, "name": "cone"}])
+    real_db_session.add(project)
+    real_db_session.flush()
+    dataset = Dataset(project_id=project.id, name="ds")
+    real_db_session.add(dataset)
+    real_db_session.flush()
+
+    image = Image(
+        project_id=project.id,
+        dataset_id=dataset.id,
+        storage_key="k",
+        original_filename="a.jpg",
+        width=64,
+        height=48,
+        source_type=ImageSourceType.UPLOAD,
+        roboflow_image_id="rf-abc123",
+        roboflow_workspace="my-workspace",
+        roboflow_project_slug="cones",
+    )
+    real_db_session.add(image)
+    real_db_session.commit()
+    real_db_session.refresh(image)
+
+    assert image.roboflow_image_id == "rf-abc123"
+    assert image.roboflow_workspace == "my-workspace"
+    assert image.roboflow_project_slug == "cones"
+
+
 def test_roboflow_import_job_completes_and_creates_dataset(
     connected_roboflow: TestClient, unique_name: str
 ) -> None:

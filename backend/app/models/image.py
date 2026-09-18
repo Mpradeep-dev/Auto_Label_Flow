@@ -67,6 +67,20 @@ class Image(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         index=True,
     )
 
+    # Set only when this image was pulled in from a Roboflow *raw* (no
+    # Version yet) pull (`import_roboflow_raw_project`, which fetches each
+    # item's own Roboflow id already — see its `_stage_raw_image`).
+    # Versioned imports (`import_roboflow_project`, a downloaded YOLO zip)
+    # never see a per-image Roboflow id and leave these NULL. Export
+    # (`roboflow_export.py`) uses these — when set AND matching the export
+    # target workspace/project — to update the image's annotation directly
+    # via `Project.save_annotation()` instead of re-uploading its
+    # (unchanged) bytes through `Project.upload()` and relying on
+    # Roboflow's own byte-content duplicate detection.
+    roboflow_image_id: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    roboflow_workspace: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    roboflow_project_slug: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
     # Populated by the Phase 7 quality/active-learning pass; NULL until then
     # (queue ordering falls back to created_at when NULL — see review/queue.py).
     difficulty_score: Mapped[float | None] = mapped_column(Float, nullable=True, index=True)
