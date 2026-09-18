@@ -207,14 +207,26 @@ function RoboflowCard({ status }: { status: IntegrationStatus }) {
   const queryClient = useQueryClient();
   const [apiKey, setApiKey] = useState("");
   const [defaultWorkspace, setDefaultWorkspace] = useState("");
+  // Reused as both labeler and reviewer when an "Annotating"-target export
+  // auto-creates a Roboflow review job for the batch it just pushed —
+  // Roboflow has no API to discover the connected account's own email from
+  // just the key, so it's stored here once instead. Left blank, that
+  // auto-assign step is skipped (predictions still upload, they just stay
+  // in Roboflow's Unassigned column until someone creates the job by hand).
+  const [defaultLabelerEmail, setDefaultLabelerEmail] = useState("");
 
   const connectMutation = useMutation({
     mutationFn: () =>
-      api.connectRoboflow({ api_key: apiKey.trim(), default_workspace: defaultWorkspace.trim() || undefined }),
+      api.connectRoboflow({
+        api_key: apiKey.trim(),
+        default_workspace: defaultWorkspace.trim() || undefined,
+        default_labeler_email: defaultLabelerEmail.trim() || undefined,
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["integrations"] });
       setApiKey("");
       setDefaultWorkspace("");
+      setDefaultLabelerEmail("");
     },
   });
   const disconnectMutation = useMutation({
@@ -271,6 +283,14 @@ function RoboflowCard({ status }: { status: IntegrationStatus }) {
               placeholder="DEFAULT WORKSPACE (optional)"
               className="min-w-[200px] flex-1 border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
             />
+            <input
+              value={defaultLabelerEmail}
+              onChange={(e) => setDefaultLabelerEmail(e.target.value)}
+              type="email"
+              aria-label="DEFAULT LABELER/REVIEWER EMAIL (optional)"
+              placeholder="DEFAULT LABELER/REVIEWER EMAIL (optional)"
+              className="min-w-[200px] flex-1 border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
+            />
             <button
               type="submit"
               disabled={!apiKey.trim() || connectMutation.isPending}
@@ -285,6 +305,8 @@ function RoboflowCard({ status }: { status: IntegrationStatus }) {
           )}
           <p className="text-xs text-ink/60">
             From app.roboflow.com → Settings → Roboflow API. Leave workspace blank to use your account's default.
+            Labeler/reviewer email is used to auto-create a Roboflow review job when exporting with the
+            "Annotating" push destination — leave blank to skip that and create the job yourself in Roboflow.
           </p>
         </form>
       )}

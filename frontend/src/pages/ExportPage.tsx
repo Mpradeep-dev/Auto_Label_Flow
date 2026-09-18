@@ -5,7 +5,13 @@ import { api } from "@/services/api";
 import { SectionLabel } from "@/components/layout/SectionLabel";
 import { RoboflowJobProgress } from "@/components/integrations/RoboflowJobProgress";
 import { RoboflowProjectSelect } from "@/components/integrations/RoboflowProjectSelect";
-import type { DatasetVersion, RoboflowJob } from "@/types";
+import type { DatasetVersion, RoboflowJob, RoboflowUploadTarget } from "@/types";
+
+const UPLOAD_TARGET_OPTIONS: { value: RoboflowUploadTarget; label: string; hint: string }[] = [
+  { value: "ANNOTATING", label: "Annotating", hint: "Labels pushed for review in Roboflow" },
+  { value: "DATASET", label: "Dataset", hint: "Labels pushed as confirmed ground truth" },
+  { value: "UNANNOTATED", label: "Unannotated", hint: "Images only, no labels pushed" },
+];
 
 // The workflow is linear (annotate a dataset → version it → train), so the
 // dataset picker should come back where the user left it rather than empty
@@ -32,6 +38,11 @@ function RoboflowExportControls({ versionId }: { versionId: string }) {
   // annotations from a prior push/import stay distinguishable in
   // Roboflow's Annotate tab.
   const [batchName, setBatchName] = useState("");
+  // Which column of Roboflow's Annotate board pushed images land in —
+  // defaults to today's historical behavior (predictions queued for
+  // review) so existing exports are unaffected until a user picks
+  // otherwise.
+  const [uploadTarget, setUploadTarget] = useState<RoboflowUploadTarget>("ANNOTATING");
   const [job, setJob] = useState<RoboflowJob | null>(null);
 
   // Reattaches to a job this row kicked off before a navigation away or a
@@ -54,7 +65,12 @@ function RoboflowExportControls({ versionId }: { versionId: string }) {
   const trimmedBatchName = batchName.trim();
   const exportMutation = useMutation({
     mutationFn: () =>
-      api.exportVersionToRoboflow(versionId, { workspace, project, batch_name: trimmedBatchName || undefined }),
+      api.exportVersionToRoboflow(versionId, {
+        workspace,
+        project,
+        batch_name: trimmedBatchName || undefined,
+        upload_target: uploadTarget,
+      }),
     onSuccess: (created) => setJob(created),
   });
 
@@ -89,6 +105,22 @@ function RoboflowExportControls({ versionId }: { versionId: string }) {
             placeholder="Custom batch name (optional)"
             className="w-full border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
           />
+          <div>
+            <label className="mb-1 block text-[10px] font-bold uppercase tracking-widest text-ink/60">
+              Push destination
+            </label>
+            <select
+              value={uploadTarget}
+              onChange={(e) => setUploadTarget(e.target.value as RoboflowUploadTarget)}
+              className="w-full border-2 border-ink bg-paper px-3 py-2 text-sm outline-none focus:border-accent"
+            >
+              {UPLOAD_TARGET_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label} — {option.hint}
+                </option>
+              ))}
+            </select>
+          </div>
           <button
             onClick={() => exportMutation.mutate()}
             disabled={!workspace || !project || exportMutation.isPending}

@@ -10,7 +10,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.models.blob_import_job import BlobImportJobStatus
-from app.models.roboflow_job import RoboflowJobKind, RoboflowJobStatus
+from app.models.roboflow_job import RoboflowJobKind, RoboflowJobStatus, RoboflowUploadTarget
 
 
 class IntegrationStatus(BaseModel):
@@ -34,6 +34,14 @@ class ModalConnectRequest(BaseModel):
 class RoboflowConnectRequest(BaseModel):
     api_key: str = Field(min_length=1)
     default_workspace: str | None = None
+    # Roboflow's API never exposes the connected account's own email (a
+    # Private API Key has no "whoami" endpoint) — so it can't be discovered
+    # automatically. Stored here once and reused as the labeler AND
+    # reviewer on every auto-created annotation job (see roboflow_export.py
+    # push_version_to_roboflow's ANNOTATING-target job creation). Omitted /
+    # None on a reconnect keeps whatever was already stored, so re-verifying
+    # the key doesn't silently wipe it.
+    default_labeler_email: str | None = None
 
 
 class RoboflowExportRequest(BaseModel):
@@ -47,6 +55,10 @@ class RoboflowExportRequest(BaseModel):
     # distinguishable in Roboflow's Annotate tab without needing a whole
     # separate project.
     batch_name: str | None = None
+    # Which Roboflow Annotate-board column pushed images land in — see
+    # `RoboflowUploadTarget`. Defaults to today's historical behavior
+    # (predictions queued for review) so existing callers are unaffected.
+    upload_target: RoboflowUploadTarget = RoboflowUploadTarget.ANNOTATING
 
 
 class RoboflowExportResult(BaseModel):
@@ -138,6 +150,7 @@ class RoboflowJobRead(BaseModel):
     unannotated_only: bool
     batch_id: str | None = None
     batch_name: str | None = None
+    upload_target: RoboflowUploadTarget
     images_only: bool
     total_items: int
     processed_items: int

@@ -33,7 +33,9 @@ logger = logging.getLogger(__name__)
 #      shipped on the Postgres/Alembic side via a3e7c1f9d245 without a
 #      matching step here, so an existing desktop DB never got the column)
 #   5: roboflow_jobs.batch_name (export: user-chosen upload batch label)
-SCHEMA_VERSION = 5
+#   6: roboflow_jobs.upload_target (export: which Annotate-board column to
+#      push into — unannotated/annotating/dataset)
+SCHEMA_VERSION = 6
 
 
 def init_sqlite_schema(engine: Engine) -> None:
@@ -80,6 +82,11 @@ def _upgrade(conn, from_version: int) -> None:  # noqa: ANN001
 
     if from_version < 5:
         _add_column_if_missing(conn, "roboflow_jobs", "batch_name", "VARCHAR(200)")
+
+    if from_version < 6:
+        _add_column_if_missing(
+            conn, "roboflow_jobs", "upload_target", "VARCHAR(20) NOT NULL DEFAULT 'ANNOTATING'"
+        )
 
 
 def _add_column_if_missing(conn, table: str, column: str, ddl_type: str) -> None:  # noqa: ANN001

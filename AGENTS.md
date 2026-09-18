@@ -24,9 +24,18 @@ docker compose up -d postgres redis minio
 
 cd backend
 ./venv/Scripts/python -m alembic upgrade head
-./venv/Scripts/python -m uvicorn app.main:app --reload
+# ALF_TASK_QUEUE=celery on all three processes below: unset, it defaults to
+# `local` (in-process jobs, no Redis) — the API would then run jobs itself
+# and the worker/beat processes below would sit idle, never receiving
+# anything. All three must agree on `celery` for `.delay()` calls to
+# actually reach the worker.
+ALF_TASK_QUEUE=celery ./venv/Scripts/python -m uvicorn app.main:app --reload
 # separately — background jobs (video extraction, auto-annotation, training, quality):
-./venv/Scripts/python -m celery -A app.workers.celery_app worker -B -Q gpu,default -c 1 --pool=solo  # --pool=solo required on Windows
+ALF_TASK_QUEUE=celery ./venv/Scripts/python -m celery -A app.workers.celery_app worker -Q gpu,default -c 1 --pool=solo  # --pool=solo required on Windows
+# separately again — periodic jobs (reconcile-stale-jobs, Kaggle/Modal polling): Celery's
+# `-B` (embedded beat) is refused outright on Windows ("please run celery beat as a
+# separate service"), so it's always its own process here, not just on Windows:
+ALF_TASK_QUEUE=celery ./venv/Scripts/python -m celery -A app.workers.celery_app beat --loglevel=info
 ```
 
 ```bash

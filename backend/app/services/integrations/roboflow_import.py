@@ -60,6 +60,20 @@ _SEARCH_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 _SEARCH_MAX_ATTEMPTS = 4
 _SEARCH_BACKOFF_BASE_S = 1.0
 
+# `rf_project.image()` (the SDK's per-image detail fetch, used by the raw
+# pull below) has the identical weakness `_rf_search_page` was written to
+# route around for `/search`: it ends with a bare `requests.get(url).json()`
+# — no status check, no retry — so a transient 5xx/429 (empty or HTML body)
+# surfaces only as an opaque `json.JSONDecodeError` ("Expecting value: line
+# 2 column 1 (char 1)", observed live) instead of something callable code
+# can react to. Unlike `/search`, this one endpoint isn't worth
+# reimplementing raw (the SDK already builds the right URL/params); retrying
+# the SDK call itself is enough, and skipping that one image once retries
+# are exhausted (see `_rf_image_details`) keeps a single blip from aborting
+# an otherwise-healthy multi-hundred-image import.
+_IMAGE_DETAIL_MAX_ATTEMPTS = 3
+_IMAGE_DETAIL_BACKOFF_BASE_S = 1.0
+
 
 def _describe_unreachable(exc: requests.RequestException, attempts: int) -> str:
     """A `requests.exceptions.ConnectionError` (which is what a DNS
@@ -352,6 +366,36 @@ def _rf_search_page(
     return body["results"]
 
 
+def _rf_image_details(rf_project, image_id: str) -> dict | None:
+    """Retries `rf_project.image(image_id)` through the SDK's own transient
+    failure modes (bad JSON body on a 5xx/429, or the `RuntimeError`s the
+    SDK itself raises for an `{"error": ...}` envelope or a missing
+    "image" key) and returns `None` once attempts are exhausted, so the
+    caller can skip just this one image — same as an unreadable image file
+    a few lines below — instead of the whole job dying on one blip."""
+    for attempt in range(1, _IMAGE_DETAIL_MAX_ATTEMPTS + 1):
+        try:
+            return rf_project.image(image_id)
+        except (ValueError, RuntimeError, requests.RequestException) as exc:
+            if attempt == _IMAGE_DETAIL_MAX_ATTEMPTS:
+                logger.warning(
+                    "Roboflow image detail fetch failed for %s after %d attempts: %s",
+                    image_id,
+                    attempt,
+                    exc,
+                )
+                return None
+            logger.warning(
+                "Roboflow image detail fetch failed for %s (attempt %d/%d): %s — retrying",
+                image_id,
+                attempt,
+                _IMAGE_DETAIL_MAX_ATTEMPTS,
+                exc,
+            )
+            time.sleep(_IMAGE_DETAIL_BACKOFF_BASE_S * 2 ** (attempt - 1))
+    return None
+
+
 def import_roboflow_raw_project(
     db: Session,
     *,
@@ -444,15 +488,26 @@ def import_roboflow_raw_project(
         if should_cancel is not None and should_cancel():
             break
 
-        details = rf_project.image(item["id"])
+        details = _rf_image_details(rf_project, item["id"])
+        if details is None:
+            if progress_cb is not None:
+                progress_cb(i + 1, total)
+            continue
+
         url = (details.get("urls") or {}).get("original")
         if not url:
             if progress_cb is not None:
                 progress_cb(i + 1, total)
             continue
 
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
+        try:
+            resp = requests.get(url, timeout=30)
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            logger.warning("Roboflow image download failed for %s: %s", item["id"], exc)
+            if progress_cb is not None:
+                progress_cb(i + 1, total)
+            continue
         arr = cv2.imdecode(np.frombuffer(resp.content, dtype=np.uint8), cv2.IMREAD_COLOR)
         if arr is None:
             if progress_cb is not None:

@@ -321,6 +321,9 @@ export interface RoboflowExportResult {
 
 export type RoboflowJobKind = "IMPORT" | "EXPORT";
 export type RoboflowJobStatus = "QUEUED" | "RUNNING" | "COMPLETED" | "FAILED" | "CANCELLED";
+// EXPORT only: which column of Roboflow's Annotate board pushed images land
+// in — see `RoboflowUploadTarget` in roboflow_job.py.
+export type RoboflowUploadTarget = "UNANNOTATED" | "ANNOTATING" | "DATASET";
 
 export interface RoboflowJob {
   id: string;
@@ -332,6 +335,7 @@ export interface RoboflowJob {
   version: number | null;
   unannotated_only: boolean;
   batch_id: string | null;
+  upload_target: RoboflowUploadTarget;
   images_only: boolean;
   total_items: number;
   processed_items: number;

@@ -177,6 +177,7 @@ def export_dataset_version_to_roboflow(
         workspace=payload.workspace,
         project_slug=payload.project,
         batch_name=payload.batch_name,
+        upload_target=payload.upload_target.value,
         dataset_version_id=version_id,
     )
     db.add(job)

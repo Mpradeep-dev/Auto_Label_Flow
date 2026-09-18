@@ -154,7 +154,13 @@ def get_status(db: Session) -> IntegrationStatus:
     )
 
 
-def connect(db: Session, *, api_key: str, default_workspace: str | None) -> IntegrationStatus:
+def connect(
+    db: Session,
+    *,
+    api_key: str,
+    default_workspace: str | None,
+    default_labeler_email: str | None = None,
+) -> IntegrationStatus:
     # Imported lazily (mirrors kaggle_provider.py): keeps the `roboflow`
     # package optional for installs that never use this integration.
     from roboflow import Roboflow
@@ -165,6 +171,12 @@ def connect(db: Session, *, api_key: str, default_workspace: str | None) -> Inte
     if row is None:
         row = Integration(provider=IntegrationProvider.ROBOFLOW.value, config={})
         db.add(row)
+
+    # None means "not given on this call" — keep whatever was already
+    # stored, so re-verifying the key doesn't silently wipe it.
+    effective_labeler_email = (
+        default_labeler_email if default_labeler_email is not None else (row.config or {}).get("default_labeler_email")
+    )
 
     try:
         # Roboflow(api_key=...) itself calls check_key() against the API
@@ -194,13 +206,21 @@ def connect(db: Session, *, api_key: str, default_workspace: str | None) -> Inte
         # anything else raised here would otherwise surface to the caller
         # as an unlogged, unexplained Internal Server Error).
         logger.exception("Roboflow connect failed")
-        row.config = {"api_key": api_key, "default_workspace": default_workspace}
+        row.config = {
+            "api_key": api_key,
+            "default_workspace": default_workspace,
+            "default_labeler_email": effective_labeler_email,
+        }
         row.verified_at = None
         row.last_error = str(exc)
         db.commit()
         raise RoboflowVerificationError(f"Roboflow rejected this API key: {exc}") from exc
 
-    row.config = {"api_key": api_key, "default_workspace": resolved_workspace}
+    row.config = {
+        "api_key": api_key,
+        "default_workspace": resolved_workspace,
+        "default_labeler_email": effective_labeler_email,
+    }
     row.verified_at = datetime.now(timezone.utc)
     row.last_error = None
     db.commit()

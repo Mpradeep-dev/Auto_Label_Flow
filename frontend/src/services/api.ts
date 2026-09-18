@@ -20,6 +20,7 @@ import type {
   RoboflowBatchSummary,
   RoboflowJob,
   RoboflowProjectSummary,
+  RoboflowUploadTarget,
   RoboflowVersionSummary,
   SamModelStatus,
   SegmentResult,
@@ -369,15 +370,23 @@ export const api = {
   connectModal: (data: { token_id: string; token_secret: string }) =>
     request<IntegrationStatus>("/integrations/modal", { method: "POST", body: JSON.stringify(data) }),
   disconnectModal: () => request<void>("/integrations/modal", { method: "DELETE" }),
-  connectRoboflow: (data: { api_key: string; default_workspace?: string }) =>
+  connectRoboflow: (data: { api_key: string; default_workspace?: string; default_labeler_email?: string }) =>
     request<IntegrationStatus>("/integrations/roboflow", { method: "POST", body: JSON.stringify(data) }),
   disconnectRoboflow: () => request<void>("/integrations/roboflow", { method: "DELETE" }),
   exportVersionToRoboflow: (
     versionId: string,
     // `batch_name` labels the upload batch in Roboflow's Annotate tab
     // instead of the auto-generated "AutoLabelFlow-{dataset}-v{n}" one —
-    // still pushes into `project` either way.
-    data: { workspace: string; project: string; batch_name?: string },
+    // still pushes into `project` either way. `upload_target` picks which
+    // column of the Annotate board pushed images land in; omitted means
+    // "annotating" (the historical default: labels pushed as predictions
+    // for review).
+    data: {
+      workspace: string;
+      project: string;
+      batch_name?: string;
+      upload_target?: RoboflowUploadTarget;
+    },
   ) =>
     request<RoboflowJob>(`/versions/${versionId}/export/roboflow`, {
       method: "POST",
