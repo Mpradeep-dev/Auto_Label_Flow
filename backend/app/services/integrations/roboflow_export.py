@@ -21,10 +21,12 @@ import uuid
 from pathlib import Path
 from typing import Callable
 
+import requests
 from sqlalchemy.orm import Session
 
 from app.models.dataset import Dataset
 from app.models.dataset_version import DatasetVersion
+from app.models.roboflow_job import RoboflowUploadTarget
 from app.services.dataset.export_yolo import ExportError, write_yolo_dataset
 from app.services.integrations.roboflow_connect import get_client
 
@@ -123,22 +125,78 @@ def _fail_fast_message(statuses: list[int | None], failures: list[str]) -> str:
     )
 
 
+def _assign_annotating_review_job(project, *, batch_name: str, labeler_email: str | None) -> str | None:
+    """Uploading with `is_prediction=True` only gets a pushed image as far
+    as Roboflow's "Unassigned" column — moving it into "Annotating" is a
+    second, separate API call (`Project.create_annotation_job`) that
+    requires an actual labeler + reviewer (a workspace member's email), not
+    something upload-time flags alone can do (confirmed against Roboflow's
+    own docs: predictions "stay in its batch and stay unassigned" until a
+    job is created for them). This finds the batch this export just created
+    (by the same name passed to the upload) and files a job for it, using
+    the one configured account email as both labeler and reviewer — this
+    app has no UI for picking a different person to review its own
+    auto-generated predictions.
+
+    Returns `None` on success (or when there's nothing configured to do —
+    silently skipping isn't a failure), or a short message when the job
+    couldn't be created, for the caller to surface non-fatally: the images
+    themselves already uploaded fine either way."""
+    if not labeler_email:
+        return (
+            "Images uploaded, but no default labeler/reviewer email is set (Settings -> Roboflow) — "
+            "they're sitting in Roboflow's Unassigned column instead of Annotating. Set that email and "
+            "re-export, or create the review job yourself in Roboflow's Annotate tab."
+        )
+
+    try:
+        batches = project.get_batches().get("batches", [])
+        batch = next((b for b in batches if b.get("name") == batch_name), None)
+        if batch is None:
+            return (
+                f"Images uploaded, but couldn't find batch {batch_name!r} on Roboflow afterward to file a "
+                "review job for it — they're sitting in Unassigned. Create the job yourself in Roboflow's "
+                "Annotate tab."
+            )
+        project.create_annotation_job(
+            name=batch_name,
+            batch_id=batch["id"],
+            labeler_email=labeler_email,
+            reviewer_email=labeler_email,
+        )
+    except Exception as exc:  # noqa: BLE001 — non-fatal: images already uploaded
+        logger.warning("Roboflow export: could not auto-create annotation job for batch %r: %s", batch_name, exc)
+        return (
+            f"Images uploaded, but auto-creating the Roboflow review job failed ({exc}) — they're sitting "
+            f"in Unassigned. Check {labeler_email!r} is a member of this Roboflow workspace, or create the "
+            "job yourself in Roboflow's Annotate tab."
+        )
+    return None
+
+
 def _upload_one_image(project, **upload_kwargs) -> None:
     """`project.upload(**upload_kwargs)` with a bounded retry on a transient
-    5xx/429. Re-raises the last error once attempts are exhausted, and
-    immediately for any non-transient status."""
+    5xx/429 (classified via `status_code`) or a bare connection/timeout
+    error (no `status_code` at all — `getattr(exc, "status_code", None)`
+    used to fall through to `None`, which isn't in `_UPLOAD_RETRY_STATUSES`,
+    so a plain network blip was never retried and immediately failed the
+    image). Re-raises the last error once attempts are exhausted, and
+    immediately for any non-transient HTTP status."""
     for attempt in range(1, _UPLOAD_MAX_ATTEMPTS + 1):
         try:
             project.upload(**upload_kwargs)
             return
         except Exception as exc:  # noqa: BLE001 - re-raised below, classified by status
             status = getattr(exc, "status_code", None)
-            if status not in _UPLOAD_RETRY_STATUSES or attempt == _UPLOAD_MAX_ATTEMPTS:
+            transient = status in _UPLOAD_RETRY_STATUSES or (
+                status is None and isinstance(exc, requests.RequestException)
+            )
+            if not transient or attempt == _UPLOAD_MAX_ATTEMPTS:
                 raise
             logger.warning(
-                "Roboflow export: %s failed HTTP %s (attempt %d/%d) — retrying",
+                "Roboflow export: %s failed %s (attempt %d/%d) — retrying",
                 upload_kwargs.get("image_path"),
-                status,
+                f"HTTP {status}" if status is not None else repr(exc),
                 attempt,
                 _UPLOAD_MAX_ATTEMPTS,
             )
@@ -152,10 +210,27 @@ def push_version_to_roboflow(
     workspace: str,
     project_slug: str,
     custom_batch_name: str | None = None,
+    upload_target: str = RoboflowUploadTarget.ANNOTATING.value,
     progress_cb: Callable[[int, int, int], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
-) -> tuple[int, int, list[str]]:
-    """Returns (uploaded_count, failed_count, failure_messages).
+) -> tuple[int, int, list[str], str | None]:
+    """Returns (uploaded_count, failed_count, failure_messages, annotation_job_note).
+
+    `upload_target` picks which column of Roboflow's Annotate board a
+    pushed image with a local annotation lands in — `UNANNOTATED` strips
+    the annotation before upload (image only, regardless of what's local),
+    `ANNOTATING` (the default, unchanged from before this param existed)
+    sends it as a prediction that Roboflow queues for review, `DATASET`
+    sends it as ground truth that Roboflow auto-confirms straight into the
+    Dataset column. An image with no local annotation always lands
+    unannotated regardless of target — there is nothing to push as a
+    prediction or ground truth for it. `ANNOTATING` also tries to move the
+    pushed batch into Roboflow's "Annotating" column via a second API call
+    once uploads finish — see `_assign_annotating_review_job` — which needs
+    a default labeler email configured (Settings -> Roboflow); its failure
+    (or that email being unset) is reported back as `annotation_job_note`
+    but never fails the export, since the images themselves already
+    uploaded fine.
 
     `progress_cb(uploaded, total, failed)`, if given, is called once with
     `uploaded=0` as soon as the image count is known (materialization
@@ -167,9 +242,9 @@ def push_version_to_roboflow(
     whatever's already uploaded to Roboflow stays uploaded, same as a
     cancel partway through any other batch job here."""
     if should_cancel is not None and should_cancel():
-        return 0, 0, []
+        return 0, 0, [], None
 
-    rf, _config = get_client(db)
+    rf, config = get_client(db)
     project = rf.workspace(workspace).project(project_slug)
 
     # Left unset, the SDK groups every upload under its own hardcoded
@@ -239,7 +314,11 @@ def push_version_to_roboflow(
             # "Unrecognized annotation format" — confirmed 1:1 against every
             # unannotated image in a real push) and there's no annotation to
             # lose by omitting it, so treat empty the same as missing here.
-            has_annotation = label_path.exists() and label_path.stat().st_size > 0
+            has_annotation = (
+                label_path.exists()
+                and label_path.stat().st_size > 0
+                and upload_target != RoboflowUploadTarget.UNANNOTATED.value
+            )
             try:
                 _upload_one_image(
                     project,
@@ -248,13 +327,16 @@ def push_version_to_roboflow(
                     annotation_labelmap=str(data_yaml_path),
                     split=roboflow_split,
                     batch_name=batch_name,
-                    # Ground truth (the SDK's default) is auto-confirmed by
-                    # Roboflow and skips straight to the "Dataset" column of
-                    # the Annotate board. These labels come from our
-                    # pipeline, not a human, so push them as a prediction
-                    # instead: Roboflow then queues the image for review in
-                    # "Annotating" rather than treating it as already done.
-                    is_prediction=True,
+                    # Ground truth is auto-confirmed by Roboflow and skips
+                    # straight to the "Dataset" column of the Annotate
+                    # board. These labels come from our pipeline, not a
+                    # human, so the default target (`ANNOTATING`) instead
+                    # pushes them as a prediction: Roboflow then queues the
+                    # image for review rather than treating it as already
+                    # done. `DATASET` opts into the ground-truth behavior
+                    # explicitly, when the caller wants to skip that review
+                    # step.
+                    is_prediction=upload_target != RoboflowUploadTarget.DATASET.value,
                 )
                 uploaded += 1
             except Exception as exc:  # a single bad image shouldn't abort the whole push
@@ -265,12 +347,22 @@ def push_version_to_roboflow(
                 logger.warning(
                     "Roboflow export: upload failed for %s (%s)", image_path.name, detail, exc_info=True
                 )
+                # Checkpoint this failure before possibly aborting below —
+                # otherwise the fail-fast raise skips the caller's
+                # progress_cb entirely for the failure that actually
+                # triggered it, leaving job.failed_count/processed_items on
+                # the DB row stuck at whatever the last periodic checkpoint
+                # was (regression: the job row under-reports how many
+                # images were actually attempted).
+                if progress_cb is not None:
+                    progress_cb(uploaded, total, failed)
                 # Systemic failure: nothing has landed and the first N
                 # images all failed. Retrying the rest one-by-one for hours
                 # won't help — stop with a message that names the likely
                 # cause (`run_roboflow_export` puts it on the job row).
                 if uploaded == 0 and failed >= _FAIL_FAST_AFTER:
                     raise RoboflowExportError(_fail_fast_message(seen_statuses, failures)) from exc
+                continue
 
             if progress_cb is not None:
                 progress_cb(uploaded, total, failed)
@@ -278,4 +370,11 @@ def push_version_to_roboflow(
     logger.info(
         "Roboflow export finished: %d uploaded, %d failed (batch=%r)", uploaded, failed, batch_name
     )
-    return uploaded, failed, failures
+
+    annotation_job_note: str | None = None
+    if upload_target == RoboflowUploadTarget.ANNOTATING.value and uploaded > 0:
+        annotation_job_note = _assign_annotating_review_job(
+            project, batch_name=batch_name, labeler_email=config.get("default_labeler_email")
+        )
+
+    return uploaded, failed, failures, annotation_job_note

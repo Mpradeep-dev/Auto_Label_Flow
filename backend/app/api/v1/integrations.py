@@ -80,7 +80,12 @@ def disconnect_modal(db: Session = Depends(get_db)) -> None:
 @router.post("/roboflow", response_model=IntegrationStatus)
 def connect_roboflow(payload: RoboflowConnectRequest, db: Session = Depends(get_db)) -> IntegrationStatus:
     try:
-        return roboflow_connect.connect(db, api_key=payload.api_key, default_workspace=payload.default_workspace)
+        return roboflow_connect.connect(
+            db,
+            api_key=payload.api_key,
+            default_workspace=payload.default_workspace,
+            default_labeler_email=payload.default_labeler_email,
+        )
     except RoboflowVerificationError as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
     except ImportError as exc:

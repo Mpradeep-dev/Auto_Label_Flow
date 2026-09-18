@@ -106,7 +106,11 @@ def run_roboflow_import(self, job_id: str) -> None:
         job = db.get(RoboflowJob, uuid.UUID(job_id))
         if job is not None:
             job.status = RoboflowJobStatus.FAILED
-            job.error = str(exc)
+            # `RoboflowJob.error` is String(2000) — an oversized message
+            # (e.g. an SDK error embedding a full response body) would
+            # otherwise raise its own DataError out of this commit, leaving
+            # the job stuck at RUNNING instead of FAILED.
+            job.error = str(exc)[:_MAX_ERROR_LEN]
             db.commit()
         writer.finish(status="FAILED", error=str(exc))
         raise
@@ -134,12 +138,13 @@ def run_roboflow_export(self, job_id: str) -> None:
 
     writer = ThrottledProgressWriter(job_id, total=0)
     try:
-        uploaded, failed, failures = push_version_to_roboflow(
+        uploaded, failed, failures, annotation_job_note = push_version_to_roboflow(
             db,
             version_id=job.dataset_version_id,
             workspace=job.workspace,
             project_slug=job.project_slug,
             custom_batch_name=job.batch_name,
+            upload_target=job.upload_target,
             progress_cb=_make_progress_cb(job, db, writer),
             should_cancel=lambda: is_cancel_requested(job_id),
         )
@@ -166,8 +171,14 @@ def run_roboflow_export(self, job_id: str) -> None:
             writer.finish(status="FAILED", error=job.error)
         else:
             job.status = RoboflowJobStatus.COMPLETED
+            # Informational only (e.g. "uploaded fine, but couldn't
+            # auto-create the Annotating review job") — never flips status
+            # away from COMPLETED, the images themselves are already on
+            # Roboflow either way.
+            if annotation_job_note:
+                job.error = annotation_job_note[:_MAX_ERROR_LEN]
             db.commit()
-            writer.finish()
+            writer.finish(error=annotation_job_note)
     except RoboflowExportError as exc:
         # Expected terminal failure (quota / plan / key / Roboflow down) —
         # the message is already written for the user. Record it and stop;
@@ -184,7 +195,7 @@ def run_roboflow_export(self, job_id: str) -> None:
         job = db.get(RoboflowJob, uuid.UUID(job_id))
         if job is not None:
             job.status = RoboflowJobStatus.FAILED
-            job.error = str(exc)
+            job.error = str(exc)[:_MAX_ERROR_LEN]
             db.commit()
         writer.finish(status="FAILED", error=str(exc))
         raise

@@ -218,13 +218,49 @@ def _yolo_pending(
     return pending
 
 
+def _match_coco_image_blob(
+    file_name: str, image_blobs: list[str], by_basename: dict[str, list[str]]
+) -> str | None:
+    """Resolve one COCO `images[].file_name` to the blob it names.
+
+    `file_name` is matched as a full path suffix first (handles the common
+    case where it's a path relative to the images root, e.g.
+    `batch1/img_0001.jpg`, exactly locating that one blob even when other
+    subfolders reuse the same basename). Only when nothing matches that way
+    does it fall back to basename-only matching — and only if exactly one
+    blob has that basename: a container with per-batch subfolders reusing
+    filenames (`batch1/images/img_0001.jpg`, `batch2/images/img_0001.jpg`)
+    used to resolve every same-named COCO entry to whichever blob happened
+    to be listed last, silently attaching one image's annotations to a
+    different image."""
+    normalized = file_name.replace("\\", "/").lstrip("/")
+    for blob in image_blobs:
+        if blob == normalized or blob.endswith("/" + normalized):
+            return blob
+
+    candidates = by_basename.get(posixpath.basename(file_name), [])
+    if len(candidates) == 1:
+        return candidates[0]
+    if len(candidates) > 1:
+        logger.warning(
+            "Azure Blob import: COCO file_name %r matches %d blobs by basename with no unique path "
+            "match — skipping rather than guessing which one it refers to: %s",
+            file_name,
+            len(candidates),
+            candidates,
+        )
+    return None
+
+
 def _coco_pending(coco: dict, image_blobs: list[str], project: Project) -> list[_Pending]:
     categories, anns_by_image = parse_coco(coco)
-    by_basename = {posixpath.basename(b): b for b in image_blobs}
+    by_basename: dict[str, list[str]] = {}
+    for b in image_blobs:
+        by_basename.setdefault(posixpath.basename(b), []).append(b)
 
     pending: list[_Pending] = []
     for img_entry in coco.get("images", []):
-        blob = by_basename.get(posixpath.basename(img_entry["file_name"]))
+        blob = _match_coco_image_blob(img_entry["file_name"], image_blobs, by_basename)
         if blob is None:
             continue
         anns = anns_by_image.get(img_entry["id"], [])

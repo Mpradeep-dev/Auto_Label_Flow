@@ -62,6 +62,16 @@ class LocalTask:
         self.name = name
         self.bind = bind
         self.soft_time_limit = soft_time_limit
+        # Stored for API parity with Celery's task decorator (task modules
+        # pass it unconditionally) but not separately enforced: Python gives
+        # no way to force-kill a running thread the way Celery's prefork
+        # pool sends SIGKILL to a worker process past its hard limit. A
+        # thread stuck in a blocking call with no socket timeout stays
+        # stuck until process exit; `soft_time_limit`'s cooperative
+        # cancel-flag (below) only helps a task that polls `should_cancel()`
+        # between steps, and `reconcile_stale_jobs` (run directly from
+        # `scheduler.py`, not through this pool) is the real backstop that
+        # marks such a job FAILED in the DB even though its thread lingers.
         self.time_limit = time_limit
         self._shim = shim
         self._local = threading.local()

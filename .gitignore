@@ -40,3 +40,7 @@ Thumbs.db
 # Browser-automation test artifacts (screenshots/console logs from
 # interactive verification during development, not project source)
 .playwright-mcp/
+
+# Celery Beat's local schedule state (shelve DB) when run natively — one
+# per machine, not project source.
+backend/celerybeat-schedule*

@@ -82,17 +82,44 @@ class _FakeRoboflowProject:
         # (canonical "workspace/project"), mirroring the real SDK.
         self.id = f"my-workspace/{slug}"
         self.uploads: list[tuple[str, str | None, str, str | None, bool]] = []
+        self.annotation_jobs: list[dict] = []
 
     def version(self, v: int) -> _FakeRoboflowVersion:
         return _FakeRoboflowVersion(v)
 
     def get_batches(self) -> dict:
+        # The two static fake batches are what `test_list_roboflow_batches`
+        # asserts against; batches from uploads this instance actually made
+        # (tracked in `self.uploads`) are appended dynamically so
+        # `_assign_annotating_review_job` can find the real batch a test's
+        # export just created, by name.
+        dynamic = [
+            {"id": f"batch-id-{name}", "name": name, "images": 0}
+            for name in dict.fromkeys(u[3] for u in self.uploads if u[3])
+        ]
         return {
             "batches": [
                 {"id": "batch-1", "name": "Batch One", "images": 5},
                 {"id": "batch-2", "name": "Batch Two", "images": 3},
+                *dynamic,
             ]
         }
+
+    def create_annotation_job(
+        self,
+        *,
+        name: str | None = None,
+        batch_id: str | None = None,
+        labeler_email: str | None = None,
+        reviewer_email: str | None = None,
+        instructions: str | None = None,
+    ) -> dict:
+        if not batch_id or not labeler_email or not reviewer_email:
+            raise ValueError("batch_id, labeler_email, and reviewer_email are required")
+        self.annotation_jobs.append(
+            {"name": name, "batch_id": batch_id, "labeler_email": labeler_email, "reviewer_email": reviewer_email}
+        )
+        return {"id": "job-1"}
 
     def upload(
         self,
@@ -555,6 +582,195 @@ def test_rf_search_dns_failure_raises_local_network_hint(monkeypatch) -> None:
     assert "network" in msg.lower() or "dns" in msg.lower()
 
 
+def test_rf_image_details_retries_bad_json_then_succeeds(monkeypatch) -> None:
+    """Regression: `Project.image()` (the SDK's per-image detail fetch) ends
+    with a bare `requests.get(url).json()` — a transient blip returning a
+    non-JSON body used to blow up the whole import as an opaque
+    `json.JSONDecodeError: Expecting value: line 2 column 1 (char 1)`
+    (observed live, 35/40 images in). `_rf_image_details` must retry that
+    failure and recover once the SDK call succeeds again."""
+    import app.services.integrations.roboflow_import as mod
+
+    calls = {"n": 0}
+
+    class _FakeProject:
+        def image(self, image_id: str) -> dict:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise ValueError("Expecting value: line 2 column 1 (char 1)")
+            return {"id": image_id, "urls": {"original": "http://x/img.jpg"}}
+
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    out = mod._rf_image_details(_FakeProject(), "img-1")
+    assert out == {"id": "img-1", "urls": {"original": "http://x/img.jpg"}}
+    assert calls["n"] == 3
+
+
+def test_rf_image_details_persistent_failure_returns_none(monkeypatch) -> None:
+    """Once retries are exhausted, `_rf_image_details` returns `None`
+    instead of raising, so the caller can skip just this one image (same
+    idiom as an unreadable image file) rather than aborting the whole
+    multi-image import over one persistently bad item."""
+    import app.services.integrations.roboflow_import as mod
+
+    class _FakeProject:
+        def image(self, image_id: str) -> dict:
+            raise RuntimeError("Image not found")
+
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    out = mod._rf_image_details(_FakeProject(), "img-1")
+    assert out is None
+
+
+def test_download_version_dataset_retries_transient_failure_then_succeeds(monkeypatch, tmp_path) -> None:
+    """Regression: `Version.download()` (the versioned pull's one big
+    blocking call) raises a bare `RuntimeError` on any transient 5xx/429
+    from Roboflow's export-status endpoint, with no retry of its own — one
+    blip used to abort the whole (often multi-minute) versioned import.
+    `_download_version_dataset` must retry the whole call and succeed once
+    Roboflow recovers."""
+    import app.services.integrations.roboflow_import as mod
+
+    calls = {"n": 0}
+    location = str(tmp_path / "download")
+
+    class _FakeVersion:
+        def download(self, fmt: str, location: str):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise RuntimeError("{'error': 'An error occurred with this request'}")
+            Path(location).mkdir(parents=True)
+            (Path(location) / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+            return location
+
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    out = mod._download_version_dataset(_FakeVersion(), "yolov8", location)
+    assert out == location
+    assert calls["n"] == 3
+    assert (Path(location) / "data.yaml").exists()
+
+
+def test_download_version_dataset_clears_partial_dir_before_retry(monkeypatch, tmp_path) -> None:
+    """`Version.download()` treats an already-existing `location` as
+    "already downloaded" and returns without downloading anything —
+    without clearing `location` between attempts, a retry after a failure
+    that left partial files behind would silently resurrect that partial,
+    corrupt dataset instead of forcing a real re-download."""
+    import app.services.integrations.roboflow_import as mod
+
+    calls = {"n": 0}
+    location = str(tmp_path / "download")
+
+    class _FakeVersion:
+        def download(self, fmt: str, location: str):
+            calls["n"] += 1
+            if calls["n"] < 2:
+                # Simulate dying mid-extract: partial files exist even
+                # though this attempt is about to fail.
+                Path(location).mkdir(parents=True, exist_ok=True)
+                (Path(location) / "partial.txt").write_text("incomplete", encoding="utf-8")
+                raise RuntimeError("transient")
+            # A real download would refuse to proceed into a non-empty
+            # directory from a prior attempt — asserting it's clean here
+            # proves `_download_version_dataset` cleared it first.
+            assert not Path(location).exists() or list(Path(location).iterdir()) == []
+            Path(location).mkdir(parents=True, exist_ok=True)
+            (Path(location) / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+            return location
+
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    mod._download_version_dataset(_FakeVersion(), "yolov8", location)
+    assert calls["n"] == 2
+
+
+def test_download_version_dataset_persistent_failure_raises(monkeypatch, tmp_path) -> None:
+    import app.services.integrations.roboflow_import as mod
+
+    calls = {"n": 0}
+    location = str(tmp_path / "download")
+
+    class _FakeVersion:
+        def download(self, fmt: str, location: str):
+            calls["n"] += 1
+            raise RuntimeError("permanent failure")
+
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    with pytest.raises(RuntimeError, match="permanent failure"):
+        mod._download_version_dataset(_FakeVersion(), "yolov8", location)
+    assert calls["n"] == mod._VERSION_DOWNLOAD_MAX_ATTEMPTS
+
+
+def test_roboflow_import_job_skips_one_bad_image_instead_of_failing_job(
+    connected_roboflow: TestClient, monkeypatch, unique_name: str
+) -> None:
+    """A single image whose detail fetch keeps failing (the same transient
+    blip `_rf_image_details` retries) must not fail the whole job — the
+    other, healthy image still imports and the job completes."""
+    import app.services.integrations.roboflow_import as roboflow_import_module
+
+    def _fake_get(url: str, timeout: int = 30) -> _FakeHTTPResponse:
+        return _FakeHTTPResponse(_jpeg_bytes())
+
+    monkeypatch.setattr(roboflow_import_module.requests, "get", _fake_get)
+    monkeypatch.setattr(roboflow_import_module.requests, "post", _fake_search_post)
+    monkeypatch.setattr(roboflow_import_module.time, "sleep", lambda s: None)
+
+    project_id = connected_roboflow.post("/api/v1/projects", json={"name": unique_name}).json()["id"]
+
+    import app.services.integrations.roboflow_connect as connect_module
+
+    real_get_client = connect_module.get_client
+
+    def _patched_get_client(db):
+        rf, config = real_get_client(db)
+        real_workspace = rf.workspace
+
+        def _workspace(name=None):
+            ws = real_workspace(name)
+            real_project = ws.project
+
+            def _project(slug):
+                proj = real_project(slug)
+                real_image = proj.image
+
+                def _flaky_image(image_id: str) -> dict:
+                    if image_id == "raw-img-1":
+                        raise ValueError("Expecting value: line 2 column 1 (char 1)")
+                    return real_image(image_id)
+
+                proj.image = _flaky_image
+                return proj
+
+            ws.project = _project
+            return ws
+
+        rf.workspace = _workspace
+        return rf, config
+
+    monkeypatch.setattr(
+        "app.services.integrations.roboflow_import.get_client", _patched_get_client
+    )
+
+    resp = connected_roboflow.post(
+        f"/api/v1/projects/{project_id}/import/roboflow",
+        json={"workspace": "my-workspace", "project": "ground"},
+    )
+    assert resp.status_code == 202, resp.text
+    job = resp.json()
+    assert job["status"] == "COMPLETED"
+    assert job["total_items"] == 2
+
+    dataset_id = job["result_dataset_id"]
+    images = connected_roboflow.get(f"/api/v1/datasets/{dataset_id}/images").json()["items"]
+    assert len(images) == 1
+    assert images[0]["original_filename"] == "raw2.jpg"
+
+
 def test_roboflow_import_job_cancel_stops_early(
     connected_roboflow: TestClient, real_db_session, monkeypatch, unique_name: str
 ) -> None:
@@ -775,6 +991,207 @@ def test_roboflow_export_uploads_annotations_as_predictions_not_ground_truth(
     assert all(c["is_prediction"] is True for c in captured)
 
 
+def test_roboflow_export_upload_target_dataset_pushes_ground_truth(
+    connected_roboflow: TestClient, approved_version: tuple[str, str], monkeypatch
+) -> None:
+    """`upload_target: "dataset"` opts out of the "Annotating" review queue
+    (the default) and pushes labels as ground truth instead, so Roboflow
+    auto-confirms them straight into the Dataset column."""
+    _, version_id = approved_version
+
+    captured: list[dict] = []
+    original_upload = _FakeRoboflowProject.upload
+
+    def _spy_upload(self, **kwargs):
+        captured.append(kwargs)
+        return original_upload(self, **kwargs)
+
+    monkeypatch.setattr(_FakeRoboflowProject, "upload", _spy_upload)
+
+    resp = connected_roboflow.post(
+        f"/api/v1/versions/{version_id}/export/roboflow",
+        json={"workspace": "my-workspace", "project": "cones", "upload_target": "DATASET"},
+    )
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    assert body["status"] == "COMPLETED"
+    assert body["upload_target"] == "DATASET"
+
+    assert captured
+    assert any(c["annotation_path"] is not None for c in captured)
+    assert all(c["is_prediction"] is False for c in captured)
+
+
+def test_roboflow_export_upload_target_unannotated_strips_labels(
+    connected_roboflow: TestClient, approved_version: tuple[str, str], monkeypatch
+) -> None:
+    """`upload_target: "unannotated"` pushes every image with no annotation
+    at all, even though the version being exported has approved labels —
+    the point is landing images in Roboflow's unannotated bucket regardless
+    of what's already labeled locally."""
+    _, version_id = approved_version
+
+    captured: list[dict] = []
+    original_upload = _FakeRoboflowProject.upload
+
+    def _spy_upload(self, **kwargs):
+        captured.append(kwargs)
+        return original_upload(self, **kwargs)
+
+    monkeypatch.setattr(_FakeRoboflowProject, "upload", _spy_upload)
+
+    resp = connected_roboflow.post(
+        f"/api/v1/versions/{version_id}/export/roboflow",
+        json={"workspace": "my-workspace", "project": "cones", "upload_target": "UNANNOTATED"},
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["status"] == "COMPLETED"
+
+    assert captured
+    assert all(c["annotation_path"] is None for c in captured)
+
+
+def test_roboflow_export_upload_target_defaults_to_annotating(
+    connected_roboflow: TestClient, approved_version: tuple[str, str]
+) -> None:
+    """No `upload_target` in the request must keep the historical default
+    ("annotating") on the job row, not break existing callers."""
+    _, version_id = approved_version
+
+    resp = connected_roboflow.post(
+        f"/api/v1/versions/{version_id}/export/roboflow",
+        json={"workspace": "my-workspace", "project": "cones"},
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["upload_target"] == "ANNOTATING"
+
+
+def test_roboflow_export_annotating_without_labeler_email_notes_it_non_fatally(
+    connected_roboflow: TestClient, approved_version: tuple[str, str]
+) -> None:
+    """Regression: uploading with `is_prediction=True` alone only gets an
+    image as far as Roboflow's Unassigned column — actually moving it to
+    Annotating needs a second API call (create_annotation_job) that
+    requires a labeler email. With none configured, the export must still
+    COMPLETE (images did upload) but say why they're not in Annotating,
+    rather than silently leaving the user to wonder."""
+    _, version_id = approved_version
+
+    resp = connected_roboflow.post(
+        f"/api/v1/versions/{version_id}/export/roboflow",
+        json={"workspace": "my-workspace", "project": "cones"},
+    )
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    assert body["status"] == "COMPLETED"
+    assert "labeler" in body["error"].lower()
+
+
+def test_roboflow_export_annotating_creates_review_job_when_labeler_email_set(
+    connected_roboflow: TestClient, approved_version: tuple[str, str], monkeypatch
+) -> None:
+    """With a default labeler email configured (Settings -> Roboflow), an
+    ANNOTATING-target export must file a real Roboflow annotation job for
+    the batch it just pushed, assigning the same email as both labeler and
+    reviewer (this app has no UI for picking someone else to review its
+    own auto-generated predictions) — and the job row must show no error."""
+    resp = connected_roboflow.post(
+        "/api/v1/integrations/roboflow",
+        json={"api_key": "good-key", "default_labeler_email": "reviewer@example.com"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    _, version_id = approved_version
+
+    captured: list[dict] = []
+    original_create = _FakeRoboflowProject.create_annotation_job
+
+    def _spy_create(self, **kwargs):
+        captured.append(kwargs)
+        return original_create(self, **kwargs)
+
+    monkeypatch.setattr(_FakeRoboflowProject, "create_annotation_job", _spy_create)
+
+    resp = connected_roboflow.post(
+        f"/api/v1/versions/{version_id}/export/roboflow",
+        json={"workspace": "my-workspace", "project": "cones", "batch_name": "review-me"},
+    )
+    assert resp.status_code == 202, resp.text
+    body = resp.json()
+    assert body["status"] == "COMPLETED"
+    assert body["error"] is None
+
+    assert captured == [
+        {
+            "name": "review-me",
+            "batch_id": "batch-id-review-me",
+            "labeler_email": "reviewer@example.com",
+            "reviewer_email": "reviewer@example.com",
+        }
+    ]
+
+
+def test_roboflow_export_dataset_target_never_creates_annotation_job(
+    connected_roboflow: TestClient, approved_version: tuple[str, str], monkeypatch
+) -> None:
+    """`DATASET` (ground truth) images already land in the right place on
+    upload alone — no review job should ever be created for that target,
+    labeler email configured or not."""
+    resp = connected_roboflow.post(
+        "/api/v1/integrations/roboflow",
+        json={"api_key": "good-key", "default_labeler_email": "reviewer@example.com"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    _, version_id = approved_version
+
+    created: list[dict] = []
+    original_create = _FakeRoboflowProject.create_annotation_job
+
+    def _spy_create(self, **kwargs):
+        created.append(kwargs)
+        return original_create(self, **kwargs)
+
+    monkeypatch.setattr(_FakeRoboflowProject, "create_annotation_job", _spy_create)
+
+    resp = connected_roboflow.post(
+        f"/api/v1/versions/{version_id}/export/roboflow",
+        json={"workspace": "my-workspace", "project": "cones", "upload_target": "DATASET"},
+    )
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["status"] == "COMPLETED"
+    assert resp.json()["error"] is None
+    assert created == []
+
+
+def test_roboflow_connect_preserves_labeler_email_on_reconnect_without_it(
+    connected_roboflow: TestClient,
+) -> None:
+    """Re-verifying the API key (e.g. Settings' "Connect" form re-submitted
+    without touching the labeler-email field) must not silently wipe out an
+    already-stored default labeler email — only an explicit new value
+    should replace it."""
+    resp = connected_roboflow.post(
+        "/api/v1/integrations/roboflow",
+        json={"api_key": "good-key", "default_labeler_email": "reviewer@example.com"},
+    )
+    assert resp.status_code == 200, resp.text
+
+    resp = connected_roboflow.post("/api/v1/integrations/roboflow", json={"api_key": "good-key"})
+    assert resp.status_code == 200, resp.text
+
+    from app.db.session import SessionLocal
+    from app.models.integration import Integration, IntegrationProvider
+    from sqlalchemy import select
+
+    db = SessionLocal()
+    try:
+        row = db.scalar(select(Integration).where(Integration.provider == IntegrationProvider.ROBOFLOW.value))
+        assert row.config.get("default_labeler_email") == "reviewer@example.com"
+    finally:
+        db.close()
+
+
 def test_roboflow_export_uses_custom_batch_name_when_given(
     connected_roboflow: TestClient, approved_version: tuple[str, str], monkeypatch
 ) -> None:
@@ -897,6 +1314,31 @@ def test_upload_one_image_does_not_retry_4xx(monkeypatch) -> None:
     assert calls["n"] == 1
 
 
+def test_upload_one_image_retries_bare_connection_error(monkeypatch) -> None:
+    """Regression: a plain `requests.ConnectionError`/timeout during
+    `project.upload()` has no `status_code` at all, so
+    `getattr(exc, "status_code", None)` is `None` — which isn't in
+    `_UPLOAD_RETRY_STATUSES`, so this used to be treated as non-transient
+    and fail the image on the first attempt instead of retrying."""
+    from app.services.integrations import roboflow_export as mod
+
+    slept: list[float] = []
+    monkeypatch.setattr(mod.time, "sleep", lambda s: slept.append(s))
+
+    calls = {"n": 0}
+
+    class _Proj:
+        def upload(self, **kwargs):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise mod.requests.ConnectionError("connection reset")
+
+    mod._upload_one_image(_Proj(), image_path="a.jpg")
+
+    assert calls["n"] == 3
+    assert slept == [1.0, 2.0]
+
+
 def test_fail_fast_message_points_at_quota_for_all_5xx() -> None:
     from app.services.integrations.roboflow_export import _fail_fast_message
 
@@ -965,6 +1407,62 @@ def test_push_version_fails_fast_after_threshold(real_db_session, monkeypatch) -
     assert len(attempted) == mod._FAIL_FAST_AFTER
 
 
+def test_push_version_fail_fast_checkpoints_the_triggering_failure(real_db_session, monkeypatch) -> None:
+    """Regression: the fail-fast `raise` happened before `progress_cb` was
+    called for the failure that actually triggered it, so `run_roboflow_export`
+    never learned about that last failure — the job row's failed_count/
+    processed_items understated how many images were actually attempted.
+    `progress_cb` must see every failure, including the one that trips
+    fail-fast, before the exception propagates."""
+    import uuid as _uuid
+
+    from app.services.integrations import roboflow_export as mod
+
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        for split in ("train", "valid", "test"):
+            (root / "images" / split).mkdir(parents=True)
+            (root / "labels" / split).mkdir(parents=True)
+        for i in range(20):
+            (root / "images" / "train" / f"img{i:02d}.jpg").write_bytes(_jpeg_bytes())
+            (root / "labels" / "train" / f"img{i:02d}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        data_yaml = root / "data.yaml"
+        data_yaml.write_text("names: ['cone']\n", encoding="utf-8")
+        return data_yaml
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    class _Proj:
+        def upload(self, **kwargs):
+            raise _upload_error(500)
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {}))
+
+    seen: list[tuple[int, int, int]] = []
+    with pytest.raises(mod.RoboflowExportError):
+        mod.push_version_to_roboflow(
+            real_db_session,
+            version_id=_uuid.uuid4(),
+            workspace="ws",
+            project_slug="proj",
+            progress_cb=lambda cur, total, failed: seen.append((cur, total, failed)),
+        )
+
+    # The last call must report the 5th failure, not stop at the 4th —
+    # otherwise a caller checkpointing on this callback never learns the
+    # triggering failure happened at all.
+    assert seen[-1] == (0, 20, mod._FAIL_FAST_AFTER)
+
+
 def test_push_version_progress_counts_successes_not_attempts(real_db_session, monkeypatch) -> None:
     """The progress callback's first arg must be the running count of images
     that actually reached Roboflow — never the loop index — so a half-failing
@@ -1006,7 +1504,7 @@ def test_push_version_progress_counts_successes_not_attempts(real_db_session, mo
     monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {}))
 
     seen: list[tuple[int, int, int]] = []
-    uploaded, failed, _ = mod.push_version_to_roboflow(
+    uploaded, failed, _, _ = mod.push_version_to_roboflow(
         real_db_session,
         version_id=_uuid.uuid4(),
         workspace="ws",

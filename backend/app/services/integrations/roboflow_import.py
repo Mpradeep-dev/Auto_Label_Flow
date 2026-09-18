@@ -24,6 +24,7 @@ straight off the project's `search()`/`image()` endpoints instead.
 from __future__ import annotations
 
 import logging
+import shutil
 import tempfile
 import time
 import uuid
@@ -60,6 +61,33 @@ _SEARCH_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 _SEARCH_MAX_ATTEMPTS = 4
 _SEARCH_BACKOFF_BASE_S = 1.0
 
+# `rf_project.image()` (the SDK's per-image detail fetch, used by the raw
+# pull below) has the identical weakness `_rf_search_page` was written to
+# route around for `/search`: it ends with a bare `requests.get(url).json()`
+# — no status check, no retry — so a transient 5xx/429 (empty or HTML body)
+# surfaces only as an opaque `json.JSONDecodeError` ("Expecting value: line
+# 2 column 1 (char 1)", observed live) instead of something callable code
+# can react to. Unlike `/search`, this one endpoint isn't worth
+# reimplementing raw (the SDK already builds the right URL/params); retrying
+# the SDK call itself is enough, and skipping that one image once retries
+# are exhausted (see `_rf_image_details`) keeps a single blip from aborting
+# an otherwise-healthy multi-hundred-image import.
+_IMAGE_DETAIL_MAX_ATTEMPTS = 3
+_IMAGE_DETAIL_BACKOFF_BASE_S = 1.0
+
+# `Version.download()` (the versioned pull's one big blocking call — wait
+# for export generation, then fetch a status/link endpoint, then download
+# and extract the zip) raises a bare `RuntimeError` on any non-200/202
+# response from that status/link endpoint, including a transient 5xx/429,
+# with the original status code already lost by the time it reaches here —
+# so unlike the raw pull's retries above, this can't tell transient and
+# permanent failures apart by status. Retried anyway, on any exception:
+# without it, one blip aborts what's often a multi-minute download outright,
+# and a genuine permanent failure (bad version, deleted project) just fails
+# a few seconds later than it would have.
+_VERSION_DOWNLOAD_MAX_ATTEMPTS = 3
+_VERSION_DOWNLOAD_BACKOFF_BASE_S = 2.0
+
 
 def _describe_unreachable(exc: requests.RequestException, attempts: int) -> str:
     """A `requests.exceptions.ConnectionError` (which is what a DNS
@@ -80,6 +108,38 @@ def _describe_unreachable(exc: requests.RequestException, attempts: int) -> str:
         f"Roboflow /search could not be reached after {attempts} attempts ({exc}). This is "
         "usually a temporary Roboflow-side issue — retry the import in a few minutes."
     )
+
+
+def _download_version_dataset(rf_version, model_format: str, location: str):
+    """Retries `rf_version.download(model_format, location=location)` as a
+    whole (see the module-level comment on `_VERSION_DOWNLOAD_MAX_ATTEMPTS`
+    for why this can't be smarter about which failures are worth retrying).
+
+    `location` is cleared before every attempt: `Version.download()` treats
+    an already-existing `location` as "already downloaded" and returns
+    immediately without downloading anything (`overwrite` defaults to
+    `False`) — without clearing it first, a retry after a failure that left
+    partial files behind (e.g. died mid zip-extract) would silently return
+    that partial, corrupt dataset instead of actually re-downloading."""
+    last_exc: Exception | None = None
+    for attempt in range(1, _VERSION_DOWNLOAD_MAX_ATTEMPTS + 1):
+        if Path(location).exists():
+            shutil.rmtree(location, ignore_errors=True)
+        try:
+            return rf_version.download(model_format, location=location)
+        except Exception as exc:  # noqa: BLE001 — status code already lost by the SDK; see comment above
+            last_exc = exc
+            if attempt == _VERSION_DOWNLOAD_MAX_ATTEMPTS:
+                break
+            logger.warning(
+                "Roboflow version download failed (attempt %d/%d): %s — retrying",
+                attempt,
+                _VERSION_DOWNLOAD_MAX_ATTEMPTS,
+                exc,
+            )
+            time.sleep(_VERSION_DOWNLOAD_BACKOFF_BASE_S * 2 ** (attempt - 1))
+    assert last_exc is not None
+    raise last_exc
 
 
 def _merge_class_config(project: Project, roboflow_names: list[str]) -> dict[int, tuple[int, str]]:
@@ -154,7 +214,7 @@ def import_roboflow_project(
     rf_version = rf_project.version(version)
 
     with tempfile.TemporaryDirectory() as tmp:
-        rf_dataset = rf_version.download("yolov8", location=str(Path(tmp) / "download"))
+        rf_dataset = _download_version_dataset(rf_version, "yolov8", str(Path(tmp) / "download"))
         location = Path(rf_dataset.location)
 
         data_yaml = yaml.safe_load((location / "data.yaml").read_text(encoding="utf-8"))
@@ -352,6 +412,36 @@ def _rf_search_page(
     return body["results"]
 
 
+def _rf_image_details(rf_project, image_id: str) -> dict | None:
+    """Retries `rf_project.image(image_id)` through the SDK's own transient
+    failure modes (bad JSON body on a 5xx/429, or the `RuntimeError`s the
+    SDK itself raises for an `{"error": ...}` envelope or a missing
+    "image" key) and returns `None` once attempts are exhausted, so the
+    caller can skip just this one image — same as an unreadable image file
+    a few lines below — instead of the whole job dying on one blip."""
+    for attempt in range(1, _IMAGE_DETAIL_MAX_ATTEMPTS + 1):
+        try:
+            return rf_project.image(image_id)
+        except (ValueError, RuntimeError, requests.RequestException) as exc:
+            if attempt == _IMAGE_DETAIL_MAX_ATTEMPTS:
+                logger.warning(
+                    "Roboflow image detail fetch failed for %s after %d attempts: %s",
+                    image_id,
+                    attempt,
+                    exc,
+                )
+                return None
+            logger.warning(
+                "Roboflow image detail fetch failed for %s (attempt %d/%d): %s — retrying",
+                image_id,
+                attempt,
+                _IMAGE_DETAIL_MAX_ATTEMPTS,
+                exc,
+            )
+            time.sleep(_IMAGE_DETAIL_BACKOFF_BASE_S * 2 ** (attempt - 1))
+    return None
+
+
 def import_roboflow_raw_project(
     db: Session,
     *,
@@ -444,15 +534,26 @@ def import_roboflow_raw_project(
         if should_cancel is not None and should_cancel():
             break
 
-        details = rf_project.image(item["id"])
+        details = _rf_image_details(rf_project, item["id"])
+        if details is None:
+            if progress_cb is not None:
+                progress_cb(i + 1, total)
+            continue
+
         url = (details.get("urls") or {}).get("original")
         if not url:
             if progress_cb is not None:
                 progress_cb(i + 1, total)
             continue
 
-        resp = requests.get(url, timeout=30)
-        resp.raise_for_status()
+        try:
+            resp = requests.get(url, timeout=30)
+            resp.raise_for_status()
+        except requests.RequestException as exc:
+            logger.warning("Roboflow image download failed for %s: %s", item["id"], exc)
+            if progress_cb is not None:
+                progress_cb(i + 1, total)
+            continue
         arr = cv2.imdecode(np.frombuffer(resp.content, dtype=np.uint8), cv2.IMREAD_COLOR)
         if arr is None:
             if progress_cb is not None:

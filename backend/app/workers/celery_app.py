@@ -91,6 +91,12 @@ PERIODIC_SCHEDULE = {
         "task": "app.workers.tasks.reconcile.reconcile_stale_jobs",
         "schedule": 300.0,
     },
+    # 30s (down from 120s) is deliberate, not a typo: `poll_kaggle_training_jobs`
+    # also parses live per-epoch loss/precision/recall/mAP out of the kernel
+    # log now, and a 2-minute cadence made that progress feel stale. Each
+    # poll is one Kaggle API status check plus one kernel-log fetch per
+    # RUNNING job — if that ever needs backing off for Kaggle rate limits,
+    # widen this rather than dropping the log fetch (that's the whole point).
     "poll-kaggle-training-jobs": {
         "task": "app.workers.tasks.kaggle_training.poll_kaggle_training_jobs",
         "schedule": 30.0,
@@ -124,6 +130,7 @@ else:
             "app.workers.tasks.blob_import",
             "app.workers.tasks.sam_download",
             "app.workers.tasks.reconcile",
+            "app.workers.tasks.packs",
         ],
     )
 
@@ -142,6 +149,9 @@ else:
             "app.workers.tasks.blob_import.*": {"queue": "default"},
             "app.workers.tasks.sam_download.*": {"queue": "default"},
             "app.workers.tasks.reconcile.*": {"queue": "default"},
+            # Downloads a pack's dependencies (pip installs, CUDA wheels) —
+            # network/CPU-bound, not GPU work.
+            "app.workers.tasks.packs.*": {"queue": "default"},
             # Polling is just Kaggle API calls, no local CUDA work — belongs
             # on `default`, not `gpu` (concurrency=1, shouldn't wait on
             # network round trips to Kaggle).

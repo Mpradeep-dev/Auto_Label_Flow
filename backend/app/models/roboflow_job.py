@@ -31,6 +31,22 @@ class RoboflowJobStatus(str, PyEnum):
     CANCELLED = "CANCELLED"
 
 
+class RoboflowUploadTarget(str, PyEnum):
+    """EXPORT only — which column of Roboflow's Annotate board a pushed
+    image should land in. `ANNOTATING` (the historical, still-default,
+    behavior) sends any local label as a *prediction*, which Roboflow
+    queues for review; `DATASET` sends it as ground truth instead, which
+    Roboflow auto-confirms straight into the Dataset column; `UNANNOTATED`
+    strips labels before upload regardless of what's local, so the image
+    lands with no annotation at all. An image with no local label always
+    lands unannotated no matter the target — there's nothing to push as a
+    prediction or ground truth for it."""
+
+    UNANNOTATED = "UNANNOTATED"
+    ANNOTATING = "ANNOTATING"
+    DATASET = "DATASET"
+
+
 class RoboflowJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     __tablename__ = "roboflow_jobs"
 
@@ -74,6 +90,14 @@ class RoboflowJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     # `AutoLabelFlow-{dataset}-v{n}` one when set (see roboflow_export.py's
     # push_version_to_roboflow). None means "use the default".
     batch_name: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    # Which Roboflow Annotate-board column pushed images land in — see
+    # `RoboflowUploadTarget`. Plain `String`, not `enum_column`, matching
+    # this table's other EXPORT-only columns (`batch_name`) rather than the
+    # native-Postgres-enum treatment `kind`/`status` get, since this value
+    # is never queried/filtered on and doesn't need a DB-level CHECK.
+    upload_target: Mapped[str] = mapped_column(
+        String(20), nullable=False, default=RoboflowUploadTarget.ANNOTATING.value
+    )
     uploaded_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failures: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
