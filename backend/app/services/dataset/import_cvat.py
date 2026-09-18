@@ -12,7 +12,9 @@ from __future__ import annotations
 import tempfile
 import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from xml.etree.ElementTree import Element
 
 import cv2
 from sqlalchemy.orm import Session
@@ -25,6 +27,15 @@ from app.models.project import Project
 from app.services.annotation.service import create_annotation
 from app.services.dataset.import_safety import UnsafeArchiveError, UnsafeXmlError, parse_xml_safely, safe_extractall
 from app.services.storage.factory import get_storage
+
+# Same reasoning as import_coco.py: decoding an image (local disk) and
+# pushing it to storage (a network round-trip on MinIO/prod) is independent
+# per image, so staging them one at a time made a multi-hundred-image
+# import scale linearly with image count for no reason. `db` writes (the
+# `Image` row, its box/polygon annotations) still happen on the caller's
+# own thread only — `Session` isn't thread-safe.
+_IMPORT_MAX_WORKERS = 8
+_COMMIT_BATCH_SIZE = 50
 
 
 class CvatImportError(RuntimeError):
@@ -103,23 +114,42 @@ def import_cvat_zip(
         except UnsafeXmlError as exc:
             raise CvatImportError(str(exc)) from exc
 
-        for image_el in xml_root.findall("image"):
+        def _stage_image(image_el: Element) -> tuple[str, str, int, int] | None:
+            """Runs off the main thread: local decode (for dimensions) plus
+            the storage write, neither of which touches `db`. Returns
+            `None` for any of the "nothing to import for this element"
+            cases the old inline `continue`s handled (no name, missing
+            file, undecodable image), same as before."""
             file_name = image_el.get("name")
             if not file_name:
-                continue
+                return None
             src_path = _find_image_file(extract_root, file_name)
             if src_path is None:
-                continue
-
+                return None
             arr = cv2.imread(str(src_path))
             if arr is None:
-                continue
+                return None
             height, width = arr.shape[:2]
             width = int(image_el.get("width") or width)
             height = int(image_el.get("height") or height)
-
             key = safe_storage_key(str(project_id), str(dataset.id), "images", original_filename=file_name)
             storage.upload(src_path, key, content_type="image/jpeg")
+            return file_name, key, width, height
+
+        image_els = xml_root.findall("image")
+        staged: list[tuple[str, str, int, int] | None] = []
+        if image_els:
+            max_workers = max(1, min(_IMPORT_MAX_WORKERS, len(image_els)))
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                # `.map` preserves input order in its results and re-raises
+                # the first exception it hits, same as the old sequential
+                # loop aborting on the first failure.
+                staged = list(pool.map(_stage_image, image_els))
+
+        for i, (image_el, result) in enumerate(zip(image_els, staged), start=1):
+            if result is None:
+                continue
+            file_name, key, width, height = result
 
             image = Image(
                 project_id=project_id,
@@ -131,8 +161,7 @@ def import_cvat_zip(
                 source_type=ImageSourceType.UPLOAD,
             )
             db.add(image)
-            db.commit()
-            db.refresh(image)
+            db.flush()
 
             for box_el in image_el.findall("box"):
                 label = box_el.get("label")
@@ -178,6 +207,9 @@ def import_cvat_zip(
                     source=AnnotationSource.HUMAN,
                     actor="cvat-import",
                 )
+
+            if i % _COMMIT_BATCH_SIZE == 0:
+                db.commit()
 
     db.commit()
     return dataset

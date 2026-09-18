@@ -380,3 +380,97 @@ def test_import_coco_rejects_non_zip(client: TestClient, project: Project) -> No
         files={"file": ("not-a-zip.txt", b"hello", "text/plain")},
     )
     assert resp.status_code == 400
+
+
+def _new_project(db_session: Session, prefix: str) -> Project:
+    p = Project(name=f"{prefix}-{uuid.uuid4().hex[:8]}", slug=f"{prefix}-{uuid.uuid4().hex[:8]}", class_config=[])
+    db_session.add(p)
+    db_session.commit()
+    db_session.refresh(p)
+    return p
+
+
+def test_import_coco_stages_images_concurrently(
+    db_session: Session, dataset: Dataset, monkeypatch, tmp_path
+) -> None:
+    """Regression guard: `import_coco_zip` stages every image's decode +
+    storage upload through a bounded thread pool, not one at a time. If
+    this regresses back to sequential, a multi-hundred-image COCO import
+    goes back to scaling linearly with image count."""
+    import threading
+    import time
+
+    from app.services.dataset import import_coco as mod
+
+    for _ in range(8):
+        _make_approved_image(db_session, dataset)
+    version = create_version(db_session, dataset_id=dataset.id, train_ratio=1.0, val_ratio=0.0, test_ratio=0.0)
+    key = export_coco(db_session, version_id=version.id)
+    zip_path = tmp_path / "export.zip"
+    zip_path.write_bytes(get_storage().read_bytes(key))
+
+    real_storage = get_storage()
+    lock = threading.Lock()
+    active = {"current": 0, "peak": 0}
+
+    class _SlowStorage:
+        def upload(self, local_path, key: str, content_type: str | None = None) -> None:
+            with lock:
+                active["current"] += 1
+                active["peak"] = max(active["peak"], active["current"])
+            time.sleep(0.05)
+            real_storage.upload(local_path, key, content_type=content_type)
+            with lock:
+                active["current"] -= 1
+
+    monkeypatch.setattr(mod, "get_storage", lambda: _SlowStorage())
+
+    new_dataset = import_coco_zip(
+        db_session, project_id=_new_project(db_session, "pc").id, zip_path=zip_path, dataset_name=None
+    )
+    images = list(db_session.query(Image).filter(Image.dataset_id == new_dataset.id))
+
+    assert len(images) == 8
+    assert active["peak"] > 1
+
+
+def test_import_cvat_stages_images_concurrently(
+    db_session: Session, dataset: Dataset, monkeypatch, tmp_path
+) -> None:
+    """Same regression guard as `test_import_coco_stages_images_concurrently`,
+    for the CVAT-XML importer."""
+    import threading
+    import time
+
+    from app.services.dataset import import_cvat as mod
+
+    for _ in range(8):
+        _make_approved_image(db_session, dataset)
+    version = create_version(db_session, dataset_id=dataset.id, train_ratio=1.0, val_ratio=0.0, test_ratio=0.0)
+    key = export_cvat(db_session, version_id=version.id)
+    zip_path = tmp_path / "export.zip"
+    zip_path.write_bytes(get_storage().read_bytes(key))
+
+    real_storage = get_storage()
+    lock = threading.Lock()
+    active = {"current": 0, "peak": 0}
+
+    class _SlowStorage:
+        def upload(self, local_path, key: str, content_type: str | None = None) -> None:
+            with lock:
+                active["current"] += 1
+                active["peak"] = max(active["peak"], active["current"])
+            time.sleep(0.05)
+            real_storage.upload(local_path, key, content_type=content_type)
+            with lock:
+                active["current"] -= 1
+
+    monkeypatch.setattr(mod, "get_storage", lambda: _SlowStorage())
+
+    new_dataset = import_cvat_zip(
+        db_session, project_id=_new_project(db_session, "pv").id, zip_path=zip_path, dataset_name=None
+    )
+    images = list(db_session.query(Image).filter(Image.dataset_id == new_dataset.id))
+
+    assert len(images) == 8
+    assert active["peak"] > 1

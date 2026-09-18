@@ -225,3 +225,43 @@ def test_export_missing_class_config_errors(db_session: Session) -> None:
 
     with pytest.raises(ExportError, match="class_config"):
         export_yolo(db_session, version_id=version.id)
+
+
+def test_write_yolo_dataset_reads_images_concurrently(
+    db_session: Session, dataset: Dataset, project: Project, monkeypatch, tmp_path
+) -> None:
+    """Regression guard: `write_yolo_dataset` reads every image's bytes from
+    storage — a network round-trip on MinIO/prod — via a bounded thread
+    pool, not one at a time. If this ever regresses back to sequential, a
+    multi-hundred-image export (and everything that materializes through
+    this shared function: local export, training, and the Roboflow push)
+    goes back to scaling linearly with image count."""
+    import threading
+
+    from app.services.dataset import export_yolo as mod
+
+    for _ in range(8):
+        _make_approved_image(db_session, dataset)
+    version = create_version(db_session, dataset_id=dataset.id, train_ratio=1.0, val_ratio=0.0, test_ratio=0.0)
+
+    real_storage = get_storage()
+    lock = threading.Lock()
+    active = {"current": 0, "peak": 0}
+
+    class _SlowStorage:
+        def read_bytes(self, key: str) -> bytes:
+            with lock:
+                active["current"] += 1
+                active["peak"] = max(active["peak"], active["current"])
+            threading.Event().wait(0.05)
+            data = real_storage.read_bytes(key)
+            with lock:
+                active["current"] -= 1
+            return data
+
+    monkeypatch.setattr(mod, "get_storage", lambda: _SlowStorage())
+
+    mod.write_yolo_dataset(db_session, version_id=version.id, root=tmp_path)
+
+    assert active["peak"] > 1
+    assert len(list((tmp_path / "images" / "train").glob("*"))) == 8
