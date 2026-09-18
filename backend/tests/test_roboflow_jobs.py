@@ -624,6 +624,87 @@ def test_rf_image_details_persistent_failure_returns_none(monkeypatch) -> None:
     assert out is None
 
 
+def test_download_version_dataset_retries_transient_failure_then_succeeds(monkeypatch, tmp_path) -> None:
+    """Regression: `Version.download()` (the versioned pull's one big
+    blocking call) raises a bare `RuntimeError` on any transient 5xx/429
+    from Roboflow's export-status endpoint, with no retry of its own — one
+    blip used to abort the whole (often multi-minute) versioned import.
+    `_download_version_dataset` must retry the whole call and succeed once
+    Roboflow recovers."""
+    import app.services.integrations.roboflow_import as mod
+
+    calls = {"n": 0}
+    location = str(tmp_path / "download")
+
+    class _FakeVersion:
+        def download(self, fmt: str, location: str):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise RuntimeError("{'error': 'An error occurred with this request'}")
+            Path(location).mkdir(parents=True)
+            (Path(location) / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+            return location
+
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    out = mod._download_version_dataset(_FakeVersion(), "yolov8", location)
+    assert out == location
+    assert calls["n"] == 3
+    assert (Path(location) / "data.yaml").exists()
+
+
+def test_download_version_dataset_clears_partial_dir_before_retry(monkeypatch, tmp_path) -> None:
+    """`Version.download()` treats an already-existing `location` as
+    "already downloaded" and returns without downloading anything —
+    without clearing `location` between attempts, a retry after a failure
+    that left partial files behind would silently resurrect that partial,
+    corrupt dataset instead of forcing a real re-download."""
+    import app.services.integrations.roboflow_import as mod
+
+    calls = {"n": 0}
+    location = str(tmp_path / "download")
+
+    class _FakeVersion:
+        def download(self, fmt: str, location: str):
+            calls["n"] += 1
+            if calls["n"] < 2:
+                # Simulate dying mid-extract: partial files exist even
+                # though this attempt is about to fail.
+                Path(location).mkdir(parents=True, exist_ok=True)
+                (Path(location) / "partial.txt").write_text("incomplete", encoding="utf-8")
+                raise RuntimeError("transient")
+            # A real download would refuse to proceed into a non-empty
+            # directory from a prior attempt — asserting it's clean here
+            # proves `_download_version_dataset` cleared it first.
+            assert not Path(location).exists() or list(Path(location).iterdir()) == []
+            Path(location).mkdir(parents=True, exist_ok=True)
+            (Path(location) / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+            return location
+
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    mod._download_version_dataset(_FakeVersion(), "yolov8", location)
+    assert calls["n"] == 2
+
+
+def test_download_version_dataset_persistent_failure_raises(monkeypatch, tmp_path) -> None:
+    import app.services.integrations.roboflow_import as mod
+
+    calls = {"n": 0}
+    location = str(tmp_path / "download")
+
+    class _FakeVersion:
+        def download(self, fmt: str, location: str):
+            calls["n"] += 1
+            raise RuntimeError("permanent failure")
+
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    with pytest.raises(RuntimeError, match="permanent failure"):
+        mod._download_version_dataset(_FakeVersion(), "yolov8", location)
+    assert calls["n"] == mod._VERSION_DOWNLOAD_MAX_ATTEMPTS
+
+
 def test_roboflow_import_job_skips_one_bad_image_instead_of_failing_job(
     connected_roboflow: TestClient, monkeypatch, unique_name: str
 ) -> None:
@@ -1299,6 +1380,62 @@ def test_push_version_fails_fast_after_threshold(real_db_session, monkeypatch) -
     assert "quota" in str(excinfo.value).lower()
     # Bailed after the threshold — did NOT try all 20 images.
     assert len(attempted) == mod._FAIL_FAST_AFTER
+
+
+def test_push_version_fail_fast_checkpoints_the_triggering_failure(real_db_session, monkeypatch) -> None:
+    """Regression: the fail-fast `raise` happened before `progress_cb` was
+    called for the failure that actually triggered it, so `run_roboflow_export`
+    never learned about that last failure — the job row's failed_count/
+    processed_items understated how many images were actually attempted.
+    `progress_cb` must see every failure, including the one that trips
+    fail-fast, before the exception propagates."""
+    import uuid as _uuid
+
+    from app.services.integrations import roboflow_export as mod
+
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        for split in ("train", "valid", "test"):
+            (root / "images" / split).mkdir(parents=True)
+            (root / "labels" / split).mkdir(parents=True)
+        for i in range(20):
+            (root / "images" / "train" / f"img{i:02d}.jpg").write_bytes(_jpeg_bytes())
+            (root / "labels" / "train" / f"img{i:02d}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        data_yaml = root / "data.yaml"
+        data_yaml.write_text("names: ['cone']\n", encoding="utf-8")
+        return data_yaml
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    class _Proj:
+        def upload(self, **kwargs):
+            raise _upload_error(500)
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {}))
+
+    seen: list[tuple[int, int, int]] = []
+    with pytest.raises(mod.RoboflowExportError):
+        mod.push_version_to_roboflow(
+            real_db_session,
+            version_id=_uuid.uuid4(),
+            workspace="ws",
+            project_slug="proj",
+            progress_cb=lambda cur, total, failed: seen.append((cur, total, failed)),
+        )
+
+    # The last call must report the 5th failure, not stop at the 4th —
+    # otherwise a caller checkpointing on this callback never learns the
+    # triggering failure happened at all.
+    assert seen[-1] == (0, 20, mod._FAIL_FAST_AFTER)
 
 
 def test_push_version_progress_counts_successes_not_attempts(real_db_session, monkeypatch) -> None:

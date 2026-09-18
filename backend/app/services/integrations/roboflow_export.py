@@ -339,12 +339,22 @@ def push_version_to_roboflow(
                 logger.warning(
                     "Roboflow export: upload failed for %s (%s)", image_path.name, detail, exc_info=True
                 )
+                # Checkpoint this failure before possibly aborting below —
+                # otherwise the fail-fast raise skips the caller's
+                # progress_cb entirely for the failure that actually
+                # triggered it, leaving job.failed_count/processed_items on
+                # the DB row stuck at whatever the last periodic checkpoint
+                # was (regression: the job row under-reports how many
+                # images were actually attempted).
+                if progress_cb is not None:
+                    progress_cb(uploaded, total, failed)
                 # Systemic failure: nothing has landed and the first N
                 # images all failed. Retrying the rest one-by-one for hours
                 # won't help — stop with a message that names the likely
                 # cause (`run_roboflow_export` puts it on the job row).
                 if uploaded == 0 and failed >= _FAIL_FAST_AFTER:
                     raise RoboflowExportError(_fail_fast_message(seen_statuses, failures)) from exc
+                continue
 
             if progress_cb is not None:
                 progress_cb(uploaded, total, failed)

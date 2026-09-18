@@ -24,6 +24,7 @@ straight off the project's `search()`/`image()` endpoints instead.
 from __future__ import annotations
 
 import logging
+import shutil
 import tempfile
 import time
 import uuid
@@ -74,6 +75,19 @@ _SEARCH_BACKOFF_BASE_S = 1.0
 _IMAGE_DETAIL_MAX_ATTEMPTS = 3
 _IMAGE_DETAIL_BACKOFF_BASE_S = 1.0
 
+# `Version.download()` (the versioned pull's one big blocking call — wait
+# for export generation, then fetch a status/link endpoint, then download
+# and extract the zip) raises a bare `RuntimeError` on any non-200/202
+# response from that status/link endpoint, including a transient 5xx/429,
+# with the original status code already lost by the time it reaches here —
+# so unlike the raw pull's retries above, this can't tell transient and
+# permanent failures apart by status. Retried anyway, on any exception:
+# without it, one blip aborts what's often a multi-minute download outright,
+# and a genuine permanent failure (bad version, deleted project) just fails
+# a few seconds later than it would have.
+_VERSION_DOWNLOAD_MAX_ATTEMPTS = 3
+_VERSION_DOWNLOAD_BACKOFF_BASE_S = 2.0
+
 
 def _describe_unreachable(exc: requests.RequestException, attempts: int) -> str:
     """A `requests.exceptions.ConnectionError` (which is what a DNS
@@ -94,6 +108,38 @@ def _describe_unreachable(exc: requests.RequestException, attempts: int) -> str:
         f"Roboflow /search could not be reached after {attempts} attempts ({exc}). This is "
         "usually a temporary Roboflow-side issue — retry the import in a few minutes."
     )
+
+
+def _download_version_dataset(rf_version, model_format: str, location: str):
+    """Retries `rf_version.download(model_format, location=location)` as a
+    whole (see the module-level comment on `_VERSION_DOWNLOAD_MAX_ATTEMPTS`
+    for why this can't be smarter about which failures are worth retrying).
+
+    `location` is cleared before every attempt: `Version.download()` treats
+    an already-existing `location` as "already downloaded" and returns
+    immediately without downloading anything (`overwrite` defaults to
+    `False`) — without clearing it first, a retry after a failure that left
+    partial files behind (e.g. died mid zip-extract) would silently return
+    that partial, corrupt dataset instead of actually re-downloading."""
+    last_exc: Exception | None = None
+    for attempt in range(1, _VERSION_DOWNLOAD_MAX_ATTEMPTS + 1):
+        if Path(location).exists():
+            shutil.rmtree(location, ignore_errors=True)
+        try:
+            return rf_version.download(model_format, location=location)
+        except Exception as exc:  # noqa: BLE001 — status code already lost by the SDK; see comment above
+            last_exc = exc
+            if attempt == _VERSION_DOWNLOAD_MAX_ATTEMPTS:
+                break
+            logger.warning(
+                "Roboflow version download failed (attempt %d/%d): %s — retrying",
+                attempt,
+                _VERSION_DOWNLOAD_MAX_ATTEMPTS,
+                exc,
+            )
+            time.sleep(_VERSION_DOWNLOAD_BACKOFF_BASE_S * 2 ** (attempt - 1))
+    assert last_exc is not None
+    raise last_exc
 
 
 def _merge_class_config(project: Project, roboflow_names: list[str]) -> dict[int, tuple[int, str]]:
@@ -168,7 +214,7 @@ def import_roboflow_project(
     rf_version = rf_project.version(version)
 
     with tempfile.TemporaryDirectory() as tmp:
-        rf_dataset = rf_version.download("yolov8", location=str(Path(tmp) / "download"))
+        rf_dataset = _download_version_dataset(rf_version, "yolov8", str(Path(tmp) / "download"))
         location = Path(rf_dataset.location)
 
         data_yaml = yaml.safe_load((location / "data.yaml").read_text(encoding="utf-8"))

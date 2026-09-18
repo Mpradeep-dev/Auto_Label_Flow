@@ -106,7 +106,11 @@ def run_roboflow_import(self, job_id: str) -> None:
         job = db.get(RoboflowJob, uuid.UUID(job_id))
         if job is not None:
             job.status = RoboflowJobStatus.FAILED
-            job.error = str(exc)
+            # `RoboflowJob.error` is String(2000) — an oversized message
+            # (e.g. an SDK error embedding a full response body) would
+            # otherwise raise its own DataError out of this commit, leaving
+            # the job stuck at RUNNING instead of FAILED.
+            job.error = str(exc)[:_MAX_ERROR_LEN]
             db.commit()
         writer.finish(status="FAILED", error=str(exc))
         raise
@@ -191,7 +195,7 @@ def run_roboflow_export(self, job_id: str) -> None:
         job = db.get(RoboflowJob, uuid.UUID(job_id))
         if job is not None:
             job.status = RoboflowJobStatus.FAILED
-            job.error = str(exc)
+            job.error = str(exc)[:_MAX_ERROR_LEN]
             db.commit()
         writer.finish(status="FAILED", error=str(exc))
         raise
