@@ -4,6 +4,16 @@ All notable changes to AutoLabelFlow are recorded here. This file is
 maintained automatically by [release-please](https://github.com/googleapis/release-please)
 from [Conventional Commits](https://www.conventionalcommits.org/) on `main`.
 
+## [0.4.6](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.4.5...v0.4.6) (2026-09-18)
+
+
+### Bug Fixes
+
+* retry bare network errors, register packs task, decouple reconcile from worker pool, fix COCO basename collisions ([32dcdc5](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/32dcdc529115ae8b7bddfa659ceb663a8a8ff190))
+* **roboflow:** checkpoint the fail-fast failure, truncate error columns, retry versioned-import download ([73ddb55](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/73ddb55be372c7e804c77717e3a272957b4c710c))
+* **roboflow:** reliable import/export, push-destination control, annotation-job assignment ([e5ac7fc](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/e5ac7fc4467f95e0447b1c515afccaeacd59afec))
+* **roboflow:** resolve import crash on transient blips, add export push-destination control, fix Windows Celery beat docs ([464b323](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/464b32316fb31a3ebb203a0f175700b261cfc7a7))
+
 ## [0.4.5](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.4.4...v0.4.5) (2026-09-17)
 
 
