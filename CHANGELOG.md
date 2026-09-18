@@ -4,6 +4,14 @@ All notable changes to AutoLabelFlow are recorded here. This file is
 maintained automatically by [release-please](https://github.com/googleapis/release-please)
 from [Conventional Commits](https://www.conventionalcommits.org/) on `main`.
 
+## [0.4.7](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.4.6...v0.4.7) (2026-09-18)
+
+
+### Bug Fixes
+
+* parallelize dataset export/import I/O, fix local-storage mkdir race, skip misleading batch lookup on duplicate Roboflow uploads ([e37bc7f](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/e37bc7fae0099a0dbec2924ee5b635664ff4689a))
+* parallelize export/import I/O, fix storage race, handle duplicate Roboflow uploads ([f95a7fc](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/f95a7fc02ed35c6eed44af96330755d48eb6b73a))
+
 ## [0.4.6](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.4.5...v0.4.6) (2026-09-18)
 
 
