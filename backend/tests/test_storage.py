@@ -48,3 +48,41 @@ def test_path_traversal_is_rejected(storage: LocalFileStorage, malicious_key: st
 
 def test_get_url_is_media_relative(storage: LocalFileStorage) -> None:
     assert storage.get_url("a/b.jpg") == "/media/a/b.jpg"
+
+
+def test_concurrent_uploads_into_new_shared_directory_do_not_race(
+    storage: LocalFileStorage, tmp_path: Path
+) -> None:
+    """Regression: several callers now upload into one `LocalFileStorage`
+    concurrently from a bounded thread pool (Roboflow/COCO/CVAT import) —
+    e.g. every image of one dataset landing under the same not-yet-created
+    `.../images/` directory at once. Before `_prepare_dest`'s lock, that
+    raced `Path.resolve()` against a sibling thread's concurrent
+    `mkdir(parents=True)` on Windows, occasionally resolving to a path that
+    spuriously failed the containment check and raised `PathTraversalError`
+    for a perfectly valid key — reproduced directly (~1 in 15 runs of 8
+    barrier-synchronized uploads) before the fix."""
+    import threading
+    import uuid
+    from concurrent.futures import ThreadPoolExecutor
+
+    src = tmp_path.parent / "src2.txt"
+    src.write_bytes(b"hello")
+
+    for trial in range(15):
+        trial_storage = LocalFileStorage(root=tmp_path / f"trial{trial}")
+        barrier = threading.Barrier(8)
+        errors: list[Exception] = []
+
+        def _upload(i: int) -> None:
+            key = f"shared/images/{uuid.uuid4()}.txt"
+            barrier.wait()
+            try:
+                trial_storage.upload(src, key)
+            except Exception as exc:  # noqa: BLE001 - collected and asserted below
+                errors.append(exc)
+
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(pool.map(_upload, range(8)))
+
+        assert errors == []

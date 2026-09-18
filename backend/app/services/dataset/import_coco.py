@@ -16,6 +16,7 @@ import json
 import tempfile
 import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import cv2
@@ -30,6 +31,21 @@ from app.services.annotation.service import create_annotation
 from app.services.dataset.coco_common import coco_ann_to_shape_kwargs, parse_coco
 from app.services.dataset.import_safety import UnsafeArchiveError, safe_extractall
 from app.services.storage.factory import get_storage
+
+# Decoding an image (local disk, fast) and pushing it to storage (a network
+# round-trip on MinIO/prod) has no dependency on any other image in the
+# zip, so staging them one at a time made a multi-hundred-image import
+# scale linearly with image count for no reason. Staged concurrently, up to
+# this many at a time; every `db` write (the `Image` row, its annotations)
+# still happens on the caller's own thread — `Session` isn't thread-safe.
+_IMPORT_MAX_WORKERS = 8
+
+# A `db.commit()` is a full transaction sync; the `db.flush()` used mid-loop
+# only needs to populate the new `Image` row's client-side UUID default
+# before its annotations reference it by id. Committing every
+# `_COMMIT_BATCH_SIZE` images (plus once more at the end) cuts commit count
+# without changing what ends up persisted.
+_COMMIT_BATCH_SIZE = 50
 
 
 class CocoImportError(RuntimeError):
@@ -105,22 +121,41 @@ def import_coco_zip(
             cat_id: _ensure_class_id(project, name) for cat_id, name in categories.items()
         }
 
-        for img_entry in coco.get("images", []):
+        def _stage_image(img_entry: dict) -> tuple[str, int, int] | None:
+            """Runs off the main thread: local decode (for dimensions) plus
+            the storage write, neither of which touches `db`. Returns
+            `None` for a missing/undecodable image, same as the old inline
+            `continue`."""
             src_path = _find_image_file(extract_root, img_entry["file_name"])
             if src_path is None:
-                continue
-
+                return None
             arr = cv2.imread(str(src_path))
             if arr is None:
-                continue
+                return None
             height, width = arr.shape[:2]
             width = img_entry.get("width") or width
             height = img_entry.get("height") or height
-
             key = safe_storage_key(
                 str(project_id), str(dataset.id), "images", original_filename=img_entry["file_name"]
             )
             storage.upload(src_path, key, content_type="image/jpeg")
+            return key, width, height
+
+        img_entries = coco.get("images", [])
+        staged: list[tuple[str, int, int] | None] = []
+        if img_entries:
+            max_workers = max(1, min(_IMPORT_MAX_WORKERS, len(img_entries)))
+            with ThreadPoolExecutor(max_workers=max_workers) as pool:
+                # `.map` preserves input order in its results (each future
+                # still runs concurrently; only the result iteration is
+                # ordered) and re-raises the first exception it hits, same
+                # as the old sequential loop aborting on the first failure.
+                staged = list(pool.map(_stage_image, img_entries))
+
+        for i, (img_entry, result) in enumerate(zip(img_entries, staged), start=1):
+            if result is None:
+                continue
+            key, width, height = result
 
             image = Image(
                 project_id=project_id,
@@ -132,8 +167,7 @@ def import_coco_zip(
                 source_type=ImageSourceType.UPLOAD,
             )
             db.add(image)
-            db.commit()
-            db.refresh(image)
+            db.flush()
 
             for ann in annotations_by_image.get(img_entry["id"], []):
                 class_id = class_id_by_category.get(ann["category_id"])
@@ -149,6 +183,8 @@ def import_coco_zip(
                     actor="coco-import",
                     **coco_ann_to_shape_kwargs(ann, width, height),
                 )
+            if i % _COMMIT_BATCH_SIZE == 0:
+                db.commit()
 
     db.commit()
     return dataset

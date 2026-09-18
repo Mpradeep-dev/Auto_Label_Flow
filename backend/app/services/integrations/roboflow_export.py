@@ -18,6 +18,7 @@ import re
 import tempfile
 import time
 import uuid
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
 from pathlib import Path
 from typing import Callable
 
@@ -77,6 +78,18 @@ _AUTH_STATUSES = frozenset({401, 403})
 # nothing — over-quota / expired-plan / wrong-key / Roboflow-down all look
 # like this, and none are fixed by trying the next image.
 _FAIL_FAST_AFTER = 5
+
+# Each upload is one blocking HTTP round-trip with no relationship to the
+# others — running them one at a time made total export time scale linearly
+# with image count for no reason (a multi-hundred-image push spent almost
+# all its wall-clock time waiting on network latency, not CPU). Uploads run
+# `_EXPORT_MAX_WORKERS` at a time instead; kept modest so a single export
+# doesn't hammer Roboflow's upload endpoint hard enough to make its own 429s
+# more likely. Fail-fast (below) can now overshoot `_FAIL_FAST_AFTER` by up
+# to `_EXPORT_MAX_WORKERS - 1` real attempts, since that many can already be
+# in flight before the threshold is noticed — an acceptable bound in
+# exchange for concurrency, and still nowhere near "every image."
+_EXPORT_MAX_WORKERS = 8
 
 
 class RoboflowExportError(RuntimeError):
@@ -174,18 +187,39 @@ def _assign_annotating_review_job(project, *, batch_name: str, labeler_email: st
     return None
 
 
-def _upload_one_image(project, **upload_kwargs) -> None:
+def _is_duplicate_upload(result) -> bool:
+    """Roboflow dedupes uploads by exact file content within a project: an
+    image whose bytes already exist there doesn't raise — `project.upload()`
+    returns normally with that image's `"image"` dict carrying
+    `"duplicate": true` instead of landing in the requested batch (see
+    `rfapi.upload_image`'s `if not (responsejson.get("success") or
+    responsejson.get("duplicate")): raise`). `project.upload()` always
+    returns a list here (one entry per call, since a single `image_path` is
+    always passed) — defensive about the shape regardless, since it's an
+    untyped SDK return and test doubles may stub it more loosely."""
+    if not result:
+        return False
+    try:
+        image = result[0].get("image") or {}
+    except (AttributeError, TypeError, IndexError):
+        return False
+    return bool(image.get("duplicate"))
+
+
+def _upload_one_image(project, **upload_kwargs) -> bool:
     """`project.upload(**upload_kwargs)` with a bounded retry on a transient
     5xx/429 (classified via `status_code`) or a bare connection/timeout
     error (no `status_code` at all — `getattr(exc, "status_code", None)`
     used to fall through to `None`, which isn't in `_UPLOAD_RETRY_STATUSES`,
     so a plain network blip was never retried and immediately failed the
     image). Re-raises the last error once attempts are exhausted, and
-    immediately for any non-transient HTTP status."""
+    immediately for any non-transient HTTP status. Returns whether Roboflow
+    reported this image as a pre-existing duplicate rather than a new
+    upload — see `_is_duplicate_upload`."""
     for attempt in range(1, _UPLOAD_MAX_ATTEMPTS + 1):
         try:
-            project.upload(**upload_kwargs)
-            return
+            result = project.upload(**upload_kwargs)
+            return _is_duplicate_upload(result)
         except Exception as exc:  # noqa: BLE001 - re-raised below, classified by status
             status = getattr(exc, "status_code", None)
             transient = status in _UPLOAD_RETRY_STATUSES or (
@@ -295,14 +329,7 @@ def push_version_to_roboflow(
         if progress_cb is not None:
             progress_cb(0, total, 0)
 
-        uploaded = 0
-        failed = 0
-        failures: list[str] = []
-        seen_statuses: list[int | None] = []
-        for i, (split, image_path) in enumerate(pending):
-            if should_cancel is not None and should_cancel():
-                break
-
+        def _upload_kwargs(split: str, image_path: Path) -> dict:
             roboflow_split = _SPLIT_TO_ROBOFLOW[split]
             labels_dir = root / "labels" / split
             label_path = labels_dir / f"{image_path.stem}.txt"
@@ -319,60 +346,116 @@ def push_version_to_roboflow(
                 and label_path.stat().st_size > 0
                 and upload_target != RoboflowUploadTarget.UNANNOTATED.value
             )
-            try:
-                _upload_one_image(
-                    project,
-                    image_path=str(image_path),
-                    annotation_path=str(label_path) if has_annotation else None,
-                    annotation_labelmap=str(data_yaml_path),
-                    split=roboflow_split,
-                    batch_name=batch_name,
-                    # Ground truth is auto-confirmed by Roboflow and skips
-                    # straight to the "Dataset" column of the Annotate
-                    # board. These labels come from our pipeline, not a
-                    # human, so the default target (`ANNOTATING`) instead
-                    # pushes them as a prediction: Roboflow then queues the
-                    # image for review rather than treating it as already
-                    # done. `DATASET` opts into the ground-truth behavior
-                    # explicitly, when the caller wants to skip that review
-                    # step.
-                    is_prediction=upload_target != RoboflowUploadTarget.DATASET.value,
-                )
-                uploaded += 1
-            except Exception as exc:  # a single bad image shouldn't abort the whole push
-                failed += 1
-                seen_statuses.append(getattr(exc, "status_code", None))
-                detail = _describe_upload_error(exc)
-                failures.append(f"{image_path.name}: {detail}")
-                logger.warning(
-                    "Roboflow export: upload failed for %s (%s)", image_path.name, detail, exc_info=True
-                )
-                # Checkpoint this failure before possibly aborting below —
-                # otherwise the fail-fast raise skips the caller's
-                # progress_cb entirely for the failure that actually
-                # triggered it, leaving job.failed_count/processed_items on
-                # the DB row stuck at whatever the last periodic checkpoint
-                # was (regression: the job row under-reports how many
-                # images were actually attempted).
-                if progress_cb is not None:
-                    progress_cb(uploaded, total, failed)
-                # Systemic failure: nothing has landed and the first N
-                # images all failed. Retrying the rest one-by-one for hours
-                # won't help — stop with a message that names the likely
-                # cause (`run_roboflow_export` puts it on the job row).
-                if uploaded == 0 and failed >= _FAIL_FAST_AFTER:
-                    raise RoboflowExportError(_fail_fast_message(seen_statuses, failures)) from exc
-                continue
+            return dict(
+                image_path=str(image_path),
+                annotation_path=str(label_path) if has_annotation else None,
+                annotation_labelmap=str(data_yaml_path),
+                split=roboflow_split,
+                batch_name=batch_name,
+                # Ground truth is auto-confirmed by Roboflow and skips
+                # straight to the "Dataset" column of the Annotate board.
+                # These labels come from our pipeline, not a human, so the
+                # default target (`ANNOTATING`) instead pushes them as a
+                # prediction: Roboflow then queues the image for review
+                # rather than treating it as already done. `DATASET` opts
+                # into the ground-truth behavior explicitly, when the
+                # caller wants to skip that review step.
+                is_prediction=upload_target != RoboflowUploadTarget.DATASET.value,
+            )
 
-            if progress_cb is not None:
-                progress_cb(uploaded, total, failed)
+        uploaded = 0
+        failed = 0
+        duplicates = 0
+        failures: list[str] = []
+        seen_statuses: list[int | None] = []
+        fail_fast_error: RoboflowExportError | None = None
+
+        # Uploads run `_EXPORT_MAX_WORKERS` at a time in a sliding window:
+        # keep that many in flight, and top the window back up as each one
+        # finishes. `should_cancel`/fail-fast are only checked between
+        # completions (there's no way to interrupt an upload already in
+        # flight), so both can overshoot by up to `max_workers - 1` real
+        # attempts beyond the point they were noticed — bounded, and the
+        # price of not doing every upload one at a time.
+        max_workers = max(1, min(_EXPORT_MAX_WORKERS, len(pending))) if pending else 1
+        pending_iter = iter(pending)
+        in_flight: dict[Future, Path] = {}
+
+        def _cancelled() -> bool:
+            return should_cancel is not None and should_cancel()
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+
+            def _top_up() -> None:
+                while len(in_flight) < max_workers and not _cancelled():
+                    try:
+                        split, image_path = next(pending_iter)
+                    except StopIteration:
+                        return
+                    future = pool.submit(_upload_one_image, project, **_upload_kwargs(split, image_path))
+                    in_flight[future] = image_path
+
+            _top_up()
+            while in_flight:
+                done, _ = wait(in_flight, return_when=FIRST_COMPLETED)
+                for future in done:
+                    image_path = in_flight.pop(future)
+                    try:
+                        is_duplicate = future.result()
+                        uploaded += 1
+                        if is_duplicate:
+                            duplicates += 1
+                    except Exception as exc:  # a single bad image shouldn't abort the whole push
+                        failed += 1
+                        seen_statuses.append(getattr(exc, "status_code", None))
+                        detail = _describe_upload_error(exc)
+                        failures.append(f"{image_path.name}: {detail}")
+                        logger.warning(
+                            "Roboflow export: upload failed for %s (%s)", image_path.name, detail, exc_info=True
+                        )
+                    # Checkpointed for every attempt, success or failure —
+                    # otherwise a fail-fast abort below would skip the
+                    # caller's progress_cb for the failures that triggered
+                    # it, leaving job.failed_count/processed_items on the DB
+                    # row understating how many images were actually
+                    # attempted.
+                    if progress_cb is not None:
+                        progress_cb(uploaded, total, failed)
+                    # Systemic failure: nothing has landed and the first N
+                    # images all failed. Retrying the rest for hours won't
+                    # help — stop with a message that names the likely cause
+                    # (`run_roboflow_export` puts it on the job row).
+                    if fail_fast_error is None and uploaded == 0 and failed >= _FAIL_FAST_AFTER:
+                        fail_fast_error = RoboflowExportError(_fail_fast_message(seen_statuses, failures))
+                if fail_fast_error is not None or _cancelled():
+                    for future in in_flight:
+                        future.cancel()
+                    break
+                _top_up()
+
+        if fail_fast_error is not None:
+            raise fail_fast_error
 
     logger.info(
         "Roboflow export finished: %d uploaded, %d failed (batch=%r)", uploaded, failed, batch_name
     )
 
     annotation_job_note: str | None = None
-    if upload_target == RoboflowUploadTarget.ANNOTATING.value and uploaded > 0:
+    new_uploads = uploaded - duplicates
+    if uploaded > 0 and new_uploads == 0:
+        # Every "successful" upload was actually Roboflow reporting the
+        # image's content already exists in this project — no batch was
+        # ever created under `batch_name` for this push, so searching for
+        # one (`_assign_annotating_review_job`) would only produce the
+        # misleading "couldn't find batch ... sitting in Unassigned"
+        # message when in fact nothing new landed anywhere.
+        annotation_job_note = (
+            f"All {duplicates} image(s) were skipped as duplicates already present in this "
+            "Roboflow project (Roboflow doesn't re-add an image whose file content exactly "
+            "matches one already there) — no new images were added, so no batch or review job "
+            "was created."
+        )
+    elif upload_target == RoboflowUploadTarget.ANNOTATING.value and uploaded > 0:
         annotation_job_note = _assign_annotating_review_job(
             project, batch_name=batch_name, labeler_email=config.get("default_labeler_email")
         )

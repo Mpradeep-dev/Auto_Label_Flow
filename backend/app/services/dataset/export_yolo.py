@@ -20,6 +20,7 @@ from __future__ import annotations
 import shutil
 import tempfile
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import yaml
@@ -29,8 +30,18 @@ from app.core.security import safe_storage_key
 from app.models.annotation import AnnotationEvent
 from app.models.dataset import Dataset
 from app.models.dataset_version import DatasetVersion
-from app.services.dataset.version_data import VersionDataError, load_version_data, out_image_filename
+from app.services.dataset.version_data import VersionDataError, VersionImageData, load_version_data, out_image_filename
 from app.services.storage.factory import get_storage
+
+# Each image is one `storage.read_bytes()` round-trip (a network call on
+# MinIO/prod) with no dependency on any other image, so reading them one at
+# a time made materialization scale linearly with image count for no
+# reason — and this is on the critical path of every YOLO export, local
+# training run, *and* `push_version_to_roboflow()` (which materializes the
+# whole dataset here before its own upload loop even starts). Read up to
+# this many concurrently; writing each straight to its own file (unique
+# per image id, never shared) needs no locking.
+_MATERIALIZE_MAX_WORKERS = 8
 
 
 class ExportError(RuntimeError):
@@ -63,13 +74,24 @@ def write_yolo_dataset(db: Session, *, version_id: uuid.UUID, root: Path) -> Pat
         (root / "images" / split).mkdir(parents=True, exist_ok=True)
         (root / "labels" / split).mkdir(parents=True, exist_ok=True)
 
-    for vi in data.images:
+    def _materialize_one(vi: VersionImageData) -> None:
         out_name = out_image_filename(vi.image)
         dest_image_path = root / "images" / vi.split / out_name
         dest_image_path.write_bytes(storage.read_bytes(vi.image.storage_key))
 
         label_lines = [_yolo_line(e) for e in vi.events]
         (root / "labels" / vi.split / f"{vi.image.id}.txt").write_text("\n".join(label_lines), encoding="utf-8")
+
+    if data.images:
+        max_workers = max(1, min(_MATERIALIZE_MAX_WORKERS, len(data.images)))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            # `.result()` on each, in submission order, so the first failure
+            # (e.g. a missing storage key) raises and aborts the export
+            # exactly as the old sequential loop did — nothing here needs
+            # completion-order handling since there's no progress/cancel
+            # callback and every image writes to its own, independent path.
+            for future in [pool.submit(_materialize_one, vi) for vi in data.images]:
+                future.result()
 
     data_yaml = {
         "path": str(root),

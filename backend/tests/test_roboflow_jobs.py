@@ -54,6 +54,54 @@ def _fake_search_post(url: str, json: dict | None = None, timeout: int = 30) -> 
     return _FakeSearchResponse([] if offset > 0 else list(_RAW_SEARCH_ITEMS))
 
 
+def _image_details_payload(image_id: str) -> dict:
+    if image_id == "raw-img-1":
+        return {
+            "id": image_id,
+            "name": "raw1.jpg",
+            "annotation": {
+                "width": 64,
+                "height": 48,
+                "boxes": [{"label": "cone", "x": "32.0", "y": "24.0", "width": "10.0", "height": "10.0"}],
+            },
+            "urls": {"original": "http://fake-roboflow-cdn.test/raw1.jpg"},
+        }
+    return {
+        "id": image_id,
+        "name": "raw2.jpg",
+        "annotation": {"width": 64, "height": 48, "boxes": []},
+        "urls": {"original": "http://fake-roboflow-cdn.test/raw2.jpg"},
+    }
+
+
+class _FakeImageDetailsResponse:
+    """Stands in for the `requests.get(.../images/<id>)` response that
+    `roboflow_import._rf_image_details` now inspects directly (the SDK's
+    own `Project.image()` is bypassed — same reasoning as `_rf_search_page`
+    bypassing `Project.search()`: no timeout on the SDK's own call)."""
+
+    def __init__(self, image_id: str, status_code: int = 200) -> None:
+        self.status_code = status_code
+        self._image_id = image_id
+
+    def json(self) -> dict:
+        return {"image": _image_details_payload(self._image_id)}
+
+
+def _image_id_from_url(url: str) -> str:
+    return url.split("/images/")[1].split("?")[0]
+
+
+def _fake_get(url: str, params: dict | None = None, timeout: int = 30):
+    """Default `requests.get` stand-in for the raw-pull tests below: an
+    image-detail request (`.../images/<id>`, `api_key` sent via `params`
+    now, not baked into `url`) returns the fake per-image payload, anything
+    else (the CDN download) returns fake JPEG bytes."""
+    if "/images/" in url:
+        return _FakeImageDetailsResponse(_image_id_from_url(url))
+    return _FakeHTTPResponse(_jpeg_bytes())
+
+
 class _FakeDownloadResult:
     def __init__(self, location: str) -> None:
         self.location = location
@@ -134,27 +182,10 @@ class _FakeRoboflowProject:
         self.uploads.append((image_path, annotation_path, split, batch_name, is_prediction))
 
     # Raw (unversioned) pull path — no `.version()` here. The service no
-    # longer calls `rf_project.search()`; it POSTs to /search directly, so
-    # that half is faked via `_fake_search_post` (monkeypatched onto
-    # `roboflow_import.requests.post`). `image()` per-item detail stays here.
-    def image(self, image_id: str) -> dict:
-        if image_id == "raw-img-1":
-            return {
-                "id": image_id,
-                "name": "raw1.jpg",
-                "annotation": {
-                    "width": 64,
-                    "height": 48,
-                    "boxes": [{"label": "cone", "x": "32.0", "y": "24.0", "width": "10.0", "height": "10.0"}],
-                },
-                "urls": {"original": "http://fake-roboflow-cdn.test/raw1.jpg"},
-            }
-        return {
-            "id": image_id,
-            "name": "raw2.jpg",
-            "annotation": {"width": 64, "height": 48, "boxes": []},
-            "urls": {"original": "http://fake-roboflow-cdn.test/raw2.jpg"},
-        }
+    # longer calls `rf_project.search()` or `rf_project.image()`; it hits
+    # /search and the per-image detail endpoint directly, so both are faked
+    # via `_fake_search_post`/`_fake_get` (monkeypatched onto
+    # `roboflow_import.requests.post`/`.get`) instead of a method here.
 
 
 class _FakeHTTPResponse:
@@ -258,9 +289,6 @@ def test_roboflow_import_job_raw_pull_when_no_version(
     (raw `search()`/`image()` pull) instead of `.download()`."""
     import app.services.integrations.roboflow_import as roboflow_import_module
 
-    def _fake_get(url: str, timeout: int = 30) -> _FakeHTTPResponse:
-        return _FakeHTTPResponse(_jpeg_bytes())
-
     monkeypatch.setattr(roboflow_import_module.requests, "get", _fake_get)
     monkeypatch.setattr(roboflow_import_module.requests, "post", _fake_search_post)
 
@@ -299,9 +327,6 @@ def test_roboflow_import_job_raw_pull_unannotated_only(
     already has a box, must be skipped entirely."""
     import app.services.integrations.roboflow_import as roboflow_import_module
 
-    def _fake_get(url: str, timeout: int = 30) -> _FakeHTTPResponse:
-        return _FakeHTTPResponse(_jpeg_bytes())
-
     monkeypatch.setattr(roboflow_import_module.requests, "get", _fake_get)
     monkeypatch.setattr(roboflow_import_module.requests, "post", _fake_search_post)
 
@@ -333,9 +358,6 @@ def test_roboflow_import_job_raw_pull_images_only_skips_labels(
     `unannotated_only`, nothing is filtered out) but must not create the
     annotation that raw-img-1's fake `annotation.boxes` carries."""
     import app.services.integrations.roboflow_import as roboflow_import_module
-
-    def _fake_get(url: str, timeout: int = 30) -> _FakeHTTPResponse:
-        return _FakeHTTPResponse(_jpeg_bytes())
 
     monkeypatch.setattr(roboflow_import_module.requests, "get", _fake_get)
     monkeypatch.setattr(roboflow_import_module.requests, "post", _fake_search_post)
@@ -401,9 +423,6 @@ def test_roboflow_import_job_raw_pull_by_batch_id(
     import app.services.integrations.roboflow_import as roboflow_import_module
 
     captured_payloads: list[dict] = []
-
-    def _fake_get(url: str, timeout: int = 30) -> _FakeHTTPResponse:
-        return _FakeHTTPResponse(_jpeg_bytes())
 
     def _fake_post(url: str, json: dict | None = None, timeout: int = 30) -> _FakeSearchResponse:
         captured_payloads.append(json or {})
@@ -588,21 +607,28 @@ def test_rf_image_details_retries_bad_json_then_succeeds(monkeypatch) -> None:
     non-JSON body used to blow up the whole import as an opaque
     `json.JSONDecodeError: Expecting value: line 2 column 1 (char 1)`
     (observed live, 35/40 images in). `_rf_image_details` must retry that
-    failure and recover once the SDK call succeeds again."""
+    failure and recover once the request succeeds again."""
     import app.services.integrations.roboflow_import as mod
 
     calls = {"n": 0}
 
-    class _FakeProject:
-        def image(self, image_id: str) -> dict:
-            calls["n"] += 1
-            if calls["n"] < 3:
-                raise ValueError("Expecting value: line 2 column 1 (char 1)")
-            return {"id": image_id, "urls": {"original": "http://x/img.jpg"}}
+    class _BadJSONResp:
+        status_code = 200
 
+        def json(self) -> dict:
+            raise ValueError("Expecting value: line 2 column 1 (char 1)")
+
+    def fake_get(url, params=None, timeout=30):
+        calls["n"] += 1
+        if calls["n"] < 3:
+            return _BadJSONResp()
+        return _SeqResp(200, {"image": {"id": "img-1", "urls": {"original": "http://x/img.jpg"}}})
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
     monkeypatch.setattr(mod.time, "sleep", lambda s: None)
 
-    out = mod._rf_image_details(_FakeProject(), "img-1")
+    rf_project = type("P", (), {"id": "ws/proj"})()
+    out = mod._rf_image_details(rf_project, "key", "img-1")
     assert out == {"id": "img-1", "urls": {"original": "http://x/img.jpg"}}
     assert calls["n"] == 3
 
@@ -614,14 +640,49 @@ def test_rf_image_details_persistent_failure_returns_none(monkeypatch) -> None:
     multi-image import over one persistently bad item."""
     import app.services.integrations.roboflow_import as mod
 
-    class _FakeProject:
-        def image(self, image_id: str) -> dict:
-            raise RuntimeError("Image not found")
+    def fake_get(url, params=None, timeout=30):
+        return _SeqResp(200, {"error": "Image not found"})
 
+    monkeypatch.setattr(mod.requests, "get", fake_get)
     monkeypatch.setattr(mod.time, "sleep", lambda s: None)
 
-    out = mod._rf_image_details(_FakeProject(), "img-1")
+    rf_project = type("P", (), {"id": "ws/proj"})()
+    out = mod._rf_image_details(rf_project, "key", "img-1")
     assert out is None
+
+
+def test_rf_image_details_passes_bounded_timeout(monkeypatch) -> None:
+    """Regression: the SDK's `Project.image()` ends with a bare
+    `requests.get(url).json()` — no timeout at all, so a hung connection
+    (as opposed to a 5xx/429, which at least raises) blocks forever. Under
+    the raw pull's concurrent per-image fetcher (`_run_windowed`), that
+    freezes the whole import's progress AND its cancel check (only
+    re-polled once a fetch completes), so Cancel does nothing. Every
+    `_rf_image_details` request must carry an explicit timeout so a hang
+    always surfaces as a retryable error instead."""
+    import app.services.integrations.roboflow_import as mod
+
+    captured: dict = {}
+
+    def fake_get(url, params=None, timeout=None):
+        captured["url"] = url
+        captured["params"] = params
+        captured["timeout"] = timeout
+        return _SeqResp(200, {"image": {"id": "img-1"}})
+
+    monkeypatch.setattr(mod.requests, "get", fake_get)
+
+    rf_project = type("P", (), {"id": "ws/proj"})()
+    out = mod._rf_image_details(rf_project, "super-secret-key", "img-1")
+
+    assert out == {"id": "img-1"}
+    assert captured["timeout"] == mod._IMAGE_DETAIL_TIMEOUT_S
+    assert captured["timeout"] is not None
+    # The key must travel as a query param, not be baked into `url` itself —
+    # otherwise it ends up in any log line or error message that includes
+    # the URL (see roboflow_import.py's `_rf_image_details` docstring).
+    assert "super-secret-key" not in captured["url"]
+    assert captured["params"] == {"api_key": "super-secret-key"}
 
 
 def test_download_version_dataset_retries_transient_failure_then_succeeds(monkeypatch, tmp_path) -> None:
@@ -713,48 +774,19 @@ def test_roboflow_import_job_skips_one_bad_image_instead_of_failing_job(
     other, healthy image still imports and the job completes."""
     import app.services.integrations.roboflow_import as roboflow_import_module
 
-    def _fake_get(url: str, timeout: int = 30) -> _FakeHTTPResponse:
+    def _flaky_get(url: str, params: dict | None = None, timeout: int = 30):
+        if "/images/" in url:
+            image_id = _image_id_from_url(url)
+            if image_id == "raw-img-1":
+                raise ValueError("Expecting value: line 2 column 1 (char 1)")
+            return _FakeImageDetailsResponse(image_id)
         return _FakeHTTPResponse(_jpeg_bytes())
 
-    monkeypatch.setattr(roboflow_import_module.requests, "get", _fake_get)
+    monkeypatch.setattr(roboflow_import_module.requests, "get", _flaky_get)
     monkeypatch.setattr(roboflow_import_module.requests, "post", _fake_search_post)
     monkeypatch.setattr(roboflow_import_module.time, "sleep", lambda s: None)
 
     project_id = connected_roboflow.post("/api/v1/projects", json={"name": unique_name}).json()["id"]
-
-    import app.services.integrations.roboflow_connect as connect_module
-
-    real_get_client = connect_module.get_client
-
-    def _patched_get_client(db):
-        rf, config = real_get_client(db)
-        real_workspace = rf.workspace
-
-        def _workspace(name=None):
-            ws = real_workspace(name)
-            real_project = ws.project
-
-            def _project(slug):
-                proj = real_project(slug)
-                real_image = proj.image
-
-                def _flaky_image(image_id: str) -> dict:
-                    if image_id == "raw-img-1":
-                        raise ValueError("Expecting value: line 2 column 1 (char 1)")
-                    return real_image(image_id)
-
-                proj.image = _flaky_image
-                return proj
-
-            ws.project = _project
-            return ws
-
-        rf.workspace = _workspace
-        return rf, config
-
-    monkeypatch.setattr(
-        "app.services.integrations.roboflow_import.get_client", _patched_get_client
-    )
 
     resp = connected_roboflow.post(
         f"/api/v1/projects/{project_id}/import/roboflow",
@@ -785,9 +817,6 @@ def test_roboflow_import_job_cancel_stops_early(
     from app.models.roboflow_job import RoboflowJob, RoboflowJobKind, RoboflowJobStatus
     from app.workers.progress import request_cancel
     from app.workers.tasks.roboflow import run_roboflow_import
-
-    def _fake_get(url: str, timeout: int = 30) -> _FakeHTTPResponse:
-        return _FakeHTTPResponse(_jpeg_bytes())
 
     monkeypatch.setattr(roboflow_import_module.requests, "get", _fake_get)
     monkeypatch.setattr(roboflow_import_module.requests, "post", _fake_search_post)
@@ -866,9 +895,7 @@ def test_roboflow_import_job_cancel_endpoint_sets_flag(
     job; this only proves the route exists and doesn't 404/500."""
     import app.services.integrations.roboflow_import as roboflow_import_module
 
-    monkeypatch.setattr(
-        roboflow_import_module.requests, "get", lambda url, timeout=30: _FakeHTTPResponse(_jpeg_bytes())
-    )
+    monkeypatch.setattr(roboflow_import_module.requests, "get", _fake_get)
     monkeypatch.setattr(roboflow_import_module.requests, "post", _fake_search_post)
 
     project_id = connected_roboflow.post("/api/v1/projects", json={"name": unique_name}).json()["id"]
@@ -1357,12 +1384,18 @@ def test_fail_fast_message_points_at_api_key_for_auth_failures() -> None:
 
 def test_push_version_fails_fast_after_threshold(real_db_session, monkeypatch) -> None:
     """A run where nothing uploads and the first `_FAIL_FAST_AFTER` images
-    all 5xx must abort with an actionable error — not attempt every image."""
+    all 5xx must abort with an actionable error — not attempt every image.
+
+    Pins `_EXPORT_MAX_WORKERS` to 1 to test the exact, deterministic
+    sequential count; `test_push_version_fail_fast_bounded_overshoot_under_concurrency`
+    below covers the concurrent case, where this can overshoot by up to
+    `max_workers - 1` real attempts."""
     import uuid as _uuid
 
     from app.services.integrations import roboflow_export as mod
 
     monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+    monkeypatch.setattr(mod, "_EXPORT_MAX_WORKERS", 1)
 
     def _fake_write_yolo_dataset(db, *, version_id, root):
         for split in ("train", "valid", "test"):
@@ -1413,12 +1446,16 @@ def test_push_version_fail_fast_checkpoints_the_triggering_failure(real_db_sessi
     never learned about that last failure — the job row's failed_count/
     processed_items understated how many images were actually attempted.
     `progress_cb` must see every failure, including the one that trips
-    fail-fast, before the exception propagates."""
+    fail-fast, before the exception propagates.
+
+    Pins `_EXPORT_MAX_WORKERS` to 1 so the callback sequence is
+    deterministic — see the note on `test_push_version_fails_fast_after_threshold`."""
     import uuid as _uuid
 
     from app.services.integrations import roboflow_export as mod
 
     monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+    monkeypatch.setattr(mod, "_EXPORT_MAX_WORKERS", 1)
 
     def _fake_write_yolo_dataset(db, *, version_id, root):
         for split in ("train", "valid", "test"):
@@ -1466,12 +1503,17 @@ def test_push_version_fail_fast_checkpoints_the_triggering_failure(real_db_sessi
 def test_push_version_progress_counts_successes_not_attempts(real_db_session, monkeypatch) -> None:
     """The progress callback's first arg must be the running count of images
     that actually reached Roboflow — never the loop index — so a half-failing
-    push can't show a bar racing ahead of what landed."""
+    push can't show a bar racing ahead of what landed.
+
+    Pins `_EXPORT_MAX_WORKERS` to 1 so the exact interleaving of
+    successes/failures below is deterministic instead of depending on
+    thread scheduling."""
     import uuid as _uuid
 
     from app.services.integrations import roboflow_export as mod
 
     monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+    monkeypatch.setattr(mod, "_EXPORT_MAX_WORKERS", 1)
 
     def _fake_write_yolo_dataset(db, *, version_id, root):
         for split in ("train", "valid", "test"):
@@ -1516,6 +1558,231 @@ def test_push_version_progress_counts_successes_not_attempts(real_db_session, mo
     assert seen[0] == (0, 6, 0)  # primed once the count is known
     assert [c for c, _, _ in seen] == [0, 1, 1, 2, 2, 3, 3]  # success count, monotonic, never the index
     assert [f for _, _, f in seen] == [0, 0, 1, 1, 2, 2, 3]
+
+
+def test_push_version_uploads_run_concurrently(real_db_session, monkeypatch) -> None:
+    """Regression guard for the whole point of the windowed executor in
+    `push_version_to_roboflow`: uploads must actually overlap in time, not
+    just be dispatched through a thread pool that happens to run them one
+    at a time. Each fake upload blocks briefly while holding a counter of
+    how many are concurrently inside `.upload()` — if that peak never rises
+    above 1, uploads are still effectively sequential."""
+    import threading
+    import uuid as _uuid
+
+    from app.services.integrations import roboflow_export as mod
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        for split in ("train", "valid", "test"):
+            (root / "images" / split).mkdir(parents=True)
+            (root / "labels" / split).mkdir(parents=True)
+        for i in range(8):
+            (root / "images" / "train" / f"img{i}.jpg").write_bytes(_jpeg_bytes())
+        (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+        return root / "data.yaml"
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+    monkeypatch.setattr(mod, "_EXPORT_MAX_WORKERS", 4)
+
+    lock = threading.Lock()
+    active = {"current": 0, "peak": 0}
+
+    class _Proj:
+        def upload(self, **kwargs):
+            with lock:
+                active["current"] += 1
+                active["peak"] = max(active["peak"], active["current"])
+            threading.Event().wait(0.05)
+            with lock:
+                active["current"] -= 1
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {}))
+
+    uploaded, failed, _, _ = mod.push_version_to_roboflow(
+        real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
+    )
+
+    assert (uploaded, failed) == (8, 0)
+    assert active["peak"] > 1
+
+
+def test_push_version_fail_fast_bounded_overshoot_under_concurrency(real_db_session, monkeypatch) -> None:
+    """With concurrency > 1, fail-fast can't stop at exactly `_FAIL_FAST_AFTER`
+    attempts (some are already in flight before the threshold is noticed on
+    the main thread) — but the overshoot must stay bounded by
+    `_EXPORT_MAX_WORKERS - 1`, not degrade back into "attempt every image."""
+    import threading
+    import uuid as _uuid
+
+    from app.services.integrations import roboflow_export as mod
+
+    monkeypatch.setattr(mod.time, "sleep", lambda s: None)
+    monkeypatch.setattr(mod, "_EXPORT_MAX_WORKERS", 4)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        for split in ("train", "valid", "test"):
+            (root / "images" / split).mkdir(parents=True)
+            (root / "labels" / split).mkdir(parents=True)
+        for i in range(20):
+            (root / "images" / "train" / f"img{i:02d}.jpg").write_bytes(_jpeg_bytes())
+            (root / "labels" / "train" / f"img{i:02d}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        data_yaml = root / "data.yaml"
+        data_yaml.write_text("names: ['cone']\n", encoding="utf-8")
+        return data_yaml
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    # A set, not a list: each image is retried up to `_UPLOAD_MAX_ATTEMPTS`
+    # times on a 500 before counting as one failed image — this tracks
+    # distinct images attempted, matching what `_FAIL_FAST_AFTER` counts.
+    attempted: set[str] = set()
+    lock = threading.Lock()
+
+    class _Proj:
+        def upload(self, *, image_path, **kwargs):
+            with lock:
+                attempted.add(image_path)
+            raise _upload_error(500)
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {}))
+
+    with pytest.raises(mod.RoboflowExportError) as excinfo:
+        mod.push_version_to_roboflow(
+            real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
+        )
+
+    assert "quota" in str(excinfo.value).lower()
+    assert mod._FAIL_FAST_AFTER <= len(attempted) <= mod._FAIL_FAST_AFTER + mod._EXPORT_MAX_WORKERS - 1
+    assert len(attempted) < 20
+
+
+def test_push_version_all_duplicates_skips_batch_lookup_with_clear_note(real_db_session, monkeypatch) -> None:
+    """Roboflow silently no-ops an upload whose file content already exists
+    in the project — it returns `{"duplicate": true}` instead of raising, so
+    the SDK call "succeeds" but no image lands in the newly-named batch.
+    Previously this fell through to `_assign_annotating_review_job`, which
+    then searched for a batch that was never created and told the user
+    their images were "sitting in Unassigned" — misleading, since nothing
+    new was uploaded at all. When every upload comes back as a duplicate,
+    the export must skip the pointless batch lookup and say so plainly."""
+    import uuid as _uuid
+
+    from app.services.integrations import roboflow_export as mod
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        for split in ("train", "valid", "test"):
+            (root / "images" / split).mkdir(parents=True)
+            (root / "labels" / split).mkdir(parents=True)
+        for i in range(3):
+            (root / "images" / "train" / f"img{i}.jpg").write_bytes(_jpeg_bytes())
+        (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+        return root / "data.yaml"
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    get_batches_calls = []
+
+    class _Proj:
+        def upload(self, **kwargs):
+            return [{"image": {"id": "existing-image-id", "success": False, "duplicate": True}}]
+
+        def get_batches(self):
+            get_batches_calls.append(1)
+            return {"batches": []}
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com"}))
+
+    uploaded, failed, failures, note = mod.push_version_to_roboflow(
+        real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
+    )
+
+    assert (uploaded, failed) == (3, 0)
+    assert not get_batches_calls  # never searched for a batch that was never created
+    assert note is not None
+    assert "duplicate" in note.lower()
+    assert "couldn't find batch" not in note.lower()
+
+
+def test_push_version_mixed_new_and_duplicate_uploads_still_files_review_job(
+    real_db_session, monkeypatch
+) -> None:
+    """At least one genuinely new upload means the batch really was created
+    on Roboflow — the review job must still be filed for it normally, not
+    short-circuited into the all-duplicate note."""
+    import uuid as _uuid
+
+    from app.services.integrations import roboflow_export as mod
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        for split in ("train", "valid", "test"):
+            (root / "images" / split).mkdir(parents=True)
+            (root / "labels" / split).mkdir(parents=True)
+        for i in range(2):
+            (root / "images" / "train" / f"img{i}.jpg").write_bytes(_jpeg_bytes())
+        (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+        return root / "data.yaml"
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    calls = {"n": 0}
+
+    class _Proj:
+        def upload(self, *, batch_name, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                return [{"image": {"id": "new-image-id", "success": True, "duplicate": False}}]
+            return [{"image": {"id": "existing-image-id", "success": False, "duplicate": True}}]
+
+        def get_batches(self):
+            return {"batches": [{"id": "batch-id-1", "name": "autolabelflow", "images": 1}]}
+
+        def create_annotation_job(self, **kwargs):
+            return {"id": "job-1"}
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com"}))
+
+    uploaded, failed, failures, note = mod.push_version_to_roboflow(
+        real_db_session,
+        version_id=_uuid.uuid4(),
+        workspace="ws",
+        project_slug="proj",
+        custom_batch_name="autolabelflow",
+    )
+
+    assert (uploaded, failed) == (2, 0)
+    assert note is None  # review job filed cleanly — nothing to surface
 
 
 def test_roboflow_export_all_uploads_fail_marks_job_failed(
