@@ -2311,6 +2311,103 @@ def test_push_version_stale_known_roboflow_id_404_falls_back_to_upload(
     assert result.failed == 0
 
 
+def test_discover_batch_membership_finds_targets_across_multiple_batches(monkeypatch) -> None:
+    """Two target ids live in two different batches; a third batch (with
+    nothing we want) must still get scanned if the earlier batches didn't
+    account for every target, but scanning stops as soon as all targets
+    are found — verified by asserting the third batch's search is never
+    called when the first two already account for everything."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        id = "ws/proj"
+
+        def get_batches(self):
+            return {
+                "batches": [
+                    {"id": "batch-a", "images": 2},
+                    {"id": "batch-b", "images": 2},
+                    {"id": "batch-c", "images": 5},
+                ]
+            }
+
+    search_calls = []
+
+    def _fake_search_page(project, api_key, *, offset, limit, fields, batch_id=None):
+        search_calls.append(batch_id)
+        if batch_id == "batch-a":
+            return [{"id": "img-1"}, {"id": "img-other-a"}]
+        if batch_id == "batch-b":
+            return [{"id": "img-2"}, {"id": "img-other-b"}]
+        raise AssertionError(f"batch-c should never be scanned, all targets already found; got {batch_id!r}")
+
+    monkeypatch.setattr(mod, "rf_search_page", _fake_search_page)
+
+    result = mod._discover_batch_membership(_Proj(), "fake-key", target_ids={"img-1", "img-2"})
+
+    assert result == {"batch-a": ["img-1"], "batch-b": ["img-2"]}
+    assert search_calls == ["batch-a", "batch-b"]
+
+
+def test_discover_batch_membership_paginates_within_one_batch(monkeypatch) -> None:
+    """A target id on page 2 of a single large batch is still found —
+    pagination within one batch must continue until the target turns up
+    or the batch is exhausted."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        id = "ws/proj"
+
+        def get_batches(self):
+            return {"batches": [{"id": "batch-a", "images": 3}]}
+
+    pages = {
+        0: [{"id": "img-x"}, {"id": "img-y"}],
+        2: [{"id": "img-z"}],
+    }
+
+    def _fake_search_page(project, api_key, *, offset, limit, fields, batch_id=None):
+        return pages.get(offset, [])
+
+    monkeypatch.setattr(mod, "rf_search_page", _fake_search_page)
+    monkeypatch.setattr(mod, "_BATCH_SCAN_PAGE_SIZE", 2)
+
+    result = mod._discover_batch_membership(_Proj(), "fake-key", target_ids={"img-z"})
+
+    assert result == {"batch-a": ["img-z"]}
+
+
+def test_discover_batch_membership_returns_empty_for_ids_never_found() -> None:
+    """No crash, no exception — an id that isn't in any batch (deleted on
+    Roboflow, or genuinely never belonged to a batch) is simply absent
+    from the returned mapping; the caller decides what that means."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        id = "ws/proj"
+
+        def get_batches(self):
+            return {"batches": []}
+
+    result = mod._discover_batch_membership(_Proj(), "fake-key", target_ids={"img-missing"})
+
+    assert result == {}
+
+
+def test_discover_batch_membership_empty_target_set_short_circuits(monkeypatch) -> None:
+    """No targets means no work — `get_batches()` must never even be
+    called."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        def get_batches(self):
+            raise AssertionError("get_batches() should never be called for an empty target set")
+
+    result = mod._discover_batch_membership(_Proj(), "fake-key", target_ids=set())
+
+    assert result == {}
+
+
 def test_roboflow_export_all_uploads_fail_marks_job_failed(
     connected_roboflow: TestClient, approved_version: tuple[str, str], monkeypatch
 ) -> None:

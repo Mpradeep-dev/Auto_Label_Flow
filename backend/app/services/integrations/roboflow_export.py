@@ -33,6 +33,7 @@ from app.models.image import Image
 from app.models.roboflow_job import RoboflowUploadTarget
 from app.services.dataset.export_yolo import ExportError, write_yolo_dataset
 from app.services.integrations.roboflow_connect import get_client
+from app.services.integrations.roboflow_search import rf_search_page
 
 logger = logging.getLogger(__name__)
 
@@ -97,13 +98,17 @@ def _sanitize_batch_name(raw: str) -> str:
 # Roboflow's upload endpoint intermittently answers with a transient 5xx/429
 # — a bare "500 Server Error / try again in 30 seconds" page from Google
 # Frontend, not a Roboflow JSON error — the same failure mode
-# `roboflow_import._rf_search_page` already retries. Retry those per image
+# `roboflow_search.rf_search_page` already retries. Retry those per image
 # with short backoff (1s, 2s); a 4xx is not transient and fails that image
 # at once.
 _UPLOAD_RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 _UPLOAD_MAX_ATTEMPTS = 3
 _UPLOAD_BACKOFF_BASE_S = 1.0
 _AUTH_STATUSES = frozenset({401, 403})
+
+# Same page size `roboflow_import._RAW_SEARCH_PAGE_SIZE` uses for the
+# identical shape of paginated /search call.
+_BATCH_SCAN_PAGE_SIZE = 100
 
 # When nothing has uploaded yet and the run has already failed this many
 # images the *same* way, stop. Grinding through a multi-thousand-image
@@ -272,6 +277,48 @@ def _is_duplicate_upload(result) -> bool:
     except (AttributeError, TypeError, IndexError):
         return False
     return bool(image.get("duplicate"))
+
+
+def _discover_batch_membership(project, api_key: str, *, target_ids: set[str]) -> dict[str, list[str]]:
+    """Returns `{batch_id: [image_id, ...]}` for as much of `target_ids` as
+    could be located, by paging through the project's existing batches
+    until every target id has turned up or every batch has been scanned.
+    Roboflow's `/search` has no "which batch is image X in" field and no
+    "look up these specific ids" filter (confirmed live — see
+    `roboflow_search.rf_search_page`'s docstring) — narrowing to one batch
+    at a time via `batch_id` and checking each page's ids against the
+    target set is the only way to find out. Stops scanning entirely, even
+    mid-batch, once every target id has been located — the common case
+    (a handful of just-updated images) shouldn't cost a full scan of every
+    batch in a large project."""
+    remaining = set(target_ids)
+    found: dict[str, list[str]] = {}
+    if not remaining:
+        return found
+
+    batches = project.get_batches().get("batches", [])
+    for batch in batches:
+        if not remaining:
+            break
+        batch_id = batch.get("id")
+        if not batch_id or not batch.get("images"):
+            continue
+        offset = 0
+        while remaining:
+            page = rf_search_page(
+                project, api_key, offset=offset, limit=_BATCH_SCAN_PAGE_SIZE, fields=["id"], batch_id=batch_id
+            )
+            if not page:
+                break
+            for item in page:
+                item_id = item.get("id")
+                if item_id in remaining:
+                    found.setdefault(batch_id, []).append(item_id)
+                    remaining.discard(item_id)
+            if len(page) < _BATCH_SCAN_PAGE_SIZE:
+                break
+            offset += _BATCH_SCAN_PAGE_SIZE
+    return found
 
 
 def _upload_one_image(project, *, has_annotation: bool, **upload_kwargs) -> _PushOutcome:
