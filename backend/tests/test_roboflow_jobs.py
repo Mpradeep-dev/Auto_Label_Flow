@@ -37,7 +37,7 @@ _RAW_SEARCH_ITEMS = [
 
 class _FakeSearchResponse:
     """Stands in for the `requests.post(.../search)` response that
-    `roboflow_import._rf_search_page` now inspects directly (the SDK's own
+    `roboflow_search.rf_search_page` now inspects directly (the SDK's own
     `Project.search()` is bypassed)."""
 
     def __init__(self, items: list[dict], status_code: int = 200) -> None:
@@ -77,7 +77,7 @@ def _image_details_payload(image_id: str) -> dict:
 class _FakeImageDetailsResponse:
     """Stands in for the `requests.get(.../images/<id>)` response that
     `roboflow_import._rf_image_details` now inspects directly (the SDK's
-    own `Project.image()` is bypassed — same reasoning as `_rf_search_page`
+    own `Project.image()` is bypassed — same reasoning as `rf_search_page`
     bypassing `Project.search()`: no timeout on the SDK's own call)."""
 
     def __init__(self, image_id: str, status_code: int = 200) -> None:
@@ -126,11 +126,14 @@ class _FakeRoboflowVersion:
 class _FakeRoboflowProject:
     def __init__(self, slug: str) -> None:
         self.slug = slug
-        # `_rf_search_page` builds the /search URL from `rf_project.id`
+        # `rf_search_page` builds the /search URL from `rf_project.id`
         # (canonical "workspace/project"), mirroring the real SDK.
         self.id = f"my-workspace/{slug}"
         self.uploads: list[tuple[str, str | None, str, str | None, bool]] = []
         self.annotation_jobs: list[dict] = []
+        self.saved_annotations: list[dict] = []
+        self.carved_batches: list[dict] = []
+        self.merged_batches: list[dict] = []
 
     def version(self, v: int) -> _FakeRoboflowVersion:
         return _FakeRoboflowVersion(v)
@@ -139,7 +142,7 @@ class _FakeRoboflowProject:
         # The two static fake batches are what `test_list_roboflow_batches`
         # asserts against; batches from uploads this instance actually made
         # (tracked in `self.uploads`) are appended dynamically so
-        # `_assign_annotating_review_job` can find the real batch a test's
+        # `_move_to_annotating` can find the real batch a test's
         # export just created, by name.
         dynamic = [
             {"id": f"batch-id-{name}", "name": name, "images": 0}
@@ -169,6 +172,17 @@ class _FakeRoboflowProject:
         )
         return {"id": "job-1"}
 
+    def create_annotation_batch(self, *, source_batch_id: str, image_ids: list[str], name: str | None = None) -> dict:
+        self.carved_batches.append(
+            {"source_batch_id": source_batch_id, "image_ids": list(image_ids), "name": name}
+        )
+        new_id = f"carved-{len(self.carved_batches)}"
+        return {"batchId": new_id, "movedImageCount": len(image_ids)}
+
+    def merge_annotation_batches(self, *, source_batch_ids: list[str], target_batch_id: str) -> dict:
+        self.merged_batches.append({"source_batch_ids": list(source_batch_ids), "target_batch_id": target_batch_id})
+        return {}
+
     def upload(
         self,
         *,
@@ -178,8 +192,38 @@ class _FakeRoboflowProject:
         split: str,
         batch_name: str | None = None,
         is_prediction: bool = False,
+        annotation_overwrite: bool = False,
     ) -> None:
         self.uploads.append((image_path, annotation_path, split, batch_name, is_prediction))
+
+    def save_annotation(
+        self,
+        *,
+        annotation_path: str,
+        annotation_labelmap,
+        image_id: str,
+        job_name: str | None = None,
+        is_prediction: bool = False,
+        annotation_overwrite: bool = False,
+    ) -> tuple[dict, float, int]:
+        if image_id == "missing-on-roboflow":
+            from roboflow.adapters.rfapi import AnnotationSaveError
+
+            raise AnnotationSaveError("not found", status_code=404)
+        self.saved_annotations.append(
+            {
+                "annotation_path": annotation_path,
+                "annotation_labelmap": annotation_labelmap,
+                "image_id": image_id,
+                "job_name": job_name,
+                "is_prediction": is_prediction,
+                "annotation_overwrite": annotation_overwrite,
+            }
+        )
+        # Real SDK shape: `Project.save_annotation()` returns
+        # `(annotation, upload_time, upload_retry_attempts)` — see
+        # `roboflow/core/project.py`.
+        return {"success": True}, 0.0, 0
 
     # Raw (unversioned) pull path — no `.version()` here. The service no
     # longer calls `rf_project.search()` or `rf_project.image()`; it hits
@@ -220,6 +264,41 @@ def connected_roboflow(real_client: TestClient, monkeypatch):
     resp = real_client.post("/api/v1/integrations/roboflow", json={"api_key": "good-key"})
     assert resp.status_code == 200, resp.text
     return real_client
+
+
+def test_image_model_has_roboflow_provenance_columns(real_db_session, unique_name: str) -> None:
+    """New columns exist and round-trip — the foundation Task 3 (import)
+    writes to and Task 5 (export) reads from."""
+    from app.models.image import Image, ImageSourceType
+    from app.models.project import Project
+    from app.models.dataset import Dataset
+
+    project = Project(name=unique_name, slug=unique_name, class_config=[{"id": 0, "name": "cone"}])
+    real_db_session.add(project)
+    real_db_session.flush()
+    dataset = Dataset(project_id=project.id, name="ds")
+    real_db_session.add(dataset)
+    real_db_session.flush()
+
+    image = Image(
+        project_id=project.id,
+        dataset_id=dataset.id,
+        storage_key="k",
+        original_filename="a.jpg",
+        width=64,
+        height=48,
+        source_type=ImageSourceType.UPLOAD,
+        roboflow_image_id="rf-abc123",
+        roboflow_workspace="my-workspace",
+        roboflow_project_slug="cones",
+    )
+    real_db_session.add(image)
+    real_db_session.commit()
+    real_db_session.refresh(image)
+
+    assert image.roboflow_image_id == "rf-abc123"
+    assert image.roboflow_workspace == "my-workspace"
+    assert image.roboflow_project_slug == "cones"
 
 
 def test_roboflow_import_job_completes_and_creates_dataset(
@@ -319,6 +398,46 @@ def test_roboflow_import_job_raw_pull_when_no_version(
     assert any(c["name"] == "cone" for c in project["class_config"])
 
 
+def test_roboflow_raw_pull_import_persists_roboflow_image_id(
+    connected_roboflow: TestClient, monkeypatch, unique_name: str
+) -> None:
+    """The raw-pull path already fetches each item's Roboflow id
+    (`_rf_image_details(..., item["id"])`) — it must now also store it, so
+    export can route these images through `save_annotation()` directly
+    instead of re-uploading them (Task 5)."""
+    import app.services.integrations.roboflow_import as roboflow_import_module
+
+    monkeypatch.setattr(roboflow_import_module.requests, "get", _fake_get)
+    monkeypatch.setattr(roboflow_import_module.requests, "post", _fake_search_post)
+
+    project_id = connected_roboflow.post("/api/v1/projects", json={"name": unique_name}).json()["id"]
+
+    resp = connected_roboflow.post(
+        f"/api/v1/projects/{project_id}/import/roboflow",
+        json={"workspace": "my-workspace", "project": "ground"},
+    )
+    assert resp.status_code == 202, resp.text
+    job = resp.json()
+    assert job["status"] == "COMPLETED"
+
+    dataset_id = job["result_dataset_id"]
+    images = connected_roboflow.get(f"/api/v1/datasets/{dataset_id}/images").json()["items"]
+    assert len(images) == 2
+
+    from app.db.session import SessionLocal
+    from app.models.image import Image
+
+    db = SessionLocal()
+    try:
+        rows = db.query(Image).filter(Image.dataset_id == dataset_id).all()
+        ids = {r.roboflow_image_id for r in rows}
+        assert ids == {"raw-img-1", "raw-img-2"}
+        assert all(r.roboflow_workspace == "my-workspace" for r in rows)
+        assert all(r.roboflow_project_slug == "ground" for r in rows)
+    finally:
+        db.close()
+
+
 def test_roboflow_import_job_raw_pull_unannotated_only(
     connected_roboflow: TestClient, monkeypatch, unique_name: str
 ) -> None:
@@ -397,7 +516,7 @@ def test_rf_search_page_forwards_batch_id_in_payload(monkeypatch) -> None:
     own `search(batch=True, batch_id=...)` would send it — this is the
     plumbing `import_roboflow_raw_project`'s `batch_id` param relies on to
     actually narrow the pull server-side."""
-    import app.services.integrations.roboflow_import as mod
+    import app.services.integrations.roboflow_search as mod
 
     captured: dict = {}
 
@@ -408,7 +527,7 @@ def test_rf_search_page_forwards_batch_id_in_payload(monkeypatch) -> None:
     monkeypatch.setattr(mod.requests, "post", fake_post)
 
     rf_project = type("P", (), {"id": "ws/proj"})()
-    mod._rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"], batch_id="batch-1")
+    mod.rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"], batch_id="batch-1")
 
     assert captured["batch"] is True
     assert captured["batch_id"] == "batch-1"
@@ -452,7 +571,7 @@ def test_rf_search_error_body_surfaces_as_runtime_error(
     """Regression: the Roboflow SDK's `Project.search()` ends with a bare
     `data.json()["results"]`, so an `{"error": ...}` body from the /search
     endpoint used to blow up as an opaque `KeyError: 'results'` from inside
-    the SDK. `_rf_search_page` must instead raise a `RuntimeError` that
+    the SDK. `rf_search_page` must instead raise a `RuntimeError` that
     carries the real HTTP status and response body."""
     import uuid as _uuid
 
@@ -501,7 +620,7 @@ def test_rf_search_retries_transient_5xx_then_succeeds(monkeypatch) -> None:
     """A transient 5xx from /search (observed live: Roboflow returned bare
     HTTP 500s for a few minutes) is retried with backoff, not fatal — the
     page load recovers as soon as Roboflow returns 200 again."""
-    import app.services.integrations.roboflow_import as mod
+    import app.services.integrations.roboflow_search as mod
 
     seq = [
         _SeqResp(500, {"error": "An error occurred with this request"}),
@@ -520,7 +639,7 @@ def test_rf_search_retries_transient_5xx_then_succeeds(monkeypatch) -> None:
     monkeypatch.setattr(mod.time, "sleep", lambda s: slept.append(s))
 
     rf_project = type("P", (), {"id": "ws/proj"})()
-    out = mod._rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
+    out = mod.rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
 
     assert out == [{"id": "a"}]
     assert calls["n"] == 3
@@ -530,7 +649,7 @@ def test_rf_search_retries_transient_5xx_then_succeeds(monkeypatch) -> None:
 def test_rf_search_persistent_5xx_raises_with_retry_hint(monkeypatch) -> None:
     """When every attempt 5xxs, the raised error keeps the real status/body
     and tells the user it's a transient Roboflow-side problem to retry."""
-    import app.services.integrations.roboflow_import as mod
+    import app.services.integrations.roboflow_search as mod
 
     calls = {"n": 0}
 
@@ -543,7 +662,7 @@ def test_rf_search_persistent_5xx_raises_with_retry_hint(monkeypatch) -> None:
 
     rf_project = type("P", (), {"id": "ws/proj"})()
     with pytest.raises(RuntimeError) as excinfo:
-        mod._rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
+        mod.rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
 
     msg = str(excinfo.value)
     assert calls["n"] == mod._SEARCH_MAX_ATTEMPTS
@@ -555,7 +674,7 @@ def test_rf_search_connection_error_is_retried(monkeypatch) -> None:
     """A `requests` connection/timeout error is retried the same way, and
     the final failure is a clear RuntimeError rather than a bare socket
     exception bubbling out of the job."""
-    import app.services.integrations.roboflow_import as mod
+    import app.services.integrations.roboflow_search as mod
 
     calls = {"n": 0}
 
@@ -569,7 +688,7 @@ def test_rf_search_connection_error_is_retried(monkeypatch) -> None:
     monkeypatch.setattr(mod.time, "sleep", lambda s: None)
 
     rf_project = type("P", (), {"id": "ws/proj"})()
-    out = mod._rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
+    out = mod.rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
     assert out == []
     assert calls["n"] == 3
 
@@ -580,7 +699,7 @@ def test_rf_search_dns_failure_raises_local_network_hint(monkeypatch) -> None:
     Roboflow-side issue" — that's actively misleading when the request never
     reached Roboflow at all. It should point at this machine's network/DNS
     instead."""
-    import app.services.integrations.roboflow_import as mod
+    import app.services.integrations.roboflow_search as mod
 
     def fake_post(url, json=None, timeout=30):
         raise mod.requests.ConnectionError(
@@ -594,7 +713,7 @@ def test_rf_search_dns_failure_raises_local_network_hint(monkeypatch) -> None:
 
     rf_project = type("P", (), {"id": "ws/proj"})()
     with pytest.raises(RuntimeError) as excinfo:
-        mod._rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
+        mod.rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
 
     msg = str(excinfo.value)
     assert "temporary Roboflow-side issue" not in msg
@@ -953,6 +1072,71 @@ def test_roboflow_export_job_completes_and_uploads(
     assert progress.current == 1
 
 
+def test_roboflow_export_known_image_id_updates_annotation_without_reupload(
+    connected_roboflow: TestClient, unique_name: str
+) -> None:
+    """An image this app already knows the Roboflow id for (imported from
+    the same workspace/project being exported to) must be routed straight
+    through save_annotation — Project.upload() must never be called for
+    it at all. Builds the exportable version through the exact same real
+    API calls as the `approved_version` fixture above (`real_client.post`
+    for project/dataset/image/approve/annotation/version), then sets
+    `roboflow_image_id`/`roboflow_workspace`/`roboflow_project_slug` on
+    the `Image` row directly afterward — there is no API for setting those
+    outside the real Roboflow import flow, which this test deliberately
+    isn't invoking (it only needs the *result* of having imported, not the
+    import itself — Task 3 already covers the import path writing these)."""
+    from app.db.session import SessionLocal
+    from app.models.image import Image
+
+    project = connected_roboflow.post("/api/v1/projects", json={"name": unique_name}).json()
+    connected_roboflow.patch(
+        f"/api/v1/projects/{project['id']}", json={"class_config": [{"id": 0, "name": "cone"}]}
+    )
+    dataset = connected_roboflow.post(f"/api/v1/projects/{project['id']}/datasets", json={"name": "d"}).json()
+    image = connected_roboflow.post(
+        f"/api/v1/datasets/{dataset['id']}/images", files={"file": ("f.jpg", _jpeg_bytes(), "image/jpeg")}
+    ).json()
+    connected_roboflow.post(f"/api/v1/images/{image['id']}/approve")
+    connected_roboflow.post(
+        "/api/v1/annotations",
+        json={
+            "image_id": image["id"],
+            "class_id": 0,
+            "class_name": "cone",
+            "x1": 0.1,
+            "y1": 0.1,
+            "x2": 0.3,
+            "y2": 0.3,
+        },
+    )
+
+    db = SessionLocal()
+    try:
+        db.query(Image).filter(Image.id == image["id"]).update(
+            {
+                "roboflow_image_id": "known-rf-image-id",
+                "roboflow_workspace": "my-workspace",
+                "roboflow_project_slug": "cones",
+            }
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    version = connected_roboflow.post(f"/api/v1/datasets/{dataset['id']}/versions", json={}).json()
+
+    resp = connected_roboflow.post(
+        f"/api/v1/versions/{version['id']}/export/roboflow",
+        json={"workspace": "my-workspace", "project": "cones"},
+    )
+    assert resp.status_code == 202, resp.text
+    job = resp.json()
+    assert job["status"] == "COMPLETED", job
+    assert job["new_images_count"] == 0
+    assert job["annotations_updated_count"] == 1
+
+
 def test_roboflow_export_names_batch_after_app_and_dataset_version(
     connected_roboflow: TestClient, approved_version: tuple[str, str], monkeypatch
 ) -> None:
@@ -1121,7 +1305,9 @@ def test_roboflow_export_annotating_creates_review_job_when_labeler_email_set(
     ANNOTATING-target export must file a real Roboflow annotation job for
     the batch it just pushed, assigning the same email as both labeler and
     reviewer (this app has no UI for picking someone else to review its
-    own auto-generated predictions) — and the job row must show no error."""
+    own auto-generated predictions) — and the job row must show the
+    informational summary, not an error (a clean review job filing adds
+    nothing further to it)."""
     resp = connected_roboflow.post(
         "/api/v1/integrations/roboflow",
         json={"api_key": "good-key", "default_labeler_email": "reviewer@example.com"},
@@ -1146,7 +1332,7 @@ def test_roboflow_export_annotating_creates_review_job_when_labeler_email_set(
     assert resp.status_code == 202, resp.text
     body = resp.json()
     assert body["status"] == "COMPLETED"
-    assert body["error"] is None
+    assert body["error"] == "1 new image uploaded."
 
     assert captured == [
         {
@@ -1186,8 +1372,9 @@ def test_roboflow_export_dataset_target_never_creates_annotation_job(
         json={"workspace": "my-workspace", "project": "cones", "upload_target": "DATASET"},
     )
     assert resp.status_code == 202, resp.text
-    assert resp.json()["status"] == "COMPLETED"
-    assert resp.json()["error"] is None
+    body = resp.json()
+    assert body["status"] == "COMPLETED"
+    assert body["error"] == "1 new image uploaded."
     assert created == []
 
 
@@ -1301,7 +1488,7 @@ def test_upload_one_image_retries_transient_5xx_then_succeeds(monkeypatch) -> No
             if calls["n"] < 3:
                 raise _upload_error(500)
 
-    mod._upload_one_image(_Proj(), image_path="a.jpg")
+    mod._upload_one_image(_Proj(), has_annotation=False, image_path="a.jpg")
 
     assert calls["n"] == 3
     assert slept == [1.0, 2.0]  # backoff between attempts 1->2 and 2->3
@@ -1319,7 +1506,7 @@ def test_upload_one_image_gives_up_after_max_attempts(monkeypatch) -> None:
             raise _upload_error(503)
 
     with pytest.raises(ImageUploadError):
-        mod._upload_one_image(_Proj(), image_path="a.jpg")
+        mod._upload_one_image(_Proj(), has_annotation=False, image_path="a.jpg")
 
 
 def test_upload_one_image_does_not_retry_4xx(monkeypatch) -> None:
@@ -1337,7 +1524,7 @@ def test_upload_one_image_does_not_retry_4xx(monkeypatch) -> None:
             raise _upload_error(400)
 
     with pytest.raises(ImageUploadError):
-        mod._upload_one_image(_Proj(), image_path="a.jpg")
+        mod._upload_one_image(_Proj(), has_annotation=False, image_path="a.jpg")
     assert calls["n"] == 1
 
 
@@ -1360,7 +1547,7 @@ def test_upload_one_image_retries_bare_connection_error(monkeypatch) -> None:
             if calls["n"] < 3:
                 raise mod.requests.ConnectionError("connection reset")
 
-    mod._upload_one_image(_Proj(), image_path="a.jpg")
+    mod._upload_one_image(_Proj(), has_annotation=False, image_path="a.jpg")
 
     assert calls["n"] == 3
     assert slept == [1.0, 2.0]
@@ -1546,13 +1733,15 @@ def test_push_version_progress_counts_successes_not_attempts(real_db_session, mo
     monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {}))
 
     seen: list[tuple[int, int, int]] = []
-    uploaded, failed, _, _ = mod.push_version_to_roboflow(
+    result = mod.push_version_to_roboflow(
         real_db_session,
         version_id=_uuid.uuid4(),
         workspace="ws",
         project_slug="proj",
         progress_cb=lambda cur, total, fail: seen.append((cur, total, fail)),
     )
+    uploaded = result.new_images + result.annotations_updated + result.unchanged
+    failed = result.failed
 
     assert (uploaded, failed) == (3, 3)
     assert seen[0] == (0, 6, 0)  # primed once the count is known
@@ -1606,9 +1795,11 @@ def test_push_version_uploads_run_concurrently(real_db_session, monkeypatch) -> 
 
     monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {}))
 
-    uploaded, failed, _, _ = mod.push_version_to_roboflow(
+    result = mod.push_version_to_roboflow(
         real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
     )
+    uploaded = result.new_images + result.annotations_updated + result.unchanged
+    failed = result.failed
 
     assert (uploaded, failed) == (8, 0)
     assert active["peak"] > 1
@@ -1672,15 +1863,15 @@ def test_push_version_fail_fast_bounded_overshoot_under_concurrency(real_db_sess
     assert len(attempted) < 20
 
 
-def test_push_version_all_duplicates_skips_batch_lookup_with_clear_note(real_db_session, monkeypatch) -> None:
-    """Roboflow silently no-ops an upload whose file content already exists
-    in the project — it returns `{"duplicate": true}` instead of raising, so
-    the SDK call "succeeds" but no image lands in the newly-named batch.
-    Previously this fell through to `_assign_annotating_review_job`, which
-    then searched for a batch that was never created and told the user
-    their images were "sitting in Unassigned" — misleading, since nothing
-    new was uploaded at all. When every upload comes back as a duplicate,
-    the export must skip the pointless batch lookup and say so plainly."""
+def test_push_version_all_duplicates_updates_annotations_not_skipped(real_db_session, monkeypatch) -> None:
+    """Roboflow reports every upload as a duplicate (byte-identical image
+    already in the project — this app's own normal
+    import-then-annotate-then-push workflow). That must NOT read as
+    nothing happened: each duplicate's annotation is still written (via
+    the SDK's own image-id-from-duplicate-response + save_annotation, now
+    with overwrite=True so it isn't silently rejected), counted as
+    `annotations_updated`, and the note says so plainly — no batch lookup,
+    since nothing new landed to file a review job for."""
     import uuid as _uuid
 
     from app.services.integrations import roboflow_export as mod
@@ -1691,15 +1882,18 @@ def test_push_version_all_duplicates_skips_batch_lookup_with_clear_note(real_db_
             (root / "labels" / split).mkdir(parents=True)
         for i in range(3):
             (root / "images" / "train" / f"img{i}.jpg").write_bytes(_jpeg_bytes())
+            (root / "labels" / "train" / f"img{i}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
         (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
         return root / "data.yaml"
 
     monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
 
     get_batches_calls = []
+    upload_calls = []
 
     class _Proj:
         def upload(self, **kwargs):
+            upload_calls.append(kwargs)
             return [{"image": {"id": "existing-image-id", "success": False, "duplicate": True}}]
 
         def get_batches(self):
@@ -1716,23 +1910,27 @@ def test_push_version_all_duplicates_skips_batch_lookup_with_clear_note(real_db_
 
     monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com"}))
 
-    uploaded, failed, failures, note = mod.push_version_to_roboflow(
+    result = mod.push_version_to_roboflow(
         real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
     )
 
-    assert (uploaded, failed) == (3, 0)
+    assert (result.new_images, result.annotations_updated, result.unchanged, result.failed) == (0, 3, 0, 0)
     assert not get_batches_calls  # never searched for a batch that was never created
-    assert note is not None
-    assert "duplicate" in note.lower()
-    assert "couldn't find batch" not in note.lower()
+    assert result.note is not None
+    assert "3 existing image" in result.note
+    assert "updated" in result.note
+    assert "couldn't find batch" not in result.note.lower()
+    # the actual bug this whole plan exists to fix: overwrite must be requested
+    assert all(kwargs.get("annotation_overwrite") is True for kwargs in upload_calls)
 
 
-def test_push_version_mixed_new_and_duplicate_uploads_still_files_review_job(
+def test_push_version_mixed_new_and_duplicate_still_files_review_job_and_reports_both(
     real_db_session, monkeypatch
 ) -> None:
     """At least one genuinely new upload means the batch really was created
-    on Roboflow — the review job must still be filed for it normally, not
-    short-circuited into the all-duplicate note."""
+    on Roboflow — the review job must still be filed for it normally, and
+    the note must mention both the new upload and the updated duplicate,
+    not stay silent just because the review job itself succeeded."""
     import uuid as _uuid
 
     from app.services.integrations import roboflow_export as mod
@@ -1743,6 +1941,7 @@ def test_push_version_mixed_new_and_duplicate_uploads_still_files_review_job(
             (root / "labels" / split).mkdir(parents=True)
         for i in range(2):
             (root / "images" / "train" / f"img{i}.jpg").write_bytes(_jpeg_bytes())
+            (root / "labels" / "train" / f"img{i}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
         (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
         return root / "data.yaml"
 
@@ -1773,7 +1972,7 @@ def test_push_version_mixed_new_and_duplicate_uploads_still_files_review_job(
 
     monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com"}))
 
-    uploaded, failed, failures, note = mod.push_version_to_roboflow(
+    result = mod.push_version_to_roboflow(
         real_db_session,
         version_id=_uuid.uuid4(),
         workspace="ws",
@@ -1781,8 +1980,447 @@ def test_push_version_mixed_new_and_duplicate_uploads_still_files_review_job(
         custom_batch_name="autolabelflow",
     )
 
-    assert (uploaded, failed) == (2, 0)
-    assert note is None  # review job filed cleanly — nothing to surface
+    assert (result.new_images, result.annotations_updated, result.failed) == (1, 1, 0)
+    assert result.note is not None
+    assert "1 new image" in result.note
+    assert "1 existing image" in result.note
+
+
+def test_push_version_known_roboflow_id_routes_through_save_annotation_not_upload(
+    real_db_session, monkeypatch, unique_name: str
+) -> None:
+    """Core of Task 5: an Image row with a roboflow_image_id matching the
+    export target's workspace/project must skip Project.upload() entirely
+    and call Project.save_annotation() directly instead."""
+    import uuid as _uuid
+
+    from app.models.dataset import Dataset
+    from app.models.image import Image, ImageSourceType
+    from app.models.project import Project
+    from app.services.integrations import roboflow_export as mod
+
+    project = Project(name=unique_name, slug=unique_name, class_config=[{"id": 0, "name": "cone"}])
+    real_db_session.add(project)
+    real_db_session.flush()
+    dataset = Dataset(project_id=project.id, name="ds")
+    real_db_session.add(dataset)
+    real_db_session.flush()
+    image = Image(
+        project_id=project.id,
+        dataset_id=dataset.id,
+        storage_key="k",
+        original_filename="a.jpg",
+        width=64,
+        height=48,
+        source_type=ImageSourceType.UPLOAD,
+        roboflow_image_id="known-rf-image-id",
+        roboflow_workspace="ws",
+        roboflow_project_slug="proj",
+    )
+    real_db_session.add(image)
+    real_db_session.commit()
+    real_db_session.refresh(image)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        (root / "images" / "train").mkdir(parents=True)
+        (root / "labels" / "train").mkdir(parents=True)
+        (root / "images" / "valid").mkdir(parents=True)
+        (root / "labels" / "valid").mkdir(parents=True)
+        (root / "images" / "test").mkdir(parents=True)
+        (root / "labels" / "test").mkdir(parents=True)
+        (root / "images" / "train" / f"{image.id}.jpg").write_bytes(_jpeg_bytes())
+        (root / "labels" / "train" / f"{image.id}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+        return root / "data.yaml"
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    upload_calls = []
+    save_calls = []
+
+    class _Proj:
+        def upload(self, **kwargs):
+            upload_calls.append(kwargs)
+            return [{"image": {"id": "should-not-be-called", "success": True, "duplicate": False}}]
+
+        def save_annotation(self, **kwargs):
+            save_calls.append(kwargs)
+            return {"success": True}, 0.0, 0
+
+        def get_batches(self):
+            return {"batches": []}
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com"}))
+
+    result = mod.push_version_to_roboflow(
+        real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
+    )
+
+    assert not upload_calls
+    assert len(save_calls) == 1
+    assert save_calls[0]["image_id"] == "known-rf-image-id"
+    assert save_calls[0]["annotation_overwrite"] is True
+    assert save_calls[0]["annotation_labelmap"] == {0: "cone"}  # loaded, not the bare yaml path
+    assert (result.new_images, result.annotations_updated, result.unchanged, result.failed) == (0, 1, 0, 0)
+
+
+def test_push_version_known_roboflow_id_warn_response_counts_as_unchanged(
+    real_db_session, monkeypatch, unique_name: str
+) -> None:
+    """Regression: if Roboflow's 409 "already annotated" response ever slips
+    past `annotation_overwrite=True` (a behavior change on their end, a
+    future SDK change, anything), `rfapi.save_annotation` returns
+    `{"warn": "already annotated"}` instead of raising — nothing actually
+    wrote on Roboflow's side. `_save_annotation_only` must not report that
+    as `ANNOTATION_UPDATED` (the exact bug this branch exists to fix,
+    relocated); it must be counted as `unchanged` instead."""
+    import uuid as _uuid
+
+    from app.models.dataset import Dataset
+    from app.models.image import Image, ImageSourceType
+    from app.models.project import Project
+    from app.services.integrations import roboflow_export as mod
+
+    project = Project(name=unique_name, slug=unique_name, class_config=[{"id": 0, "name": "cone"}])
+    real_db_session.add(project)
+    real_db_session.flush()
+    dataset = Dataset(project_id=project.id, name="ds")
+    real_db_session.add(dataset)
+    real_db_session.flush()
+    image = Image(
+        project_id=project.id,
+        dataset_id=dataset.id,
+        storage_key="k",
+        original_filename="a.jpg",
+        width=64,
+        height=48,
+        source_type=ImageSourceType.UPLOAD,
+        roboflow_image_id="known-rf-image-id",
+        roboflow_workspace="ws",
+        roboflow_project_slug="proj",
+    )
+    real_db_session.add(image)
+    real_db_session.commit()
+    real_db_session.refresh(image)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        (root / "images" / "train").mkdir(parents=True)
+        (root / "labels" / "train").mkdir(parents=True)
+        (root / "images" / "valid").mkdir(parents=True)
+        (root / "labels" / "valid").mkdir(parents=True)
+        (root / "images" / "test").mkdir(parents=True)
+        (root / "labels" / "test").mkdir(parents=True)
+        (root / "images" / "train" / f"{image.id}.jpg").write_bytes(_jpeg_bytes())
+        (root / "labels" / "train" / f"{image.id}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+        return root / "data.yaml"
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    upload_calls = []
+    save_calls = []
+
+    class _Proj:
+        def upload(self, **kwargs):
+            upload_calls.append(kwargs)
+            return [{"image": {"id": "should-not-be-called", "success": True, "duplicate": False}}]
+
+        def save_annotation(self, **kwargs):
+            save_calls.append(kwargs)
+            return {"warn": "already annotated"}, 0.0, 0
+
+        def get_batches(self):
+            return {"batches": []}
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com"}))
+
+    result = mod.push_version_to_roboflow(
+        real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
+    )
+
+    assert not upload_calls
+    assert len(save_calls) == 1
+    assert (result.new_images, result.annotations_updated, result.unchanged, result.failed) == (0, 0, 1, 0)
+
+
+def test_push_version_known_roboflow_id_different_project_falls_back_to_upload(
+    real_db_session, monkeypatch, unique_name: str
+) -> None:
+    """A stored id from a *different* Roboflow project than the one being
+    exported to must not be trusted — falls back to a normal upload."""
+    import uuid as _uuid
+
+    from app.models.dataset import Dataset
+    from app.models.image import Image, ImageSourceType
+    from app.models.project import Project
+    from app.services.integrations import roboflow_export as mod
+
+    project = Project(name=unique_name, slug=unique_name, class_config=[{"id": 0, "name": "cone"}])
+    real_db_session.add(project)
+    real_db_session.flush()
+    dataset = Dataset(project_id=project.id, name="ds")
+    real_db_session.add(dataset)
+    real_db_session.flush()
+    image = Image(
+        project_id=project.id,
+        dataset_id=dataset.id,
+        storage_key="k",
+        original_filename="a.jpg",
+        width=64,
+        height=48,
+        source_type=ImageSourceType.UPLOAD,
+        roboflow_image_id="known-rf-image-id",
+        roboflow_workspace="ws",
+        roboflow_project_slug="a-different-project",  # <- mismatch
+    )
+    real_db_session.add(image)
+    real_db_session.commit()
+    real_db_session.refresh(image)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        (root / "images" / "train").mkdir(parents=True)
+        (root / "labels" / "train").mkdir(parents=True)
+        (root / "images" / "valid").mkdir(parents=True)
+        (root / "labels" / "valid").mkdir(parents=True)
+        (root / "images" / "test").mkdir(parents=True)
+        (root / "labels" / "test").mkdir(parents=True)
+        (root / "images" / "train" / f"{image.id}.jpg").write_bytes(_jpeg_bytes())
+        (root / "labels" / "train" / f"{image.id}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+        return root / "data.yaml"
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    upload_calls = []
+    save_calls = []
+
+    class _Proj:
+        def upload(self, **kwargs):
+            upload_calls.append(kwargs)
+            return [{"image": {"id": "new-id", "success": True, "duplicate": False}}]
+
+        def save_annotation(self, **kwargs):
+            save_calls.append(kwargs)
+            return {"success": True}
+
+        def get_batches(self):
+            return {"batches": []}
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(
+        mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com", "api_key": "fake-key"})
+    )
+
+    result = mod.push_version_to_roboflow(
+        real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
+    )
+
+    assert not save_calls
+    assert len(upload_calls) == 1
+    assert result.new_images == 1
+
+
+def test_push_version_stale_known_roboflow_id_404_falls_back_to_upload(
+    real_db_session, monkeypatch, unique_name: str
+) -> None:
+    """The stored id no longer resolves on Roboflow (image deleted there
+    since import) — save_annotation 404s, and that one image falls back to
+    a normal upload instead of failing the whole export."""
+    import uuid as _uuid
+
+    from app.models.dataset import Dataset
+    from app.models.image import Image, ImageSourceType
+    from app.models.project import Project
+    from app.services.integrations import roboflow_export as mod
+
+    project = Project(name=unique_name, slug=unique_name, class_config=[{"id": 0, "name": "cone"}])
+    real_db_session.add(project)
+    real_db_session.flush()
+    dataset = Dataset(project_id=project.id, name="ds")
+    real_db_session.add(dataset)
+    real_db_session.flush()
+    image = Image(
+        project_id=project.id,
+        dataset_id=dataset.id,
+        storage_key="k",
+        original_filename="a.jpg",
+        width=64,
+        height=48,
+        source_type=ImageSourceType.UPLOAD,
+        roboflow_image_id="missing-on-roboflow",
+        roboflow_workspace="ws",
+        roboflow_project_slug="proj",
+    )
+    real_db_session.add(image)
+    real_db_session.commit()
+    real_db_session.refresh(image)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        (root / "images" / "train").mkdir(parents=True)
+        (root / "labels" / "train").mkdir(parents=True)
+        (root / "images" / "valid").mkdir(parents=True)
+        (root / "labels" / "valid").mkdir(parents=True)
+        (root / "images" / "test").mkdir(parents=True)
+        (root / "labels" / "test").mkdir(parents=True)
+        (root / "images" / "train" / f"{image.id}.jpg").write_bytes(_jpeg_bytes())
+        (root / "labels" / "train" / f"{image.id}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+        return root / "data.yaml"
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    upload_calls = []
+
+    class _Proj:
+        def upload(self, **kwargs):
+            upload_calls.append(kwargs)
+            return [{"image": {"id": "new-id", "success": True, "duplicate": False}}]
+
+        def save_annotation(self, **kwargs):
+            from roboflow.adapters.rfapi import AnnotationSaveError
+
+            raise AnnotationSaveError("not found", status_code=404)
+
+        def get_batches(self):
+            return {"batches": []}
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com"}))
+
+    result = mod.push_version_to_roboflow(
+        real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
+    )
+
+    assert len(upload_calls) == 1
+    assert result.new_images == 1
+    assert result.failed == 0
+
+
+def test_discover_batch_membership_finds_targets_across_multiple_batches(monkeypatch) -> None:
+    """Two target ids live in two different batches; a third batch (with
+    nothing we want) must still get scanned if the earlier batches didn't
+    account for every target, but scanning stops as soon as all targets
+    are found — verified by asserting the third batch's search is never
+    called when the first two already account for everything."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        id = "ws/proj"
+
+        def get_batches(self):
+            return {
+                "batches": [
+                    {"id": "batch-a", "images": 2},
+                    {"id": "batch-b", "images": 2},
+                    {"id": "batch-c", "images": 5},
+                ]
+            }
+
+    search_calls = []
+
+    def _fake_search_page(project, api_key, *, offset, limit, fields, batch_id=None):
+        search_calls.append(batch_id)
+        if batch_id == "batch-a":
+            return [{"id": "img-1"}, {"id": "img-other-a"}]
+        if batch_id == "batch-b":
+            return [{"id": "img-2"}, {"id": "img-other-b"}]
+        raise AssertionError(f"batch-c should never be scanned, all targets already found; got {batch_id!r}")
+
+    monkeypatch.setattr(mod, "rf_search_page", _fake_search_page)
+
+    result = mod._discover_batch_membership(_Proj(), "fake-key", target_ids={"img-1", "img-2"})
+
+    assert result == {"batch-a": ["img-1"], "batch-b": ["img-2"]}
+    assert search_calls == ["batch-a", "batch-b"]
+
+
+def test_discover_batch_membership_paginates_within_one_batch(monkeypatch) -> None:
+    """A target id on page 2 of a single large batch is still found —
+    pagination within one batch must continue until the target turns up
+    or the batch is exhausted."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        id = "ws/proj"
+
+        def get_batches(self):
+            return {"batches": [{"id": "batch-a", "images": 3}]}
+
+    pages = {
+        0: [{"id": "img-x"}, {"id": "img-y"}],
+        2: [{"id": "img-z"}],
+    }
+
+    def _fake_search_page(project, api_key, *, offset, limit, fields, batch_id=None):
+        return pages.get(offset, [])
+
+    monkeypatch.setattr(mod, "rf_search_page", _fake_search_page)
+    monkeypatch.setattr(mod, "_BATCH_SCAN_PAGE_SIZE", 2)
+
+    result = mod._discover_batch_membership(_Proj(), "fake-key", target_ids={"img-z"})
+
+    assert result == {"batch-a": ["img-z"]}
+
+
+def test_discover_batch_membership_returns_empty_for_ids_never_found() -> None:
+    """No crash, no exception — an id that isn't in any batch (deleted on
+    Roboflow, or genuinely never belonged to a batch) is simply absent
+    from the returned mapping; the caller decides what that means."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        id = "ws/proj"
+
+        def get_batches(self):
+            return {"batches": []}
+
+    result = mod._discover_batch_membership(_Proj(), "fake-key", target_ids={"img-missing"})
+
+    assert result == {}
+
+
+def test_discover_batch_membership_empty_target_set_short_circuits(monkeypatch) -> None:
+    """No targets means no work — `get_batches()` must never even be
+    called."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        def get_batches(self):
+            raise AssertionError("get_batches() should never be called for an empty target set")
+
+    result = mod._discover_batch_membership(_Proj(), "fake-key", target_ids=set())
+
+    assert result == {}
 
 
 def test_roboflow_export_all_uploads_fail_marks_job_failed(
@@ -1961,3 +2599,561 @@ def test_roboflow_import_job_requires_connection_first(real_client: TestClient, 
     )
     assert resp.status_code == 400
     assert "not connected" in resp.json()["detail"].lower()
+
+
+def test_roboflow_job_model_has_new_images_and_annotations_updated_counts(
+    real_db_session, unique_name: str
+) -> None:
+    from app.models.roboflow_job import RoboflowJob, RoboflowJobKind
+    from app.models.project import Project
+
+    # `project_id` is a real FK (Postgres enforces it in this test env, same
+    # as the `RoboflowJob(...)` constructions already in this file around
+    # lines 826 and 861 — both use a real project id from a created
+    # project, never a bare random uuid), so a real Project row comes first.
+    project = Project(name=unique_name, slug=unique_name, class_config=[{"id": 0, "name": "cone"}])
+    real_db_session.add(project)
+    real_db_session.commit()
+
+    job = RoboflowJob(
+        project_id=project.id,
+        kind=RoboflowJobKind.EXPORT,
+        workspace="ws",
+        project_slug="proj",
+    )
+    real_db_session.add(job)
+    real_db_session.commit()
+    real_db_session.refresh(job)
+
+    assert job.new_images_count == 0
+    assert job.annotations_updated_count == 0
+
+    job.new_images_count = 3
+    job.annotations_updated_count = 7
+    real_db_session.commit()
+    real_db_session.refresh(job)
+    assert (job.new_images_count, job.annotations_updated_count) == (3, 7)
+
+
+def test_push_version_updates_move_known_id_images_to_new_batch_and_job(
+    real_db_session, monkeypatch, unique_name: str
+) -> None:
+    """Core of Task 3: a known-Roboflow-id image whose annotation gets
+    updated must be carved out of its current Roboflow batch into a new
+    one named after this export, and a review job filed for it — even
+    though there were zero new images (the exact all-existing-images
+    scenario this whole feature exists for)."""
+    import uuid as _uuid
+
+    from app.models.dataset import Dataset
+    from app.models.image import Image, ImageSourceType
+    from app.models.project import Project
+    from app.services.integrations import roboflow_export as mod
+
+    project = Project(name=unique_name, slug=unique_name, class_config=[{"id": 0, "name": "cone"}])
+    real_db_session.add(project)
+    real_db_session.flush()
+    dataset = Dataset(project_id=project.id, name="ds")
+    real_db_session.add(dataset)
+    real_db_session.flush()
+    image = Image(
+        project_id=project.id,
+        dataset_id=dataset.id,
+        storage_key="k",
+        original_filename="a.jpg",
+        width=64,
+        height=48,
+        source_type=ImageSourceType.UPLOAD,
+        roboflow_image_id="known-rf-image-id",
+        roboflow_workspace="ws",
+        roboflow_project_slug="proj",
+    )
+    real_db_session.add(image)
+    real_db_session.commit()
+    real_db_session.refresh(image)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        (root / "images" / "train").mkdir(parents=True)
+        (root / "labels" / "train").mkdir(parents=True)
+        (root / "images" / "valid").mkdir(parents=True)
+        (root / "labels" / "valid").mkdir(parents=True)
+        (root / "images" / "test").mkdir(parents=True)
+        (root / "labels" / "test").mkdir(parents=True)
+        (root / "images" / "train" / f"{image.id}.jpg").write_bytes(_jpeg_bytes())
+        (root / "labels" / "train" / f"{image.id}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+        return root / "data.yaml"
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    class _Proj:
+        def save_annotation(self, **kwargs):
+            return ({"success": True}, 0.0, 0)
+
+        def get_batches(self):
+            return {"batches": [{"id": "original-batch", "images": 1}]}
+
+        def create_annotation_batch(self, *, source_batch_id, image_ids, name=None):
+            assert source_batch_id == "original-batch"
+            assert image_ids == ["known-rf-image-id"]
+            assert name == "custom-review-batch"
+            return {"batchId": "carved-batch-1", "movedImageCount": 1}
+
+        def create_annotation_job(self, **kwargs):
+            assert kwargs["batch_id"] == "carved-batch-1"
+            assert kwargs["name"] == "custom-review-batch"
+            assert kwargs["labeler_email"] == "a@b.com"
+            assert kwargs["reviewer_email"] == "a@b.com"
+            return {"id": "job-1"}
+
+    calls = {"n": 0}
+
+    def _fake_search_page(project, api_key, *, offset, limit, fields, batch_id=None):
+        calls["n"] += 1
+        assert batch_id == "original-batch"
+        return [{"id": "known-rf-image-id"}]
+
+    monkeypatch.setattr(mod, "rf_search_page", _fake_search_page)
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com", "api_key": "fake-key"}))
+
+    result = mod.push_version_to_roboflow(
+        real_db_session,
+        version_id=_uuid.uuid4(),
+        workspace="ws",
+        project_slug="proj",
+        custom_batch_name="custom-review-batch",
+    )
+
+    assert (result.new_images, result.annotations_updated, result.failed) == (0, 1, 0)
+    assert calls["n"] == 1
+
+
+def test_move_to_annotating_merges_new_and_updated_into_one_job(monkeypatch) -> None:
+    """A mixed push (some genuinely new images, some existing images whose
+    annotation was updated) must end up as ONE review job covering both —
+    not two separate, confusingly-named batches."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        def get_batches(self):
+            return {"batches": [{"id": "new-image-batch", "name": "my-batch", "images": 3}]}
+
+        def create_annotation_batch(self, *, source_batch_id, image_ids, name=None):
+            return {"batchId": "carved-batch-1", "movedImageCount": len(image_ids)}
+
+        def merge_annotation_batches(self, *, source_batch_ids, target_batch_id):
+            merge_calls.append((source_batch_ids, target_batch_id))
+            return {}
+
+        def create_annotation_job(self, **kwargs):
+            job_calls.append(kwargs)
+            return {"id": "job-1"}
+
+    merge_calls: list[tuple] = []
+    job_calls: list[dict] = []
+
+    def _fake_search_page(project, api_key, *, offset, limit, fields, batch_id=None):
+        return [{"id": "known-rf-image-id"}]
+
+    monkeypatch.setattr(mod, "rf_search_page", _fake_search_page)
+
+    note = mod._move_to_annotating(
+        _Proj(),
+        "fake-key",
+        batch_name="my-batch",
+        labeler_email="a@b.com",
+        new_images_uploaded=True,
+        updated_roboflow_ids=["known-rf-image-id"],
+    )
+
+    assert note is None
+    assert merge_calls == [(["carved-batch-1"], "new-image-batch")]
+    assert job_calls == [
+        {"name": "my-batch", "batch_id": "new-image-batch", "labeler_email": "a@b.com", "reviewer_email": "a@b.com"}
+    ]
+
+
+def test_move_to_annotating_carves_multiple_source_batches_and_merges_them(monkeypatch) -> None:
+    """Updated images spanning two different original Roboflow batches
+    each get carved out separately, then the two resulting batches are
+    merged into one before filing a single job."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        def get_batches(self):
+            return {"batches": [{"id": "batch-a", "images": 5}, {"id": "batch-b", "images": 5}]}
+
+        def create_annotation_batch(self, *, source_batch_id, image_ids, name=None):
+            carve_calls.append((source_batch_id, image_ids))
+            return {"batchId": f"carved-{source_batch_id}", "movedImageCount": len(image_ids)}
+
+        def merge_annotation_batches(self, *, source_batch_ids, target_batch_id):
+            merge_calls.append((sorted(source_batch_ids), target_batch_id))
+            return {}
+
+        def create_annotation_job(self, **kwargs):
+            job_calls.append(kwargs)
+            return {"id": "job-1"}
+
+    carve_calls: list[tuple] = []
+    merge_calls: list[tuple] = []
+    job_calls: list[dict] = []
+
+    def _fake_search_page(project, api_key, *, offset, limit, fields, batch_id=None):
+        if batch_id == "batch-a":
+            return [{"id": "img-1"}]
+        return [{"id": "img-2"}]
+
+    monkeypatch.setattr(mod, "rf_search_page", _fake_search_page)
+
+    note = mod._move_to_annotating(
+        _Proj(),
+        "fake-key",
+        batch_name="my-batch",
+        labeler_email="a@b.com",
+        new_images_uploaded=False,
+        updated_roboflow_ids=["img-1", "img-2"],
+    )
+
+    assert note is None
+    assert sorted(carve_calls) == [("batch-a", ["img-1"]), ("batch-b", ["img-2"])]
+    assert len(merge_calls) == 1
+    assert len(job_calls) == 1
+
+
+def test_move_to_annotating_reports_images_not_found_in_any_batch(monkeypatch) -> None:
+    """An updated image that can't be located in any Roboflow batch (e.g.
+    deleted there since the annotation update) must not crash the export —
+    it's reported in the note and simply stays wherever it is."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        def get_batches(self):
+            return {"batches": []}
+
+    note = mod._move_to_annotating(
+        _Proj(),
+        "fake-key",
+        batch_name="my-batch",
+        labeler_email="a@b.com",
+        new_images_uploaded=False,
+        updated_roboflow_ids=["img-missing"],
+    )
+
+    assert note is not None
+    assert "1" in note and "could not be located" in note
+
+
+def test_move_to_annotating_reports_batch_lookup_failure_non_fatally(monkeypatch) -> None:
+    """If discovering which batch the updated images belong to blows up
+    (Roboflow unreachable, API error, etc.) the export must not crash —
+    the annotations already landed either way. `_discover_batch_membership`
+    calls `project.get_batches()` first, so raising there is the simplest
+    way to force that failure without needing to fake `rf_search_page`
+    too."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        def get_batches(self):
+            raise RuntimeError("Roboflow unreachable")
+
+    note = mod._move_to_annotating(
+        _Proj(),
+        "fake-key",
+        batch_name="my-batch",
+        labeler_email="a@b.com",
+        new_images_uploaded=False,
+        updated_roboflow_ids=["img-1"],
+    )
+
+    assert note is not None
+    assert "Roboflow unreachable" in note
+
+
+def test_move_to_annotating_no_work_returns_none(monkeypatch) -> None:
+    """Neither new images nor updated ones — nothing to do, no API calls,
+    no note."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        def get_batches(self):
+            raise AssertionError("must not be called when there's nothing to move")
+
+    note = mod._move_to_annotating(
+        _Proj(),
+        "fake-key",
+        batch_name="my-batch",
+        labeler_email="a@b.com",
+        new_images_uploaded=False,
+        updated_roboflow_ids=[],
+    )
+
+    assert note is None
+
+
+# --- Fix wave: Finding 1 — _build_export_note must surface review_job_note
+# whenever a job was actually attempted, not just when new_images > 0 ---
+
+
+def test_build_export_note_surfaces_review_job_note_when_job_attempted_with_zero_new_images() -> None:
+    """The exact scenario the review caught: 0 new images, 1 updated image,
+    and a job WAS attempted (the known-id carve path) — `_move_to_annotating`
+    returned a diagnostic note (e.g. the image couldn't be located in any
+    batch). That note must surface verbatim; the old `new_images == 0`
+    check silently discarded it and printed the false "No new batch or
+    review job was created" message instead."""
+    from app.services.integrations import roboflow_export as mod
+
+    review_job_note = (
+        "1 updated image(s) could not be located in any Roboflow batch and stayed in Unassigned."
+    )
+
+    note = mod._build_export_note(
+        new_images=0,
+        annotations_updated=1,
+        unchanged=0,
+        job_attempted=True,
+        review_job_note=review_job_note,
+    )
+
+    assert note is not None
+    assert review_job_note in note
+    assert "No new batch or review job was created" not in note
+
+
+def test_build_export_note_reports_no_job_created_when_not_attempted() -> None:
+    """When no job was attempted at all (e.g. upload_target isn't
+    ANNOTATING, or genuinely nothing new/updated via the known-id path),
+    the fallback message must still show — this is the case
+    `job_attempted=False` is meant to cover."""
+    from app.services.integrations import roboflow_export as mod
+
+    note = mod._build_export_note(
+        new_images=0,
+        annotations_updated=1,
+        unchanged=0,
+        job_attempted=False,
+        review_job_note=None,
+    )
+
+    assert note is not None
+    assert "No new batch or review job was created" in note
+
+
+# --- Fix wave: Finding 2 — the `images` count on a batch is an unverified
+# key; `_discover_batch_membership` must scan every batch regardless ---
+
+
+def test_discover_batch_membership_scans_batch_with_zero_or_missing_images_field(monkeypatch) -> None:
+    """A batch reporting `images: 0`, or missing the key entirely, must
+    still be scanned rather than silently skipped — trusting that
+    unverified key could otherwise make the whole feature a silent no-op
+    (see roboflow_browse.py's own hedge across several possible key names
+    for the same real-world uncertainty)."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        id = "ws/proj"
+
+        def get_batches(self):
+            return {
+                "batches": [
+                    {"id": "batch-zero", "images": 0},
+                    {"id": "batch-no-key"},
+                ]
+            }
+
+    def _fake_search_page(project, api_key, *, offset, limit, fields, batch_id=None):
+        if batch_id == "batch-zero":
+            return []
+        if batch_id == "batch-no-key":
+            return [{"id": "img-1"}]
+        raise AssertionError(f"unexpected batch {batch_id!r}")
+
+    monkeypatch.setattr(mod, "rf_search_page", _fake_search_page)
+
+    result = mod._discover_batch_membership(_Proj(), "fake-key", target_ids={"img-1"})
+
+    assert result == {"batch-no-key": ["img-1"]}
+
+
+# --- Fix wave: Finding 3 — a 404-fallback upload resolving to
+# ANNOTATION_UPDATED via Roboflow's own duplicate detection must not leak
+# into the known-id carve-to-job scope ---
+
+
+def test_push_version_known_id_404_fallback_duplicate_update_does_not_leak_into_carve_scope(
+    real_db_session, monkeypatch, unique_name: str
+) -> None:
+    """A known-id image's direct save_annotation 404s (stale stored id),
+    falls back to a normal upload, and Roboflow's own duplicate detection
+    resolves THAT upload to ANNOTATION_UPDATED (has_annotation=True). This
+    outcome must NOT be attributed to the known-id path: `_push_image`
+    must report `used_known_id=False` for it, so it's never added to
+    `updated_known_roboflow_ids` and never feeds `_move_to_annotating`'s
+    carve step. With new_images=0 and no known-id updates recorded,
+    `job_attempted` must be False, so `_move_to_annotating` (and therefore
+    `project.get_batches()`/`create_annotation_batch()`) must never be
+    called at all — enforced here by making both raise if invoked."""
+    import uuid as _uuid
+
+    from app.models.dataset import Dataset
+    from app.models.image import Image, ImageSourceType
+    from app.models.project import Project
+    from app.services.integrations import roboflow_export as mod
+
+    project = Project(name=unique_name, slug=unique_name, class_config=[{"id": 0, "name": "cone"}])
+    real_db_session.add(project)
+    real_db_session.flush()
+    dataset = Dataset(project_id=project.id, name="ds")
+    real_db_session.add(dataset)
+    real_db_session.flush()
+    image = Image(
+        project_id=project.id,
+        dataset_id=dataset.id,
+        storage_key="k",
+        original_filename="a.jpg",
+        width=64,
+        height=48,
+        source_type=ImageSourceType.UPLOAD,
+        roboflow_image_id="missing-on-roboflow",
+        roboflow_workspace="ws",
+        roboflow_project_slug="proj",
+    )
+    real_db_session.add(image)
+    real_db_session.commit()
+    real_db_session.refresh(image)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        (root / "images" / "train").mkdir(parents=True)
+        (root / "labels" / "train").mkdir(parents=True)
+        (root / "images" / "valid").mkdir(parents=True)
+        (root / "labels" / "valid").mkdir(parents=True)
+        (root / "images" / "test").mkdir(parents=True)
+        (root / "labels" / "test").mkdir(parents=True)
+        (root / "images" / "train" / f"{image.id}.jpg").write_bytes(_jpeg_bytes())
+        (root / "labels" / "train" / f"{image.id}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+        return root / "data.yaml"
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    upload_calls = []
+
+    class _Proj:
+        def upload(self, **kwargs):
+            upload_calls.append(kwargs)
+            # Roboflow's own duplicate detection kicks in on the fallback
+            # upload, and there's a local annotation to push, so this
+            # resolves to ANNOTATION_UPDATED via the normal upload path —
+            # NOT the known-id path.
+            return [{"image": {"id": "existing-image-id", "success": False, "duplicate": True}}]
+
+        def save_annotation(self, **kwargs):
+            from roboflow.adapters.rfapi import AnnotationSaveError
+
+            raise AnnotationSaveError("not found", status_code=404)
+
+        def get_batches(self):
+            raise AssertionError(
+                "_move_to_annotating must never be called: job_attempted must be False here"
+            )
+
+        def create_annotation_batch(self, **kwargs):
+            raise AssertionError("must never carve a batch for a leaked known-id outcome")
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com"}))
+
+    result = mod.push_version_to_roboflow(
+        real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
+    )
+
+    assert len(upload_calls) == 1
+    assert (result.new_images, result.annotations_updated, result.failed) == (0, 1, 0)
+    assert result.note is not None
+    assert "No new batch or review job was created" in result.note
+
+
+# --- Fix wave: Finding 4 — bound `_discover_batch_membership`'s worst-case
+# scan cost and let it be interrupted by cancellation ---
+
+
+def test_discover_batch_membership_request_cap_stops_unbounded_scan(monkeypatch) -> None:
+    """An unfindable target id must not page through a batch forever — the
+    fake search here always returns a full page (so `len(page) <
+    _BATCH_SCAN_PAGE_SIZE` never becomes true and the natural
+    end-of-batch exit never fires); without the request cap this would
+    loop indefinitely. With `_BATCH_SCAN_MAX_REQUESTS` patched down to 3,
+    the scan must stop after exactly 3 `/search` calls and report the
+    target as not found."""
+    from app.services.integrations import roboflow_export as mod
+
+    monkeypatch.setattr(mod, "_BATCH_SCAN_MAX_REQUESTS", 3)
+    monkeypatch.setattr(mod, "_BATCH_SCAN_PAGE_SIZE", 2)
+
+    class _Proj:
+        id = "ws/proj"
+
+        def get_batches(self):
+            return {"batches": [{"id": "batch-a", "images": 999999}]}
+
+    search_calls = []
+
+    def _fake_search_page(project, api_key, *, offset, limit, fields, batch_id=None):
+        search_calls.append(offset)
+        # Always a full page that never contains the target.
+        return [{"id": f"img-{offset}-{i}"} for i in range(limit)]
+
+    monkeypatch.setattr(mod, "rf_search_page", _fake_search_page)
+
+    result = mod._discover_batch_membership(_Proj(), "fake-key", target_ids={"img-never-found"})
+
+    assert result == {}
+    assert len(search_calls) == 3
+
+
+def test_discover_batch_membership_should_cancel_stops_scan_early(monkeypatch) -> None:
+    """A cancelled export must interrupt the batch scan instead of paging
+    through every remaining batch — `should_cancel` returning `True`
+    immediately means not even the first of two unscanned batches should
+    ever be searched."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        id = "ws/proj"
+
+        def get_batches(self):
+            return {
+                "batches": [
+                    {"id": "batch-a", "images": 5},
+                    {"id": "batch-b", "images": 5},
+                ]
+            }
+
+    def _fake_search_page(project, api_key, *, offset, limit, fields, batch_id=None):
+        raise AssertionError(f"should never search batch {batch_id!r} once should_cancel() is True")
+
+    monkeypatch.setattr(mod, "rf_search_page", _fake_search_page)
+
+    result = mod._discover_batch_membership(
+        _Proj(), "fake-key", target_ids={"img-1"}, should_cancel=lambda: True
+    )
+
+    assert result == {}

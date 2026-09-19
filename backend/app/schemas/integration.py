@@ -155,6 +155,8 @@ class RoboflowJobRead(BaseModel):
     total_items: int
     processed_items: int
     uploaded_count: int
+    new_images_count: int
+    annotations_updated_count: int
     failed_count: int
     failures: list[str]
     result_dataset_id: uuid.UUID | None = None
