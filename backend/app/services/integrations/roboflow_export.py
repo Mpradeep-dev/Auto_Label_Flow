@@ -110,6 +110,14 @@ _AUTH_STATUSES = frozenset({401, 403})
 # identical shape of paginated /search call.
 _BATCH_SCAN_PAGE_SIZE = 100
 
+# Bounds `_discover_batch_membership`'s worst case (an unfindable target id
+# pages through every batch in the project) — at `_BATCH_SCAN_PAGE_SIZE`
+# images per request this is a generous ~20,000-image scan budget before
+# giving up and reporting "not found" for whatever's left, rather than
+# spending unbounded time/API calls hunting for something that may no
+# longer exist.
+_BATCH_SCAN_MAX_REQUESTS = 200
+
 # When nothing has uploaded yet and the run has already failed this many
 # images the *same* way, stop. Grinding through a multi-thousand-image
 # version at ~10s per failed attempt is a >10h "RUNNING" job that uploads
@@ -181,16 +189,29 @@ def _plural(n: int, noun: str) -> str:
 
 
 def _build_export_note(
-    *, new_images: int, annotations_updated: int, unchanged: int, review_job_note: str | None
+    *, new_images: int, annotations_updated: int, unchanged: int, job_attempted: bool, review_job_note: str | None
 ) -> str | None:
     """Human-readable summary surfaced as `job.error` (an informational
     note, never a failure — see `run_roboflow_export`'s comment on that
     field). Always non-`None` once at least one image succeeded, so the UI
     shows what actually happened instead of staying silent on a fully
     "clean" push — replaces the old behavior where a successful push with
-    no review-job problems reported nothing at all. `review_job_note` is
-    whatever `_move_to_annotating` returned for the new-image and/or
-    updated-image batch (its own failure note, or `None`)."""
+    no review-job problems reported nothing at all. `job_attempted` is
+    whether `_move_to_annotating` was actually called this run (new images
+    uploaded, or known-id images updated via the direct known-id path —
+    NOT just "new_images > 0", since an all-updated, zero-new-image
+    ANNOTATING-target run still attempts a job via the carve path); it's
+    always `False` for a non-ANNOTATING `upload_target`, since a job is
+    never relevant there regardless of how many images landed. The
+    "no batch was created" message below is about the ANNOTATING-only
+    "nothing new landed" case specifically (`new_images == 0`) — it stays
+    silent for a non-ANNOTATING push with new images (nothing was ever
+    supposed to happen there) and, the bug this parameter fixes, no longer
+    swallows `review_job_note` whenever `new_images == 0` regardless of
+    whether a job was actually attempted and produced a diagnostic.
+    `review_job_note` is whatever `_move_to_annotating` returned for the
+    new-image and/or updated-image batch (its own failure note, or
+    `None`)."""
     succeeded = new_images + annotations_updated + unchanged
     if succeeded == 0:
         return review_job_note
@@ -204,7 +225,7 @@ def _build_export_note(
         parts.append(f"{_plural(unchanged, 'existing image')} unchanged (no local annotation to push)")
     summary = ", ".join(parts) + "."
 
-    if new_images == 0:
+    if new_images == 0 and not job_attempted:
         summary += " No new batch or review job was created — nothing new landed on Roboflow."
     elif review_job_note:
         summary += f" {review_job_note}"
@@ -219,6 +240,7 @@ def _move_to_annotating(
     labeler_email: str | None,
     new_images_uploaded: bool,
     updated_roboflow_ids: list[str],
+    should_cancel: Callable[[], bool] | None = None,
 ) -> str | None:
     """Moves this export's images out of Roboflow's Unassigned column into
     Annotating, covering two disjoint sources that need different Roboflow
@@ -255,7 +277,11 @@ def _move_to_annotating(
     short message describing what went wrong, for the caller to fold into
     the export's summary note non-fatally — the images/annotations
     themselves already landed on Roboflow either way; this call only
-    affects which Annotate-board column they sit in."""
+    affects which Annotate-board column they sit in.
+
+    `should_cancel`, if given, is passed straight through to
+    `_discover_batch_membership`'s batch scan so a user cancelling the
+    export can interrupt that tail-end work too."""
     if not new_images_uploaded and not updated_roboflow_ids:
         return None
     if not labeler_email:
@@ -284,7 +310,9 @@ def _move_to_annotating(
 
     if updated_roboflow_ids:
         try:
-            membership = _discover_batch_membership(project, api_key, target_ids=set(updated_roboflow_ids))
+            membership = _discover_batch_membership(
+                project, api_key, target_ids=set(updated_roboflow_ids), should_cancel=should_cancel
+            )
         except Exception as exc:  # noqa: BLE001 — non-fatal: annotations already updated
             notes.append(
                 f"couldn't look up which Roboflow batch {_plural(len(updated_roboflow_ids), 'updated image')} "
@@ -355,7 +383,9 @@ def _is_duplicate_upload(result) -> bool:
     return bool(image.get("duplicate"))
 
 
-def _discover_batch_membership(project, api_key: str, *, target_ids: set[str]) -> dict[str, list[str]]:
+def _discover_batch_membership(
+    project, api_key: str, *, target_ids: set[str], should_cancel: Callable[[], bool] | None = None
+) -> dict[str, list[str]]:
     """Returns `{batch_id: [image_id, ...]}` for as much of `target_ids` as
     could be located, by paging through the project's existing batches
     until every target id has turned up or every batch has been scanned.
@@ -366,24 +396,38 @@ def _discover_batch_membership(project, api_key: str, *, target_ids: set[str]) -
     target set is the only way to find out. Stops scanning entirely, even
     mid-batch, once every target id has been located — the common case
     (a handful of just-updated images) shouldn't cost a full scan of every
-    batch in a large project."""
+    batch in a large project. Each batch is scanned regardless of whatever
+    (unverified) count field it carries — a genuinely empty batch just
+    costs one `/search` call that returns `[]` and breaks immediately.
+    Also stops early, reporting whatever wasn't found yet as not-found
+    (same as genuinely exhausting every batch), once `should_cancel()`
+    reports true or `_BATCH_SCAN_MAX_REQUESTS` `/search` calls have been
+    made — bounds worst-case cost/time on a large project and lets a
+    user's cancel interrupt this tail-end scan."""
     remaining = set(target_ids)
     found: dict[str, list[str]] = {}
     if not remaining:
         return found
 
+    def _stop() -> bool:
+        return should_cancel is not None and should_cancel()
+
+    requests_made = 0
     batches = project.get_batches().get("batches", [])
     for batch in batches:
-        if not remaining:
+        if not remaining or _stop():
             break
         batch_id = batch.get("id")
-        if not batch_id or not batch.get("images"):
+        if not batch_id:
             continue
         offset = 0
         while remaining:
+            if requests_made >= _BATCH_SCAN_MAX_REQUESTS or _stop():
+                return found
             page = rf_search_page(
                 project, api_key, offset=offset, limit=_BATCH_SCAN_PAGE_SIZE, fields=["id"], batch_id=batch_id
             )
+            requests_made += 1
             if not page:
                 break
             for item in page:
@@ -528,7 +572,7 @@ def _push_image(
     batch_name: str,
     is_prediction: bool,
     annotation_labelmap_path: str,
-) -> _PushOutcome:
+) -> tuple[_PushOutcome, bool]:
     """Routes a single image to whichever Roboflow write path applies. An
     image this app already knows the Roboflow id for (imported from this
     same workspace/project, via `import_roboflow_raw_project` — see
@@ -538,19 +582,32 @@ def _push_image(
     duplicate-detection. Everything else (a genuinely new local image, an
     image with no local annotation to push at all, or a known id that
     404s because the Roboflow image was deleted since import) falls
-    through to the normal `_upload_one_image` path."""
+    through to the normal `_upload_one_image` path.
+
+    Returns `(outcome, used_known_id)` — `used_known_id` is `True` only
+    when the outcome came from the known-Roboflow-id direct path
+    (`_save_annotation_only`); `False` when it fell through to the normal
+    upload path, including the 404-fallback case, where a stale known id
+    must NOT be treated as "used the known-id path" even though the
+    outcome can still be `ANNOTATION_UPDATED` via Roboflow's own
+    duplicate detection on the fallback upload. This is what the caller
+    uses to correctly scope which images feed `_move_to_annotating`'s
+    carve step — see `push_version_to_roboflow`'s collection loop."""
     has_annotation = upload_kwargs["annotation_path"] is not None
     if roboflow_image_id is not None:
         if not has_annotation:
-            return _PushOutcome.UNCHANGED
+            return _PushOutcome.UNCHANGED, True
         try:
-            return _save_annotation_only(
-                project,
-                roboflow_image_id=roboflow_image_id,
-                annotation_path=upload_kwargs["annotation_path"],
-                annotation_labelmap_path=annotation_labelmap_path,
-                batch_name=batch_name,
-                is_prediction=is_prediction,
+            return (
+                _save_annotation_only(
+                    project,
+                    roboflow_image_id=roboflow_image_id,
+                    annotation_path=upload_kwargs["annotation_path"],
+                    annotation_labelmap_path=annotation_labelmap_path,
+                    batch_name=batch_name,
+                    is_prediction=is_prediction,
+                ),
+                True,
             )
         except Exception as exc:  # noqa: BLE001 - only a 404 falls through; anything else is a real failure
             if getattr(exc, "status_code", None) != 404:
@@ -561,7 +618,7 @@ def _push_image(
                 roboflow_image_id,
                 upload_kwargs.get("image_path"),
             )
-    return _upload_one_image(project, has_annotation=has_annotation, **upload_kwargs)
+    return _upload_one_image(project, has_annotation=has_annotation, **upload_kwargs), False
 
 
 def push_version_to_roboflow(
@@ -732,10 +789,13 @@ def push_version_to_roboflow(
         succeeded = 0
         failed = 0
         failures: list[str] = []
-        # Only ever appended to for the known-Roboflow-id path (see
-        # `_move_to_annotating`'s docstring on the scope boundary) — an
-        # `ANNOTATION_UPDATED` outcome from the SDK-duplicate fallback path
-        # has no entry in `known_roboflow_ids` and is deliberately skipped.
+        # Only ever appended to when `_push_image` reports it actually used
+        # the known-Roboflow-id direct path — NOT merely "this image has a
+        # roboflow_image_id in the DB", since a stale id that 404s falls
+        # back to the normal upload path and can still come back
+        # ANNOTATION_UPDATED via Roboflow's own duplicate detection there;
+        # that outcome must not leak into the carve-to-job step this scope
+        # boundary protects.
         updated_known_roboflow_ids: list[str] = []
         seen_statuses: list[int | None] = []
         fail_fast_error: RoboflowExportError | None = None
@@ -780,15 +840,16 @@ def push_version_to_roboflow(
                 for future in done:
                     image_path = in_flight.pop(future)
                     try:
-                        outcome = future.result()
+                        outcome, used_known_id = future.result()
                         succeeded += 1
                         if outcome is _PushOutcome.NEW_IMAGE:
                             new_images += 1
                         elif outcome is _PushOutcome.ANNOTATION_UPDATED:
                             annotations_updated += 1
-                            known_id = known_roboflow_ids.get(_image_uuid(image_path))
-                            if known_id is not None:
-                                updated_known_roboflow_ids.append(known_id)
+                            if used_known_id:
+                                known_id = known_roboflow_ids.get(_image_uuid(image_path))
+                                if known_id is not None:
+                                    updated_known_roboflow_ids.append(known_id)
                         else:
                             unchanged += 1
                     except Exception as exc:  # a single bad image shouldn't abort the whole push
@@ -832,7 +893,10 @@ def push_version_to_roboflow(
     )
 
     review_job_note: str | None = None
-    if upload_target == RoboflowUploadTarget.ANNOTATING.value and (new_images > 0 or updated_known_roboflow_ids):
+    job_attempted = upload_target == RoboflowUploadTarget.ANNOTATING.value and (
+        new_images > 0 or updated_known_roboflow_ids
+    )
+    if job_attempted:
         review_job_note = _move_to_annotating(
             project,
             config.get("api_key"),
@@ -840,12 +904,14 @@ def push_version_to_roboflow(
             labeler_email=config.get("default_labeler_email"),
             new_images_uploaded=new_images > 0,
             updated_roboflow_ids=updated_known_roboflow_ids,
+            should_cancel=should_cancel,
         )
 
     note = _build_export_note(
         new_images=new_images,
         annotations_updated=annotations_updated,
         unchanged=unchanged,
+        job_attempted=job_attempted,
         review_job_note=review_job_note,
     )
 

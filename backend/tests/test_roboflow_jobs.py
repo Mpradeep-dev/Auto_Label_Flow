@@ -2898,3 +2898,262 @@ def test_move_to_annotating_no_work_returns_none(monkeypatch) -> None:
     )
 
     assert note is None
+
+
+# --- Fix wave: Finding 1 — _build_export_note must surface review_job_note
+# whenever a job was actually attempted, not just when new_images > 0 ---
+
+
+def test_build_export_note_surfaces_review_job_note_when_job_attempted_with_zero_new_images() -> None:
+    """The exact scenario the review caught: 0 new images, 1 updated image,
+    and a job WAS attempted (the known-id carve path) — `_move_to_annotating`
+    returned a diagnostic note (e.g. the image couldn't be located in any
+    batch). That note must surface verbatim; the old `new_images == 0`
+    check silently discarded it and printed the false "No new batch or
+    review job was created" message instead."""
+    from app.services.integrations import roboflow_export as mod
+
+    review_job_note = (
+        "1 updated image(s) could not be located in any Roboflow batch and stayed in Unassigned."
+    )
+
+    note = mod._build_export_note(
+        new_images=0,
+        annotations_updated=1,
+        unchanged=0,
+        job_attempted=True,
+        review_job_note=review_job_note,
+    )
+
+    assert note is not None
+    assert review_job_note in note
+    assert "No new batch or review job was created" not in note
+
+
+def test_build_export_note_reports_no_job_created_when_not_attempted() -> None:
+    """When no job was attempted at all (e.g. upload_target isn't
+    ANNOTATING, or genuinely nothing new/updated via the known-id path),
+    the fallback message must still show — this is the case
+    `job_attempted=False` is meant to cover."""
+    from app.services.integrations import roboflow_export as mod
+
+    note = mod._build_export_note(
+        new_images=0,
+        annotations_updated=1,
+        unchanged=0,
+        job_attempted=False,
+        review_job_note=None,
+    )
+
+    assert note is not None
+    assert "No new batch or review job was created" in note
+
+
+# --- Fix wave: Finding 2 — the `images` count on a batch is an unverified
+# key; `_discover_batch_membership` must scan every batch regardless ---
+
+
+def test_discover_batch_membership_scans_batch_with_zero_or_missing_images_field(monkeypatch) -> None:
+    """A batch reporting `images: 0`, or missing the key entirely, must
+    still be scanned rather than silently skipped — trusting that
+    unverified key could otherwise make the whole feature a silent no-op
+    (see roboflow_browse.py's own hedge across several possible key names
+    for the same real-world uncertainty)."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        id = "ws/proj"
+
+        def get_batches(self):
+            return {
+                "batches": [
+                    {"id": "batch-zero", "images": 0},
+                    {"id": "batch-no-key"},
+                ]
+            }
+
+    def _fake_search_page(project, api_key, *, offset, limit, fields, batch_id=None):
+        if batch_id == "batch-zero":
+            return []
+        if batch_id == "batch-no-key":
+            return [{"id": "img-1"}]
+        raise AssertionError(f"unexpected batch {batch_id!r}")
+
+    monkeypatch.setattr(mod, "rf_search_page", _fake_search_page)
+
+    result = mod._discover_batch_membership(_Proj(), "fake-key", target_ids={"img-1"})
+
+    assert result == {"batch-no-key": ["img-1"]}
+
+
+# --- Fix wave: Finding 3 — a 404-fallback upload resolving to
+# ANNOTATION_UPDATED via Roboflow's own duplicate detection must not leak
+# into the known-id carve-to-job scope ---
+
+
+def test_push_version_known_id_404_fallback_duplicate_update_does_not_leak_into_carve_scope(
+    real_db_session, monkeypatch, unique_name: str
+) -> None:
+    """A known-id image's direct save_annotation 404s (stale stored id),
+    falls back to a normal upload, and Roboflow's own duplicate detection
+    resolves THAT upload to ANNOTATION_UPDATED (has_annotation=True). This
+    outcome must NOT be attributed to the known-id path: `_push_image`
+    must report `used_known_id=False` for it, so it's never added to
+    `updated_known_roboflow_ids` and never feeds `_move_to_annotating`'s
+    carve step. With new_images=0 and no known-id updates recorded,
+    `job_attempted` must be False, so `_move_to_annotating` (and therefore
+    `project.get_batches()`/`create_annotation_batch()`) must never be
+    called at all — enforced here by making both raise if invoked."""
+    import uuid as _uuid
+
+    from app.models.dataset import Dataset
+    from app.models.image import Image, ImageSourceType
+    from app.models.project import Project
+    from app.services.integrations import roboflow_export as mod
+
+    project = Project(name=unique_name, slug=unique_name, class_config=[{"id": 0, "name": "cone"}])
+    real_db_session.add(project)
+    real_db_session.flush()
+    dataset = Dataset(project_id=project.id, name="ds")
+    real_db_session.add(dataset)
+    real_db_session.flush()
+    image = Image(
+        project_id=project.id,
+        dataset_id=dataset.id,
+        storage_key="k",
+        original_filename="a.jpg",
+        width=64,
+        height=48,
+        source_type=ImageSourceType.UPLOAD,
+        roboflow_image_id="missing-on-roboflow",
+        roboflow_workspace="ws",
+        roboflow_project_slug="proj",
+    )
+    real_db_session.add(image)
+    real_db_session.commit()
+    real_db_session.refresh(image)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        (root / "images" / "train").mkdir(parents=True)
+        (root / "labels" / "train").mkdir(parents=True)
+        (root / "images" / "valid").mkdir(parents=True)
+        (root / "labels" / "valid").mkdir(parents=True)
+        (root / "images" / "test").mkdir(parents=True)
+        (root / "labels" / "test").mkdir(parents=True)
+        (root / "images" / "train" / f"{image.id}.jpg").write_bytes(_jpeg_bytes())
+        (root / "labels" / "train" / f"{image.id}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+        return root / "data.yaml"
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    upload_calls = []
+
+    class _Proj:
+        def upload(self, **kwargs):
+            upload_calls.append(kwargs)
+            # Roboflow's own duplicate detection kicks in on the fallback
+            # upload, and there's a local annotation to push, so this
+            # resolves to ANNOTATION_UPDATED via the normal upload path —
+            # NOT the known-id path.
+            return [{"image": {"id": "existing-image-id", "success": False, "duplicate": True}}]
+
+        def save_annotation(self, **kwargs):
+            from roboflow.adapters.rfapi import AnnotationSaveError
+
+            raise AnnotationSaveError("not found", status_code=404)
+
+        def get_batches(self):
+            raise AssertionError(
+                "_move_to_annotating must never be called: job_attempted must be False here"
+            )
+
+        def create_annotation_batch(self, **kwargs):
+            raise AssertionError("must never carve a batch for a leaked known-id outcome")
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com"}))
+
+    result = mod.push_version_to_roboflow(
+        real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
+    )
+
+    assert len(upload_calls) == 1
+    assert (result.new_images, result.annotations_updated, result.failed) == (0, 1, 0)
+    assert result.note is not None
+    assert "No new batch or review job was created" in result.note
+
+
+# --- Fix wave: Finding 4 — bound `_discover_batch_membership`'s worst-case
+# scan cost and let it be interrupted by cancellation ---
+
+
+def test_discover_batch_membership_request_cap_stops_unbounded_scan(monkeypatch) -> None:
+    """An unfindable target id must not page through a batch forever — the
+    fake search here always returns a full page (so `len(page) <
+    _BATCH_SCAN_PAGE_SIZE` never becomes true and the natural
+    end-of-batch exit never fires); without the request cap this would
+    loop indefinitely. With `_BATCH_SCAN_MAX_REQUESTS` patched down to 3,
+    the scan must stop after exactly 3 `/search` calls and report the
+    target as not found."""
+    from app.services.integrations import roboflow_export as mod
+
+    monkeypatch.setattr(mod, "_BATCH_SCAN_MAX_REQUESTS", 3)
+    monkeypatch.setattr(mod, "_BATCH_SCAN_PAGE_SIZE", 2)
+
+    class _Proj:
+        id = "ws/proj"
+
+        def get_batches(self):
+            return {"batches": [{"id": "batch-a", "images": 999999}]}
+
+    search_calls = []
+
+    def _fake_search_page(project, api_key, *, offset, limit, fields, batch_id=None):
+        search_calls.append(offset)
+        # Always a full page that never contains the target.
+        return [{"id": f"img-{offset}-{i}"} for i in range(limit)]
+
+    monkeypatch.setattr(mod, "rf_search_page", _fake_search_page)
+
+    result = mod._discover_batch_membership(_Proj(), "fake-key", target_ids={"img-never-found"})
+
+    assert result == {}
+    assert len(search_calls) == 3
+
+
+def test_discover_batch_membership_should_cancel_stops_scan_early(monkeypatch) -> None:
+    """A cancelled export must interrupt the batch scan instead of paging
+    through every remaining batch — `should_cancel` returning `True`
+    immediately means not even the first of two unscanned batches should
+    ever be searched."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        id = "ws/proj"
+
+        def get_batches(self):
+            return {
+                "batches": [
+                    {"id": "batch-a", "images": 5},
+                    {"id": "batch-b", "images": 5},
+                ]
+            }
+
+    def _fake_search_page(project, api_key, *, offset, limit, fields, batch_id=None):
+        raise AssertionError(f"should never search batch {batch_id!r} once should_cancel() is True")
+
+    monkeypatch.setattr(mod, "rf_search_page", _fake_search_page)
+
+    result = mod._discover_batch_membership(
+        _Proj(), "fake-key", target_ids={"img-1"}, should_cancel=lambda: True
+    )
+
+    assert result == {}
