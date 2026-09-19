@@ -24,10 +24,12 @@ from pathlib import Path
 from typing import Callable, NamedTuple
 
 import requests
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.models.dataset import Dataset
 from app.models.dataset_version import DatasetVersion
+from app.models.image import Image
 from app.models.roboflow_job import RoboflowUploadTarget
 from app.services.dataset.export_yolo import ExportError, write_yolo_dataset
 from app.services.integrations.roboflow_connect import get_client
@@ -311,6 +313,114 @@ def _upload_one_image(project, *, has_annotation: bool, **upload_kwargs) -> _Pus
             time.sleep(_UPLOAD_BACKOFF_BASE_S * 2 ** (attempt - 1))
 
 
+def _save_annotation_only(
+    project,
+    *,
+    roboflow_image_id: str,
+    annotation_path: str,
+    annotation_labelmap_path: str,
+    batch_name: str,
+    is_prediction: bool,
+) -> _PushOutcome:
+    """Updates the annotation on an already-known Roboflow image directly,
+    via `Project.save_annotation()` — never `Project.upload()` — so the
+    image's (unchanged) bytes are never re-sent and Roboflow's
+    duplicate-detection is never involved at all. `annotation_overwrite`
+    is always `True`: the whole point of this path is replacing whatever
+    annotation the image already carries (the ground truth pulled in at
+    import time, or a prediction from an earlier push) with the current
+    local one — the default `overwrite=False` would instead hit Roboflow's
+    409 "already annotated" response and silently do nothing (see
+    `rfapi.save_annotation`, `roboflow/adapters/rfapi.py:815-821`).
+
+    `annotation_labelmap` must be the loaded `{index: name}` mapping, not
+    a bare yaml path — `Project.upload()`'s own internal call chain
+    (`single_upload`, `roboflow/core/project.py:604-605`) converts it via
+    `load_labelmap()` before ever calling `save_annotation`; calling
+    `Project.save_annotation()` directly, as this does, means doing that
+    conversion ourselves or Roboflow receives the literal path string as
+    the labelmap and silently mislabels every class.
+
+    Retries a transient 5xx/429 or bare network error the same as
+    `_upload_one_image`; anything else (in particular a 404 — the stored
+    id no longer resolves to an image on Roboflow) is raised for the
+    caller (`_push_image`) to fall back to a normal upload for."""
+    from roboflow.util.image_utils import load_labelmap
+
+    labelmap = load_labelmap(annotation_labelmap_path)
+    for attempt in range(1, _UPLOAD_MAX_ATTEMPTS + 1):
+        try:
+            project.save_annotation(
+                annotation_path=annotation_path,
+                annotation_labelmap=labelmap,
+                image_id=roboflow_image_id,
+                job_name=batch_name,
+                is_prediction=is_prediction,
+                annotation_overwrite=True,
+            )
+            return _PushOutcome.ANNOTATION_UPDATED
+        except Exception as exc:  # noqa: BLE001 - re-raised below, classified by status
+            status = getattr(exc, "status_code", None)
+            transient = status in _UPLOAD_RETRY_STATUSES or (
+                status is None and isinstance(exc, requests.RequestException)
+            )
+            if not transient or attempt == _UPLOAD_MAX_ATTEMPTS:
+                raise
+            logger.warning(
+                "Roboflow export: annotation update for Roboflow image %s failed %s "
+                "(attempt %d/%d) — retrying",
+                roboflow_image_id,
+                f"HTTP {status}" if status is not None else repr(exc),
+                attempt,
+                _UPLOAD_MAX_ATTEMPTS,
+            )
+            time.sleep(_UPLOAD_BACKOFF_BASE_S * 2 ** (attempt - 1))
+
+
+def _push_image(
+    project,
+    *,
+    roboflow_image_id: str | None,
+    upload_kwargs: dict,
+    batch_name: str,
+    is_prediction: bool,
+    annotation_labelmap_path: str,
+) -> _PushOutcome:
+    """Routes a single image to whichever Roboflow write path applies. An
+    image this app already knows the Roboflow id for (imported from this
+    same workspace/project, via `import_roboflow_raw_project` — see
+    `Image.roboflow_image_id`) skips `Project.upload()` entirely and only
+    ever updates its annotation through `_save_annotation_only` — never
+    re-uploading bytes Roboflow already has, never depending on its
+    duplicate-detection. Everything else (a genuinely new local image, an
+    image with no local annotation to push at all, or a known id that
+    404s because the Roboflow image was deleted since import) falls
+    through to the normal `_upload_one_image` path."""
+    has_annotation = upload_kwargs["annotation_path"] is not None
+    if roboflow_image_id is not None:
+        if not has_annotation:
+            return _PushOutcome.UNCHANGED
+        try:
+            return _save_annotation_only(
+                project,
+                roboflow_image_id=roboflow_image_id,
+                annotation_path=upload_kwargs["annotation_path"],
+                annotation_labelmap_path=annotation_labelmap_path,
+                batch_name=batch_name,
+                is_prediction=is_prediction,
+            )
+        except Exception as exc:  # noqa: BLE001 - only a 404 falls through; anything else is a real failure
+            if getattr(exc, "status_code", None) != 404:
+                raise
+            logger.warning(
+                "Roboflow export: stored Roboflow image id %s no longer exists on Roboflow "
+                "(404) — falling back to a fresh upload for %s",
+                roboflow_image_id,
+                upload_kwargs.get("image_path"),
+            )
+    return _upload_one_image(project, has_annotation=has_annotation, **upload_kwargs)
+
+
 def push_version_to_roboflow(
     db: Session,
     *,
@@ -404,6 +514,32 @@ def push_version_to_roboflow(
         if progress_cb is not None:
             progress_cb(0, total, 0)
 
+        def _image_uuid(image_path: Path) -> uuid.UUID | None:
+            # Every materialized export file is named after its own
+            # `Image.id` (see `version_data.out_image_filename` —
+            # `f"{image.id}{ext}"`), so the stem is always a real UUID in
+            # production. A test double that fakes `write_yolo_dataset`
+            # with synthetic names (e.g. "img0.jpg") is the one case this
+            # legitimately fails to parse — treated the same as "no known
+            # Roboflow id for this image", which is the correct fallback.
+            try:
+                return uuid.UUID(image_path.stem)
+            except ValueError:
+                return None
+
+        pending_uuids = {u for u in (_image_uuid(p) for _split, p in pending) if u is not None}
+        known_roboflow_ids: dict[uuid.UUID, str] = {}
+        if pending_uuids:
+            rows = db.execute(
+                select(Image.id, Image.roboflow_image_id).where(
+                    Image.id.in_(pending_uuids),
+                    Image.roboflow_workspace == workspace,
+                    Image.roboflow_project_slug == project_slug,
+                    Image.roboflow_image_id.is_not(None),
+                )
+            ).all()
+            known_roboflow_ids = {row.id: row.roboflow_image_id for row in rows}
+
         def _upload_kwargs(split: str, image_path: Path) -> dict:
             roboflow_split = _SPLIT_TO_ROBOFLOW[split]
             labels_dir = root / "labels" / split
@@ -479,7 +615,13 @@ def push_version_to_roboflow(
                         return
                     kwargs = _upload_kwargs(split, image_path)
                     future = pool.submit(
-                        _upload_one_image, project, has_annotation=kwargs["annotation_path"] is not None, **kwargs
+                        _push_image,
+                        project,
+                        roboflow_image_id=known_roboflow_ids.get(_image_uuid(image_path)),
+                        upload_kwargs=kwargs,
+                        batch_name=batch_name,
+                        is_prediction=kwargs["is_prediction"],
+                        annotation_labelmap_path=kwargs["annotation_labelmap"],
                     )
                     in_flight[future] = image_path
 

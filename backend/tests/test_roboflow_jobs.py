@@ -131,6 +131,7 @@ class _FakeRoboflowProject:
         self.id = f"my-workspace/{slug}"
         self.uploads: list[tuple[str, str | None, str, str | None, bool]] = []
         self.annotation_jobs: list[dict] = []
+        self.saved_annotations: list[dict] = []
 
     def version(self, v: int) -> _FakeRoboflowVersion:
         return _FakeRoboflowVersion(v)
@@ -181,6 +182,32 @@ class _FakeRoboflowProject:
         annotation_overwrite: bool = False,
     ) -> None:
         self.uploads.append((image_path, annotation_path, split, batch_name, is_prediction))
+
+    def save_annotation(
+        self,
+        *,
+        annotation_path: str,
+        annotation_labelmap,
+        image_id: str,
+        job_name: str | None = None,
+        is_prediction: bool = False,
+        annotation_overwrite: bool = False,
+    ) -> dict:
+        if image_id == "missing-on-roboflow":
+            from roboflow.adapters.rfapi import AnnotationSaveError
+
+            raise AnnotationSaveError("not found", status_code=404)
+        self.saved_annotations.append(
+            {
+                "annotation_path": annotation_path,
+                "annotation_labelmap": annotation_labelmap,
+                "image_id": image_id,
+                "job_name": job_name,
+                "is_prediction": is_prediction,
+                "annotation_overwrite": annotation_overwrite,
+            }
+        )
+        return {"success": True}
 
     # Raw (unversioned) pull path — no `.version()` here. The service no
     # longer calls `rf_project.search()` or `rf_project.image()`; it hits
@@ -1027,6 +1054,71 @@ def test_roboflow_export_job_completes_and_uploads(
     assert progress is not None
     assert progress.status == "COMPLETED"
     assert progress.current == 1
+
+
+def test_roboflow_export_known_image_id_updates_annotation_without_reupload(
+    connected_roboflow: TestClient, unique_name: str
+) -> None:
+    """An image this app already knows the Roboflow id for (imported from
+    the same workspace/project being exported to) must be routed straight
+    through save_annotation — Project.upload() must never be called for
+    it at all. Builds the exportable version through the exact same real
+    API calls as the `approved_version` fixture above (`real_client.post`
+    for project/dataset/image/approve/annotation/version), then sets
+    `roboflow_image_id`/`roboflow_workspace`/`roboflow_project_slug` on
+    the `Image` row directly afterward — there is no API for setting those
+    outside the real Roboflow import flow, which this test deliberately
+    isn't invoking (it only needs the *result* of having imported, not the
+    import itself — Task 3 already covers the import path writing these)."""
+    from app.db.session import SessionLocal
+    from app.models.image import Image
+
+    project = connected_roboflow.post("/api/v1/projects", json={"name": unique_name}).json()
+    connected_roboflow.patch(
+        f"/api/v1/projects/{project['id']}", json={"class_config": [{"id": 0, "name": "cone"}]}
+    )
+    dataset = connected_roboflow.post(f"/api/v1/projects/{project['id']}/datasets", json={"name": "d"}).json()
+    image = connected_roboflow.post(
+        f"/api/v1/datasets/{dataset['id']}/images", files={"file": ("f.jpg", _jpeg_bytes(), "image/jpeg")}
+    ).json()
+    connected_roboflow.post(f"/api/v1/images/{image['id']}/approve")
+    connected_roboflow.post(
+        "/api/v1/annotations",
+        json={
+            "image_id": image["id"],
+            "class_id": 0,
+            "class_name": "cone",
+            "x1": 0.1,
+            "y1": 0.1,
+            "x2": 0.3,
+            "y2": 0.3,
+        },
+    )
+
+    db = SessionLocal()
+    try:
+        db.query(Image).filter(Image.id == image["id"]).update(
+            {
+                "roboflow_image_id": "known-rf-image-id",
+                "roboflow_workspace": "my-workspace",
+                "roboflow_project_slug": "cones",
+            }
+        )
+        db.commit()
+    finally:
+        db.close()
+
+    version = connected_roboflow.post(f"/api/v1/datasets/{dataset['id']}/versions", json={}).json()
+
+    resp = connected_roboflow.post(
+        f"/api/v1/versions/{version['id']}/export/roboflow",
+        json={"workspace": "my-workspace", "project": "cones"},
+    )
+    assert resp.status_code == 202, resp.text
+    job = resp.json()
+    assert job["status"] == "COMPLETED", job
+    assert job["new_images_count"] == 0
+    assert job["annotations_updated_count"] == 1
 
 
 def test_roboflow_export_names_batch_after_app_and_dataset_version(
@@ -1876,6 +1968,257 @@ def test_push_version_mixed_new_and_duplicate_still_files_review_job_and_reports
     assert result.note is not None
     assert "1 new image" in result.note
     assert "1 existing image" in result.note
+
+
+def test_push_version_known_roboflow_id_routes_through_save_annotation_not_upload(
+    real_db_session, monkeypatch, unique_name: str
+) -> None:
+    """Core of Task 5: an Image row with a roboflow_image_id matching the
+    export target's workspace/project must skip Project.upload() entirely
+    and call Project.save_annotation() directly instead."""
+    import uuid as _uuid
+
+    from app.models.dataset import Dataset
+    from app.models.image import Image, ImageSourceType
+    from app.models.project import Project
+    from app.services.integrations import roboflow_export as mod
+
+    project = Project(name=unique_name, slug=unique_name, class_config=[{"id": 0, "name": "cone"}])
+    real_db_session.add(project)
+    real_db_session.flush()
+    dataset = Dataset(project_id=project.id, name="ds")
+    real_db_session.add(dataset)
+    real_db_session.flush()
+    image = Image(
+        project_id=project.id,
+        dataset_id=dataset.id,
+        storage_key="k",
+        original_filename="a.jpg",
+        width=64,
+        height=48,
+        source_type=ImageSourceType.UPLOAD,
+        roboflow_image_id="known-rf-image-id",
+        roboflow_workspace="ws",
+        roboflow_project_slug="proj",
+    )
+    real_db_session.add(image)
+    real_db_session.commit()
+    real_db_session.refresh(image)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        (root / "images" / "train").mkdir(parents=True)
+        (root / "labels" / "train").mkdir(parents=True)
+        (root / "images" / "valid").mkdir(parents=True)
+        (root / "labels" / "valid").mkdir(parents=True)
+        (root / "images" / "test").mkdir(parents=True)
+        (root / "labels" / "test").mkdir(parents=True)
+        (root / "images" / "train" / f"{image.id}.jpg").write_bytes(_jpeg_bytes())
+        (root / "labels" / "train" / f"{image.id}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+        return root / "data.yaml"
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    upload_calls = []
+    save_calls = []
+
+    class _Proj:
+        def upload(self, **kwargs):
+            upload_calls.append(kwargs)
+            return [{"image": {"id": "should-not-be-called", "success": True, "duplicate": False}}]
+
+        def save_annotation(self, **kwargs):
+            save_calls.append(kwargs)
+            return {"success": True}
+
+        def get_batches(self):
+            return {"batches": []}
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com"}))
+
+    result = mod.push_version_to_roboflow(
+        real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
+    )
+
+    assert not upload_calls
+    assert len(save_calls) == 1
+    assert save_calls[0]["image_id"] == "known-rf-image-id"
+    assert save_calls[0]["annotation_overwrite"] is True
+    assert save_calls[0]["annotation_labelmap"] == {0: "cone"}  # loaded, not the bare yaml path
+    assert (result.new_images, result.annotations_updated, result.unchanged, result.failed) == (0, 1, 0, 0)
+
+
+def test_push_version_known_roboflow_id_different_project_falls_back_to_upload(
+    real_db_session, monkeypatch, unique_name: str
+) -> None:
+    """A stored id from a *different* Roboflow project than the one being
+    exported to must not be trusted — falls back to a normal upload."""
+    import uuid as _uuid
+
+    from app.models.dataset import Dataset
+    from app.models.image import Image, ImageSourceType
+    from app.models.project import Project
+    from app.services.integrations import roboflow_export as mod
+
+    project = Project(name=unique_name, slug=unique_name, class_config=[{"id": 0, "name": "cone"}])
+    real_db_session.add(project)
+    real_db_session.flush()
+    dataset = Dataset(project_id=project.id, name="ds")
+    real_db_session.add(dataset)
+    real_db_session.flush()
+    image = Image(
+        project_id=project.id,
+        dataset_id=dataset.id,
+        storage_key="k",
+        original_filename="a.jpg",
+        width=64,
+        height=48,
+        source_type=ImageSourceType.UPLOAD,
+        roboflow_image_id="known-rf-image-id",
+        roboflow_workspace="ws",
+        roboflow_project_slug="a-different-project",  # <- mismatch
+    )
+    real_db_session.add(image)
+    real_db_session.commit()
+    real_db_session.refresh(image)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        (root / "images" / "train").mkdir(parents=True)
+        (root / "labels" / "train").mkdir(parents=True)
+        (root / "images" / "valid").mkdir(parents=True)
+        (root / "labels" / "valid").mkdir(parents=True)
+        (root / "images" / "test").mkdir(parents=True)
+        (root / "labels" / "test").mkdir(parents=True)
+        (root / "images" / "train" / f"{image.id}.jpg").write_bytes(_jpeg_bytes())
+        (root / "labels" / "train" / f"{image.id}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+        return root / "data.yaml"
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    upload_calls = []
+    save_calls = []
+
+    class _Proj:
+        def upload(self, **kwargs):
+            upload_calls.append(kwargs)
+            return [{"image": {"id": "new-id", "success": True, "duplicate": False}}]
+
+        def save_annotation(self, **kwargs):
+            save_calls.append(kwargs)
+            return {"success": True}
+
+        def get_batches(self):
+            return {"batches": []}
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com"}))
+
+    result = mod.push_version_to_roboflow(
+        real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
+    )
+
+    assert not save_calls
+    assert len(upload_calls) == 1
+    assert result.new_images == 1
+
+
+def test_push_version_stale_known_roboflow_id_404_falls_back_to_upload(
+    real_db_session, monkeypatch, unique_name: str
+) -> None:
+    """The stored id no longer resolves on Roboflow (image deleted there
+    since import) — save_annotation 404s, and that one image falls back to
+    a normal upload instead of failing the whole export."""
+    import uuid as _uuid
+
+    from app.models.dataset import Dataset
+    from app.models.image import Image, ImageSourceType
+    from app.models.project import Project
+    from app.services.integrations import roboflow_export as mod
+
+    project = Project(name=unique_name, slug=unique_name, class_config=[{"id": 0, "name": "cone"}])
+    real_db_session.add(project)
+    real_db_session.flush()
+    dataset = Dataset(project_id=project.id, name="ds")
+    real_db_session.add(dataset)
+    real_db_session.flush()
+    image = Image(
+        project_id=project.id,
+        dataset_id=dataset.id,
+        storage_key="k",
+        original_filename="a.jpg",
+        width=64,
+        height=48,
+        source_type=ImageSourceType.UPLOAD,
+        roboflow_image_id="missing-on-roboflow",
+        roboflow_workspace="ws",
+        roboflow_project_slug="proj",
+    )
+    real_db_session.add(image)
+    real_db_session.commit()
+    real_db_session.refresh(image)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        (root / "images" / "train").mkdir(parents=True)
+        (root / "labels" / "train").mkdir(parents=True)
+        (root / "images" / "valid").mkdir(parents=True)
+        (root / "labels" / "valid").mkdir(parents=True)
+        (root / "images" / "test").mkdir(parents=True)
+        (root / "labels" / "test").mkdir(parents=True)
+        (root / "images" / "train" / f"{image.id}.jpg").write_bytes(_jpeg_bytes())
+        (root / "labels" / "train" / f"{image.id}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+        return root / "data.yaml"
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    upload_calls = []
+
+    class _Proj:
+        def upload(self, **kwargs):
+            upload_calls.append(kwargs)
+            return [{"image": {"id": "new-id", "success": True, "duplicate": False}}]
+
+        def save_annotation(self, **kwargs):
+            from roboflow.adapters.rfapi import AnnotationSaveError
+
+            raise AnnotationSaveError("not found", status_code=404)
+
+        def get_batches(self):
+            return {"batches": []}
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com"}))
+
+    result = mod.push_version_to_roboflow(
+        real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
+    )
+
+    assert len(upload_calls) == 1
+    assert result.new_images == 1
+    assert result.failed == 0
 
 
 def test_roboflow_export_all_uploads_fail_marks_job_failed(
