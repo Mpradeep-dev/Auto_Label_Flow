@@ -132,6 +132,8 @@ class _FakeRoboflowProject:
         self.uploads: list[tuple[str, str | None, str, str | None, bool]] = []
         self.annotation_jobs: list[dict] = []
         self.saved_annotations: list[dict] = []
+        self.carved_batches: list[dict] = []
+        self.merged_batches: list[dict] = []
 
     def version(self, v: int) -> _FakeRoboflowVersion:
         return _FakeRoboflowVersion(v)
@@ -140,7 +142,7 @@ class _FakeRoboflowProject:
         # The two static fake batches are what `test_list_roboflow_batches`
         # asserts against; batches from uploads this instance actually made
         # (tracked in `self.uploads`) are appended dynamically so
-        # `_assign_annotating_review_job` can find the real batch a test's
+        # `_move_to_annotating` can find the real batch a test's
         # export just created, by name.
         dynamic = [
             {"id": f"batch-id-{name}", "name": name, "images": 0}
@@ -169,6 +171,17 @@ class _FakeRoboflowProject:
             {"name": name, "batch_id": batch_id, "labeler_email": labeler_email, "reviewer_email": reviewer_email}
         )
         return {"id": "job-1"}
+
+    def create_annotation_batch(self, *, source_batch_id: str, image_ids: list[str], name: str | None = None) -> dict:
+        self.carved_batches.append(
+            {"source_batch_id": source_batch_id, "image_ids": list(image_ids), "name": name}
+        )
+        new_id = f"carved-{len(self.carved_batches)}"
+        return {"batchId": new_id, "movedImageCount": len(image_ids)}
+
+    def merge_annotation_batches(self, *, source_batch_ids: list[str], target_batch_id: str) -> dict:
+        self.merged_batches.append({"source_batch_ids": list(source_batch_ids), "target_batch_id": target_batch_id})
+        return {}
 
     def upload(
         self,
@@ -2217,7 +2230,9 @@ def test_push_version_known_roboflow_id_different_project_falls_back_to_upload(
         def workspace(self, ws):
             return _WS()
 
-    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com"}))
+    monkeypatch.setattr(
+        mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com", "api_key": "fake-key"})
+    )
 
     result = mod.push_version_to_roboflow(
         real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
@@ -2618,3 +2633,242 @@ def test_roboflow_job_model_has_new_images_and_annotations_updated_counts(
     real_db_session.commit()
     real_db_session.refresh(job)
     assert (job.new_images_count, job.annotations_updated_count) == (3, 7)
+
+
+def test_push_version_updates_move_known_id_images_to_new_batch_and_job(
+    real_db_session, monkeypatch, unique_name: str
+) -> None:
+    """Core of Task 3: a known-Roboflow-id image whose annotation gets
+    updated must be carved out of its current Roboflow batch into a new
+    one named after this export, and a review job filed for it — even
+    though there were zero new images (the exact all-existing-images
+    scenario this whole feature exists for)."""
+    import uuid as _uuid
+
+    from app.models.dataset import Dataset
+    from app.models.image import Image, ImageSourceType
+    from app.models.project import Project
+    from app.services.integrations import roboflow_export as mod
+
+    project = Project(name=unique_name, slug=unique_name, class_config=[{"id": 0, "name": "cone"}])
+    real_db_session.add(project)
+    real_db_session.flush()
+    dataset = Dataset(project_id=project.id, name="ds")
+    real_db_session.add(dataset)
+    real_db_session.flush()
+    image = Image(
+        project_id=project.id,
+        dataset_id=dataset.id,
+        storage_key="k",
+        original_filename="a.jpg",
+        width=64,
+        height=48,
+        source_type=ImageSourceType.UPLOAD,
+        roboflow_image_id="known-rf-image-id",
+        roboflow_workspace="ws",
+        roboflow_project_slug="proj",
+    )
+    real_db_session.add(image)
+    real_db_session.commit()
+    real_db_session.refresh(image)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        (root / "images" / "train").mkdir(parents=True)
+        (root / "labels" / "train").mkdir(parents=True)
+        (root / "images" / "valid").mkdir(parents=True)
+        (root / "labels" / "valid").mkdir(parents=True)
+        (root / "images" / "test").mkdir(parents=True)
+        (root / "labels" / "test").mkdir(parents=True)
+        (root / "images" / "train" / f"{image.id}.jpg").write_bytes(_jpeg_bytes())
+        (root / "labels" / "train" / f"{image.id}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+        return root / "data.yaml"
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    class _Proj:
+        def save_annotation(self, **kwargs):
+            return ({"success": True}, 0.0, 0)
+
+        def get_batches(self):
+            return {"batches": [{"id": "original-batch", "images": 1}]}
+
+        def create_annotation_batch(self, *, source_batch_id, image_ids, name=None):
+            assert source_batch_id == "original-batch"
+            assert image_ids == ["known-rf-image-id"]
+            assert name == "custom-review-batch"
+            return {"batchId": "carved-batch-1", "movedImageCount": 1}
+
+        def create_annotation_job(self, **kwargs):
+            assert kwargs["batch_id"] == "carved-batch-1"
+            assert kwargs["name"] == "custom-review-batch"
+            assert kwargs["labeler_email"] == "a@b.com"
+            assert kwargs["reviewer_email"] == "a@b.com"
+            return {"id": "job-1"}
+
+    calls = {"n": 0}
+
+    def _fake_search_page(project, api_key, *, offset, limit, fields, batch_id=None):
+        calls["n"] += 1
+        assert batch_id == "original-batch"
+        return [{"id": "known-rf-image-id"}]
+
+    monkeypatch.setattr(mod, "rf_search_page", _fake_search_page)
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com", "api_key": "fake-key"}))
+
+    result = mod.push_version_to_roboflow(
+        real_db_session,
+        version_id=_uuid.uuid4(),
+        workspace="ws",
+        project_slug="proj",
+        custom_batch_name="custom-review-batch",
+    )
+
+    assert (result.new_images, result.annotations_updated, result.failed) == (0, 1, 0)
+    assert calls["n"] == 1
+
+
+def test_move_to_annotating_merges_new_and_updated_into_one_job(monkeypatch) -> None:
+    """A mixed push (some genuinely new images, some existing images whose
+    annotation was updated) must end up as ONE review job covering both —
+    not two separate, confusingly-named batches."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        def get_batches(self):
+            return {"batches": [{"id": "new-image-batch", "name": "my-batch", "images": 3}]}
+
+        def create_annotation_batch(self, *, source_batch_id, image_ids, name=None):
+            return {"batchId": "carved-batch-1", "movedImageCount": len(image_ids)}
+
+        def merge_annotation_batches(self, *, source_batch_ids, target_batch_id):
+            merge_calls.append((source_batch_ids, target_batch_id))
+            return {}
+
+        def create_annotation_job(self, **kwargs):
+            job_calls.append(kwargs)
+            return {"id": "job-1"}
+
+    merge_calls: list[tuple] = []
+    job_calls: list[dict] = []
+
+    def _fake_search_page(project, api_key, *, offset, limit, fields, batch_id=None):
+        return [{"id": "known-rf-image-id"}]
+
+    monkeypatch.setattr(mod, "rf_search_page", _fake_search_page)
+
+    note = mod._move_to_annotating(
+        _Proj(),
+        "fake-key",
+        batch_name="my-batch",
+        labeler_email="a@b.com",
+        new_images_uploaded=True,
+        updated_roboflow_ids=["known-rf-image-id"],
+    )
+
+    assert note is None
+    assert merge_calls == [(["carved-batch-1"], "new-image-batch")]
+    assert job_calls == [
+        {"name": "my-batch", "batch_id": "new-image-batch", "labeler_email": "a@b.com", "reviewer_email": "a@b.com"}
+    ]
+
+
+def test_move_to_annotating_carves_multiple_source_batches_and_merges_them(monkeypatch) -> None:
+    """Updated images spanning two different original Roboflow batches
+    each get carved out separately, then the two resulting batches are
+    merged into one before filing a single job."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        def get_batches(self):
+            return {"batches": [{"id": "batch-a", "images": 5}, {"id": "batch-b", "images": 5}]}
+
+        def create_annotation_batch(self, *, source_batch_id, image_ids, name=None):
+            carve_calls.append((source_batch_id, image_ids))
+            return {"batchId": f"carved-{source_batch_id}", "movedImageCount": len(image_ids)}
+
+        def merge_annotation_batches(self, *, source_batch_ids, target_batch_id):
+            merge_calls.append((sorted(source_batch_ids), target_batch_id))
+            return {}
+
+        def create_annotation_job(self, **kwargs):
+            job_calls.append(kwargs)
+            return {"id": "job-1"}
+
+    carve_calls: list[tuple] = []
+    merge_calls: list[tuple] = []
+    job_calls: list[dict] = []
+
+    def _fake_search_page(project, api_key, *, offset, limit, fields, batch_id=None):
+        if batch_id == "batch-a":
+            return [{"id": "img-1"}]
+        return [{"id": "img-2"}]
+
+    monkeypatch.setattr(mod, "rf_search_page", _fake_search_page)
+
+    note = mod._move_to_annotating(
+        _Proj(),
+        "fake-key",
+        batch_name="my-batch",
+        labeler_email="a@b.com",
+        new_images_uploaded=False,
+        updated_roboflow_ids=["img-1", "img-2"],
+    )
+
+    assert note is None
+    assert sorted(carve_calls) == [("batch-a", ["img-1"]), ("batch-b", ["img-2"])]
+    assert len(merge_calls) == 1
+    assert len(job_calls) == 1
+
+
+def test_move_to_annotating_reports_images_not_found_in_any_batch(monkeypatch) -> None:
+    """An updated image that can't be located in any Roboflow batch (e.g.
+    deleted there since the annotation update) must not crash the export —
+    it's reported in the note and simply stays wherever it is."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        def get_batches(self):
+            return {"batches": []}
+
+    note = mod._move_to_annotating(
+        _Proj(),
+        "fake-key",
+        batch_name="my-batch",
+        labeler_email="a@b.com",
+        new_images_uploaded=False,
+        updated_roboflow_ids=["img-missing"],
+    )
+
+    assert note is not None
+    assert "1" in note and "could not be located" in note
+
+
+def test_move_to_annotating_no_work_returns_none(monkeypatch) -> None:
+    """Neither new images nor updated ones — nothing to do, no API calls,
+    no note."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        def get_batches(self):
+            raise AssertionError("must not be called when there's nothing to move")
+
+    note = mod._move_to_annotating(
+        _Proj(),
+        "fake-key",
+        batch_name="my-batch",
+        labeler_email="a@b.com",
+        new_images_uploaded=False,
+        updated_roboflow_ids=[],
+    )
+
+    assert note is None

@@ -189,8 +189,8 @@ def _build_export_note(
     shows what actually happened instead of staying silent on a fully
     "clean" push — replaces the old behavior where a successful push with
     no review-job problems reported nothing at all. `review_job_note` is
-    whatever `_assign_annotating_review_job` returned for the new-image
-    batch (its own failure note, or `None`)."""
+    whatever `_move_to_annotating` returned for the new-image and/or
+    updated-image batch (its own failure note, or `None`)."""
     succeeded = new_images + annotations_updated + unchanged
     if succeeded == 0:
         return review_job_note
@@ -211,23 +211,53 @@ def _build_export_note(
     return summary
 
 
-def _assign_annotating_review_job(project, *, batch_name: str, labeler_email: str | None) -> str | None:
-    """Uploading with `is_prediction=True` only gets a pushed image as far
-    as Roboflow's "Unassigned" column — moving it into "Annotating" is a
-    second, separate API call (`Project.create_annotation_job`) that
-    requires an actual labeler + reviewer (a workspace member's email), not
-    something upload-time flags alone can do (confirmed against Roboflow's
-    own docs: predictions "stay in its batch and stay unassigned" until a
-    job is created for them). This finds the batch this export just created
-    (by the same name passed to the upload) and files a job for it, using
-    the one configured account email as both labeler and reviewer — this
-    app has no UI for picking a different person to review its own
-    auto-generated predictions.
+def _move_to_annotating(
+    project,
+    api_key: str,
+    *,
+    batch_name: str,
+    labeler_email: str | None,
+    new_images_uploaded: bool,
+    updated_roboflow_ids: list[str],
+) -> str | None:
+    """Moves this export's images out of Roboflow's Unassigned column into
+    Annotating, covering two disjoint sources that need different Roboflow
+    API calls to get there:
 
-    Returns `None` on success (or when there's nothing configured to do —
-    silently skipping isn't a failure), or a short message when the job
-    couldn't be created, for the caller to surface non-fatally: the images
-    themselves already uploaded fine either way."""
+    - Genuinely new images (`new_images_uploaded`) already landed together
+      in a batch named `batch_name` at upload time (uploading with
+      `is_prediction=True` only gets an image as far as Unassigned —
+      moving it into Annotating needs the separate
+      `Project.create_annotation_job` call below) — just needs that call
+      pointed at the batch Roboflow already grouped them into.
+    - Already-existing images whose annotation this export just updated
+      via the known-Roboflow-id path (`updated_roboflow_ids` — see
+      `_save_annotation_only`; the SDK-duplicate fallback path's updates
+      are deliberately NOT included here, since discovering their
+      Roboflow ids would need extra plumbing for what's already the rarer
+      case) are scattered across whatever batch(es) they already belonged
+      to. There is no "create a job for these arbitrary existing images"
+      call — only `Project.create_annotation_batch(source_batch_id,
+      image_ids)`, which carves a named subset OUT of a batch it's
+      already in (confirmed live against a real Roboflow project: carving
+      2 images out of an 11-image batch left the other 9 untouched and
+      created a new batch with exactly those 2). Each involved source
+      batch (found via `_discover_batch_membership`) gets its own carve
+      call.
+
+    If both sources produced a batch, or the updated-image carve touched
+    more than one source batch, the results are merged into one via
+    `Project.merge_annotation_batches` before the single
+    `Project.create_annotation_job` call — one job per export, covering
+    everything that needs review, under one name.
+
+    Returns `None` on full success (or when there's nothing to do), or a
+    short message describing what went wrong, for the caller to fold into
+    the export's summary note non-fatally — the images/annotations
+    themselves already landed on Roboflow either way; this call only
+    affects which Annotate-board column they sit in."""
+    if not new_images_uploaded and not updated_roboflow_ids:
+        return None
     if not labeler_email:
         return (
             "Images uploaded, but no default labeler/reviewer email is set (Settings -> Roboflow) — "
@@ -235,29 +265,75 @@ def _assign_annotating_review_job(project, *, batch_name: str, labeler_email: st
             "re-export, or create the review job yourself in Roboflow's Annotate tab."
         )
 
-    try:
-        batches = project.get_batches().get("batches", [])
-        batch = next((b for b in batches if b.get("name") == batch_name), None)
-        if batch is None:
-            return (
-                f"Images uploaded, but couldn't find batch {batch_name!r} on Roboflow afterward to file a "
-                "review job for it — they're sitting in Unassigned. Create the job yourself in Roboflow's "
-                "Annotate tab."
+    candidate_batch_ids: list[str] = []
+    notes: list[str] = []
+
+    if new_images_uploaded:
+        try:
+            batches = project.get_batches().get("batches", [])
+            batch = next((b for b in batches if b.get("name") == batch_name), None)
+            if batch is None:
+                notes.append(
+                    f"couldn't find batch {batch_name!r} on Roboflow to move the newly uploaded images into "
+                    "Annotating — they're sitting in Unassigned."
+                )
+            else:
+                candidate_batch_ids.append(batch["id"])
+        except Exception as exc:  # noqa: BLE001 — non-fatal: images already uploaded
+            notes.append(f"couldn't look up the new-image batch on Roboflow ({exc}) — it's sitting in Unassigned.")
+
+    if updated_roboflow_ids:
+        try:
+            membership = _discover_batch_membership(project, api_key, target_ids=set(updated_roboflow_ids))
+        except Exception as exc:  # noqa: BLE001 — non-fatal: annotations already updated
+            notes.append(
+                f"couldn't look up which Roboflow batch {_plural(len(updated_roboflow_ids), 'updated image')} "
+                f"belong to ({exc}) — they're sitting wherever they already were."
             )
+            membership = None
+        if membership is not None:
+            for source_batch_id, image_ids in membership.items():
+                try:
+                    carved = project.create_annotation_batch(
+                        source_batch_id=source_batch_id, image_ids=image_ids, name=batch_name
+                    )
+                    candidate_batch_ids.append(carved["batchId"])
+                except Exception as exc:  # noqa: BLE001 — non-fatal: annotations already updated
+                    notes.append(f"couldn't move {len(image_ids)} updated image(s) out of Unassigned ({exc}).")
+            not_found = len(updated_roboflow_ids) - sum(len(v) for v in membership.values())
+            if not_found > 0:
+                notes.append(
+                    f"{not_found} updated image(s) could not be located in any Roboflow batch and stayed in "
+                    "Unassigned."
+                )
+
+    if not candidate_batch_ids:
+        return " ".join(notes) if notes else None
+
+    target_batch_id = candidate_batch_ids[0]
+    if len(candidate_batch_ids) > 1:
+        try:
+            project.merge_annotation_batches(
+                source_batch_ids=candidate_batch_ids[1:], target_batch_id=target_batch_id
+            )
+        except Exception as exc:  # noqa: BLE001 — non-fatal, still try to file a job for the first batch below
+            notes.append(f"couldn't combine new and updated images into one review job ({exc}).")
+
+    try:
         project.create_annotation_job(
             name=batch_name,
-            batch_id=batch["id"],
+            batch_id=target_batch_id,
             labeler_email=labeler_email,
             reviewer_email=labeler_email,
         )
-    except Exception as exc:  # noqa: BLE001 — non-fatal: images already uploaded
+    except Exception as exc:  # noqa: BLE001 — non-fatal: images/annotations already landed
         logger.warning("Roboflow export: could not auto-create annotation job for batch %r: %s", batch_name, exc)
-        return (
-            f"Images uploaded, but auto-creating the Roboflow review job failed ({exc}) — they're sitting "
-            f"in Unassigned. Check {labeler_email!r} is a member of this Roboflow workspace, or create the "
-            "job yourself in Roboflow's Annotate tab."
+        notes.append(
+            f"auto-creating the Roboflow review job failed ({exc}) — check {labeler_email!r} is a member of "
+            "this Roboflow workspace, or create the job yourself in Roboflow's Annotate tab."
         )
-    return None
+
+    return " ".join(notes) if notes else None
 
 
 def _is_duplicate_upload(result) -> bool:
@@ -510,13 +586,14 @@ def push_version_to_roboflow(
     sends it as ground truth that Roboflow auto-confirms straight into the
     Dataset column. An image with no local annotation always lands
     unannotated regardless of target — there is nothing to push as a
-    prediction or ground truth for it. `ANNOTATING` also tries to move the
-    pushed batch into Roboflow's "Annotating" column via a second API call
-    once uploads finish — see `_assign_annotating_review_job` — which needs
-    a default labeler email configured (Settings -> Roboflow); its failure
-    (or that email being unset) is folded into the returned `PushResult.note`
-    but never fails the export, since the images themselves already
-    uploaded fine.
+    prediction or ground truth for it. `ANNOTATING` also tries to move newly
+    uploaded images, and any existing images whose annotation this export
+    updated via the known-Roboflow-id path, into Roboflow's "Annotating"
+    column via a second round of API calls once uploads finish — see
+    `_move_to_annotating` — which needs a default labeler email configured
+    (Settings -> Roboflow); its failure (or that email being unset) is
+    folded into the returned `PushResult.note` but never fails the export,
+    since the images themselves already uploaded fine.
 
     `progress_cb(succeeded, total, failed)`, if given, is called once with
     `succeeded=0` as soon as the image count is known (materialization
@@ -655,6 +732,11 @@ def push_version_to_roboflow(
         succeeded = 0
         failed = 0
         failures: list[str] = []
+        # Only ever appended to for the known-Roboflow-id path (see
+        # `_move_to_annotating`'s docstring on the scope boundary) — an
+        # `ANNOTATION_UPDATED` outcome from the SDK-duplicate fallback path
+        # has no entry in `known_roboflow_ids` and is deliberately skipped.
+        updated_known_roboflow_ids: list[str] = []
         seen_statuses: list[int | None] = []
         fail_fast_error: RoboflowExportError | None = None
 
@@ -704,6 +786,9 @@ def push_version_to_roboflow(
                             new_images += 1
                         elif outcome is _PushOutcome.ANNOTATION_UPDATED:
                             annotations_updated += 1
+                            known_id = known_roboflow_ids.get(_image_uuid(image_path))
+                            if known_id is not None:
+                                updated_known_roboflow_ids.append(known_id)
                         else:
                             unchanged += 1
                     except Exception as exc:  # a single bad image shouldn't abort the whole push
@@ -747,14 +832,14 @@ def push_version_to_roboflow(
     )
 
     review_job_note: str | None = None
-    if upload_target == RoboflowUploadTarget.ANNOTATING.value and new_images > 0:
-        # Only ever called when something new actually needs moving out of
-        # Unassigned — a duplicate/known-id annotation update never joins
-        # the batch this looks up, so there'd be nothing to find/move for
-        # an all-existing-images push (see `_build_export_note` for how
-        # that case is reported instead).
-        review_job_note = _assign_annotating_review_job(
-            project, batch_name=batch_name, labeler_email=config.get("default_labeler_email")
+    if upload_target == RoboflowUploadTarget.ANNOTATING.value and (new_images > 0 or updated_known_roboflow_ids):
+        review_job_note = _move_to_annotating(
+            project,
+            config.get("api_key"),
+            batch_name=batch_name,
+            labeler_email=config.get("default_labeler_email"),
+            new_images_uploaded=new_images > 0,
+            updated_roboflow_ids=updated_known_roboflow_ids,
         )
 
     note = _build_export_note(
