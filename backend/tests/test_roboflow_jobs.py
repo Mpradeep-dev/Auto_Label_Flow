@@ -192,7 +192,7 @@ class _FakeRoboflowProject:
         job_name: str | None = None,
         is_prediction: bool = False,
         annotation_overwrite: bool = False,
-    ) -> dict:
+    ) -> tuple[dict, float, int]:
         if image_id == "missing-on-roboflow":
             from roboflow.adapters.rfapi import AnnotationSaveError
 
@@ -207,7 +207,10 @@ class _FakeRoboflowProject:
                 "annotation_overwrite": annotation_overwrite,
             }
         )
-        return {"success": True}
+        # Real SDK shape: `Project.save_annotation()` returns
+        # `(annotation, upload_time, upload_retry_attempts)` — see
+        # `roboflow/core/project.py`.
+        return {"success": True}, 0.0, 0
 
     # Raw (unversioned) pull path — no `.version()` here. The service no
     # longer calls `rf_project.search()` or `rf_project.image()`; it hits
@@ -2029,7 +2032,7 @@ def test_push_version_known_roboflow_id_routes_through_save_annotation_not_uploa
 
         def save_annotation(self, **kwargs):
             save_calls.append(kwargs)
-            return {"success": True}
+            return {"success": True}, 0.0, 0
 
         def get_batches(self):
             return {"batches": []}
@@ -2054,6 +2057,93 @@ def test_push_version_known_roboflow_id_routes_through_save_annotation_not_uploa
     assert save_calls[0]["annotation_overwrite"] is True
     assert save_calls[0]["annotation_labelmap"] == {0: "cone"}  # loaded, not the bare yaml path
     assert (result.new_images, result.annotations_updated, result.unchanged, result.failed) == (0, 1, 0, 0)
+
+
+def test_push_version_known_roboflow_id_warn_response_counts_as_unchanged(
+    real_db_session, monkeypatch, unique_name: str
+) -> None:
+    """Regression: if Roboflow's 409 "already annotated" response ever slips
+    past `annotation_overwrite=True` (a behavior change on their end, a
+    future SDK change, anything), `rfapi.save_annotation` returns
+    `{"warn": "already annotated"}` instead of raising — nothing actually
+    wrote on Roboflow's side. `_save_annotation_only` must not report that
+    as `ANNOTATION_UPDATED` (the exact bug this branch exists to fix,
+    relocated); it must be counted as `unchanged` instead."""
+    import uuid as _uuid
+
+    from app.models.dataset import Dataset
+    from app.models.image import Image, ImageSourceType
+    from app.models.project import Project
+    from app.services.integrations import roboflow_export as mod
+
+    project = Project(name=unique_name, slug=unique_name, class_config=[{"id": 0, "name": "cone"}])
+    real_db_session.add(project)
+    real_db_session.flush()
+    dataset = Dataset(project_id=project.id, name="ds")
+    real_db_session.add(dataset)
+    real_db_session.flush()
+    image = Image(
+        project_id=project.id,
+        dataset_id=dataset.id,
+        storage_key="k",
+        original_filename="a.jpg",
+        width=64,
+        height=48,
+        source_type=ImageSourceType.UPLOAD,
+        roboflow_image_id="known-rf-image-id",
+        roboflow_workspace="ws",
+        roboflow_project_slug="proj",
+    )
+    real_db_session.add(image)
+    real_db_session.commit()
+    real_db_session.refresh(image)
+
+    def _fake_write_yolo_dataset(db, *, version_id, root):
+        (root / "images" / "train").mkdir(parents=True)
+        (root / "labels" / "train").mkdir(parents=True)
+        (root / "images" / "valid").mkdir(parents=True)
+        (root / "labels" / "valid").mkdir(parents=True)
+        (root / "images" / "test").mkdir(parents=True)
+        (root / "labels" / "test").mkdir(parents=True)
+        (root / "images" / "train" / f"{image.id}.jpg").write_bytes(_jpeg_bytes())
+        (root / "labels" / "train" / f"{image.id}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
+        (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
+        return root / "data.yaml"
+
+    monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
+
+    upload_calls = []
+    save_calls = []
+
+    class _Proj:
+        def upload(self, **kwargs):
+            upload_calls.append(kwargs)
+            return [{"image": {"id": "should-not-be-called", "success": True, "duplicate": False}}]
+
+        def save_annotation(self, **kwargs):
+            save_calls.append(kwargs)
+            return {"warn": "already annotated"}, 0.0, 0
+
+        def get_batches(self):
+            return {"batches": []}
+
+    class _WS:
+        def project(self, slug):
+            return _Proj()
+
+    class _RF:
+        def workspace(self, ws):
+            return _WS()
+
+    monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com"}))
+
+    result = mod.push_version_to_roboflow(
+        real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
+    )
+
+    assert not upload_calls
+    assert len(save_calls) == 1
+    assert (result.new_images, result.annotations_updated, result.unchanged, result.failed) == (0, 0, 1, 0)
 
 
 def test_push_version_known_roboflow_id_different_project_falls_back_to_upload(

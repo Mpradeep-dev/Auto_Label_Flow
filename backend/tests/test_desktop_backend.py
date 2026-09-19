@@ -133,6 +133,44 @@ def test_sqlite_schema_upgrade_adds_roboflow_images_only_and_batch_name(tmp_path
     eng.dispose()
 
 
+def test_sqlite_schema_upgrade_adds_roboflow_image_identity_and_push_counters(tmp_path) -> None:
+    """Regression: `images.roboflow_image_id`/`roboflow_workspace`/
+    `roboflow_project_slug` and `roboflow_jobs.new_images_count`/
+    `annotations_updated_count` shipped on the Postgres/Alembic side without
+    a matching desktop upgrade step, so an existing desktop DB stamped at
+    version 6 kept querying tables missing those columns —
+    `sqlite3.OperationalError: no such column`, surfaced on every query
+    touching `Image`, not just Roboflow ones."""
+    from sqlalchemy import create_engine, inspect as _inspect
+
+    from app.db.base import Base
+    from app.db.init_db import SCHEMA_VERSION, init_sqlite_schema
+
+    eng = create_engine(f"sqlite+pysqlite:///{(tmp_path / 'old.db').as_posix()}", future=True)
+    Base.metadata.create_all(eng)
+    with eng.begin() as conn:
+        conn.exec_driver_sql("ALTER TABLE images DROP COLUMN roboflow_image_id")
+        conn.exec_driver_sql("ALTER TABLE images DROP COLUMN roboflow_workspace")
+        conn.exec_driver_sql("ALTER TABLE images DROP COLUMN roboflow_project_slug")
+        conn.exec_driver_sql("ALTER TABLE roboflow_jobs DROP COLUMN new_images_count")
+        conn.exec_driver_sql("ALTER TABLE roboflow_jobs DROP COLUMN annotations_updated_count")
+        conn.exec_driver_sql("PRAGMA user_version = 6")
+
+    init_sqlite_schema(eng)
+
+    insp = _inspect(eng)
+    image_columns = {c["name"] for c in insp.get_columns("images")}
+    job_columns = {c["name"] for c in insp.get_columns("roboflow_jobs")}
+    assert "roboflow_image_id" in image_columns
+    assert "roboflow_workspace" in image_columns
+    assert "roboflow_project_slug" in image_columns
+    assert "new_images_count" in job_columns
+    assert "annotations_updated_count" in job_columns
+    with eng.begin() as conn:
+        assert conn.exec_driver_sql("PRAGMA user_version").scalar_one() == SCHEMA_VERSION
+    eng.dispose()
+
+
 def test_reconcile_stale_jobs_runs_on_sqlite() -> None:
     """Regression: `updated_at < datetime.now(timezone.utc)` raised
     `TypeError: can't compare offset-naive and offset-aware datetimes` on

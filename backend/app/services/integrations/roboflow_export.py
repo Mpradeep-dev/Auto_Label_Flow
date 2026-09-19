@@ -294,7 +294,19 @@ def _upload_one_image(project, *, has_annotation: bool, **upload_kwargs) -> _Pus
         try:
             result = project.upload(**upload_kwargs)
             if _is_duplicate_upload(result):
-                return _PushOutcome.ANNOTATION_UPDATED if has_annotation else _PushOutcome.UNCHANGED
+                if not has_annotation:
+                    return _PushOutcome.UNCHANGED
+                # `result[0]["annotation"]` is `rfapi.save_annotation`'s own
+                # return value — either the real success payload or
+                # `{"warn": "already annotated"}` if Roboflow's 409 response
+                # slipped past `annotation_overwrite=True` (see
+                # `_save_annotation_only`'s docstring for why that would
+                # happen). A `"warn"` means nothing actually changed on
+                # Roboflow's side, so don't report it as an update.
+                annotation = result[0].get("annotation")
+                if isinstance(annotation, dict) and "warn" in annotation:
+                    return _PushOutcome.UNCHANGED
+                return _PushOutcome.ANNOTATION_UPDATED
             return _PushOutcome.NEW_IMAGE
         except Exception as exc:  # noqa: BLE001 - re-raised below, classified by status
             status = getattr(exc, "status_code", None)
@@ -350,7 +362,7 @@ def _save_annotation_only(
     labelmap = load_labelmap(annotation_labelmap_path)
     for attempt in range(1, _UPLOAD_MAX_ATTEMPTS + 1):
         try:
-            project.save_annotation(
+            annotation, _upload_time, _retry_attempts = project.save_annotation(
                 annotation_path=annotation_path,
                 annotation_labelmap=labelmap,
                 image_id=roboflow_image_id,
@@ -358,6 +370,14 @@ def _save_annotation_only(
                 is_prediction=is_prediction,
                 annotation_overwrite=True,
             )
+            # `annotation` is `rfapi.save_annotation`'s return value directly
+            # — either the real success payload or `{"warn": "already
+            # annotated"}` if Roboflow's 409 response slipped past
+            # `annotation_overwrite=True` (see this function's docstring).
+            # A `"warn"` means nothing actually changed on Roboflow's side,
+            # so don't report it as an update.
+            if isinstance(annotation, dict) and "warn" in annotation:
+                return _PushOutcome.UNCHANGED
             return _PushOutcome.ANNOTATION_UPDATED
         except Exception as exc:  # noqa: BLE001 - re-raised below, classified by status
             status = getattr(exc, "status_code", None)
