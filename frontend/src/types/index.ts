@@ -341,6 +341,8 @@ export interface RoboflowJob {
   total_items: number;
   processed_items: number;
   uploaded_count: number;
+  new_images_count: number;
+  annotations_updated_count: number;
   failed_count: number;
   failures: string[];
   result_dataset_id: string | null;
