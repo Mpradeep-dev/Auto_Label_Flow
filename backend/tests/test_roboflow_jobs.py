@@ -37,7 +37,7 @@ _RAW_SEARCH_ITEMS = [
 
 class _FakeSearchResponse:
     """Stands in for the `requests.post(.../search)` response that
-    `roboflow_import._rf_search_page` now inspects directly (the SDK's own
+    `roboflow_search.rf_search_page` now inspects directly (the SDK's own
     `Project.search()` is bypassed)."""
 
     def __init__(self, items: list[dict], status_code: int = 200) -> None:
@@ -77,7 +77,7 @@ def _image_details_payload(image_id: str) -> dict:
 class _FakeImageDetailsResponse:
     """Stands in for the `requests.get(.../images/<id>)` response that
     `roboflow_import._rf_image_details` now inspects directly (the SDK's
-    own `Project.image()` is bypassed — same reasoning as `_rf_search_page`
+    own `Project.image()` is bypassed — same reasoning as `rf_search_page`
     bypassing `Project.search()`: no timeout on the SDK's own call)."""
 
     def __init__(self, image_id: str, status_code: int = 200) -> None:
@@ -126,7 +126,7 @@ class _FakeRoboflowVersion:
 class _FakeRoboflowProject:
     def __init__(self, slug: str) -> None:
         self.slug = slug
-        # `_rf_search_page` builds the /search URL from `rf_project.id`
+        # `rf_search_page` builds the /search URL from `rf_project.id`
         # (canonical "workspace/project"), mirroring the real SDK.
         self.id = f"my-workspace/{slug}"
         self.uploads: list[tuple[str, str | None, str, str | None, bool]] = []
@@ -503,7 +503,7 @@ def test_rf_search_page_forwards_batch_id_in_payload(monkeypatch) -> None:
     own `search(batch=True, batch_id=...)` would send it — this is the
     plumbing `import_roboflow_raw_project`'s `batch_id` param relies on to
     actually narrow the pull server-side."""
-    import app.services.integrations.roboflow_import as mod
+    import app.services.integrations.roboflow_search as mod
 
     captured: dict = {}
 
@@ -514,7 +514,7 @@ def test_rf_search_page_forwards_batch_id_in_payload(monkeypatch) -> None:
     monkeypatch.setattr(mod.requests, "post", fake_post)
 
     rf_project = type("P", (), {"id": "ws/proj"})()
-    mod._rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"], batch_id="batch-1")
+    mod.rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"], batch_id="batch-1")
 
     assert captured["batch"] is True
     assert captured["batch_id"] == "batch-1"
@@ -558,7 +558,7 @@ def test_rf_search_error_body_surfaces_as_runtime_error(
     """Regression: the Roboflow SDK's `Project.search()` ends with a bare
     `data.json()["results"]`, so an `{"error": ...}` body from the /search
     endpoint used to blow up as an opaque `KeyError: 'results'` from inside
-    the SDK. `_rf_search_page` must instead raise a `RuntimeError` that
+    the SDK. `rf_search_page` must instead raise a `RuntimeError` that
     carries the real HTTP status and response body."""
     import uuid as _uuid
 
@@ -607,7 +607,7 @@ def test_rf_search_retries_transient_5xx_then_succeeds(monkeypatch) -> None:
     """A transient 5xx from /search (observed live: Roboflow returned bare
     HTTP 500s for a few minutes) is retried with backoff, not fatal — the
     page load recovers as soon as Roboflow returns 200 again."""
-    import app.services.integrations.roboflow_import as mod
+    import app.services.integrations.roboflow_search as mod
 
     seq = [
         _SeqResp(500, {"error": "An error occurred with this request"}),
@@ -626,7 +626,7 @@ def test_rf_search_retries_transient_5xx_then_succeeds(monkeypatch) -> None:
     monkeypatch.setattr(mod.time, "sleep", lambda s: slept.append(s))
 
     rf_project = type("P", (), {"id": "ws/proj"})()
-    out = mod._rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
+    out = mod.rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
 
     assert out == [{"id": "a"}]
     assert calls["n"] == 3
@@ -636,7 +636,7 @@ def test_rf_search_retries_transient_5xx_then_succeeds(monkeypatch) -> None:
 def test_rf_search_persistent_5xx_raises_with_retry_hint(monkeypatch) -> None:
     """When every attempt 5xxs, the raised error keeps the real status/body
     and tells the user it's a transient Roboflow-side problem to retry."""
-    import app.services.integrations.roboflow_import as mod
+    import app.services.integrations.roboflow_search as mod
 
     calls = {"n": 0}
 
@@ -649,7 +649,7 @@ def test_rf_search_persistent_5xx_raises_with_retry_hint(monkeypatch) -> None:
 
     rf_project = type("P", (), {"id": "ws/proj"})()
     with pytest.raises(RuntimeError) as excinfo:
-        mod._rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
+        mod.rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
 
     msg = str(excinfo.value)
     assert calls["n"] == mod._SEARCH_MAX_ATTEMPTS
@@ -661,7 +661,7 @@ def test_rf_search_connection_error_is_retried(monkeypatch) -> None:
     """A `requests` connection/timeout error is retried the same way, and
     the final failure is a clear RuntimeError rather than a bare socket
     exception bubbling out of the job."""
-    import app.services.integrations.roboflow_import as mod
+    import app.services.integrations.roboflow_search as mod
 
     calls = {"n": 0}
 
@@ -675,7 +675,7 @@ def test_rf_search_connection_error_is_retried(monkeypatch) -> None:
     monkeypatch.setattr(mod.time, "sleep", lambda s: None)
 
     rf_project = type("P", (), {"id": "ws/proj"})()
-    out = mod._rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
+    out = mod.rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
     assert out == []
     assert calls["n"] == 3
 
@@ -686,7 +686,7 @@ def test_rf_search_dns_failure_raises_local_network_hint(monkeypatch) -> None:
     Roboflow-side issue" — that's actively misleading when the request never
     reached Roboflow at all. It should point at this machine's network/DNS
     instead."""
-    import app.services.integrations.roboflow_import as mod
+    import app.services.integrations.roboflow_search as mod
 
     def fake_post(url, json=None, timeout=30):
         raise mod.requests.ConnectionError(
@@ -700,7 +700,7 @@ def test_rf_search_dns_failure_raises_local_network_hint(monkeypatch) -> None:
 
     rf_project = type("P", (), {"id": "ws/proj"})()
     with pytest.raises(RuntimeError) as excinfo:
-        mod._rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
+        mod.rf_search_page(rf_project, "key", offset=0, limit=100, fields=["id"])
 
     msg = str(excinfo.value)
     assert "temporary Roboflow-side issue" not in msg
