@@ -4,6 +4,27 @@ All notable changes to AutoLabelFlow are recorded here. This file is
 maintained automatically by [release-please](https://github.com/googleapis/release-please)
 from [Conventional Commits](https://www.conventionalcommits.org/) on `main`.
 
+## [0.5.0](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.4.7...v0.5.0) (2026-09-19)
+
+
+### Features
+
+* **roboflow:** add new_images_count/annotations_updated_count to RoboflowJob ([89bc680](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/89bc680dca80e7b7d41ff71f9263e69ec5a12979))
+* **roboflow:** discover which batch an already-known image currently belongs to ([9c41bbf](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/9c41bbfc597abdb3f9a17b1bbb5293adde03c6b3))
+* **roboflow:** expose new_images_count/annotations_updated_count on RoboflowJob type ([b7e8fe7](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/b7e8fe7a45aba31082674f7d09a83e9403f35963))
+* **roboflow:** move annotation-updated known-id images into Annotating ([282c0bf](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/282c0bfb3037988085ab1915614cbf3de5e171ce))
+* **roboflow:** persist per-image Roboflow provenance for annotation-only re-push ([2aa143e](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/2aa143efeda1d8ba98b55904ff2ab61db119e0e4))
+* **roboflow:** persist source Roboflow image id on raw-pull import ([d1e25ad](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/d1e25adf5a382528a485892fa08364e7cce5b3e3))
+* **roboflow:** route already-imported images through save_annotation directly ([e0696f3](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/e0696f3343cf1d5d1600f475161bd87753dce0b5))
+
+
+### Bug Fixes
+
+* desktop SQLite schema drift, red-colored success notes, unverified duplicate annotation writes ([6aa79a5](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/6aa79a53346fa40f4fcdaa5702c3592859371c37))
+* **roboflow:** correct annotation-only re-push and move updated images to Annotating ([0ec33e7](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/0ec33e73e8956f41800e21e32c00c586b3e83f58))
+* **roboflow:** post-review fix wave for move-to-annotating feature ([8ec6dfa](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/8ec6dfade42c54845da4f90393fa0274397fafe1))
+* **roboflow:** stop silently dropping annotation updates on re-pushed duplicates ([935f6c0](https://github.com/Mpradeep-dev/Auto_Label_Flow/commit/935f6c0d255491968bd85b337efba5656de4afe5))
+
 ## [0.4.7](https://github.com/Mpradeep-dev/Auto_Label_Flow/compare/v0.4.6...v0.4.7) (2026-09-18)
 
 
