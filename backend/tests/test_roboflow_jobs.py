@@ -1996,3 +1996,37 @@ def test_roboflow_import_job_requires_connection_first(real_client: TestClient, 
     )
     assert resp.status_code == 400
     assert "not connected" in resp.json()["detail"].lower()
+
+
+def test_roboflow_job_model_has_new_images_and_annotations_updated_counts(
+    real_db_session, unique_name: str
+) -> None:
+    from app.models.roboflow_job import RoboflowJob, RoboflowJobKind
+    from app.models.project import Project
+
+    # `project_id` is a real FK (Postgres enforces it in this test env, same
+    # as the `RoboflowJob(...)` constructions already in this file around
+    # lines 826 and 861 — both use a real project id from a created
+    # project, never a bare random uuid), so a real Project row comes first.
+    project = Project(name=unique_name, slug=unique_name, class_config=[{"id": 0, "name": "cone"}])
+    real_db_session.add(project)
+    real_db_session.commit()
+
+    job = RoboflowJob(
+        project_id=project.id,
+        kind=RoboflowJobKind.EXPORT,
+        workspace="ws",
+        project_slug="proj",
+    )
+    real_db_session.add(job)
+    real_db_session.commit()
+    real_db_session.refresh(job)
+
+    assert job.new_images_count == 0
+    assert job.annotations_updated_count == 0
+
+    job.new_images_count = 3
+    job.annotations_updated_count = 7
+    real_db_session.commit()
+    real_db_session.refresh(job)
+    assert (job.new_images_count, job.annotations_updated_count) == (3, 7)

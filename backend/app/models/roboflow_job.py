@@ -99,6 +99,14 @@ class RoboflowJob(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         String(20), nullable=False, default=RoboflowUploadTarget.ANNOTATING.value
     )
     uploaded_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    # Split out of `uploaded_count` (which stays "everything that landed on
+    # Roboflow, whatever kind of landing") so the export result/UI can say
+    # which of that total was a genuinely new image vs. an existing
+    # Roboflow image (this app already knew about, or Roboflow's own
+    # duplicate-detection resolved) whose annotation was written/replaced.
+    # See `push_version_to_roboflow`'s `PushResult` in roboflow_export.py.
+    new_images_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    annotations_updated_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failures: Mapped[list] = mapped_column(JSON, nullable=False, default=list)
 
