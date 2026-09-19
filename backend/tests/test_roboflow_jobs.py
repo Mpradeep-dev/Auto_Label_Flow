@@ -178,6 +178,7 @@ class _FakeRoboflowProject:
         split: str,
         batch_name: str | None = None,
         is_prediction: bool = False,
+        annotation_overwrite: bool = False,
     ) -> None:
         self.uploads.append((image_path, annotation_path, split, batch_name, is_prediction))
 
@@ -1196,7 +1197,9 @@ def test_roboflow_export_annotating_creates_review_job_when_labeler_email_set(
     ANNOTATING-target export must file a real Roboflow annotation job for
     the batch it just pushed, assigning the same email as both labeler and
     reviewer (this app has no UI for picking someone else to review its
-    own auto-generated predictions) — and the job row must show no error."""
+    own auto-generated predictions) — and the job row must show the
+    informational summary, not an error (a clean review job filing adds
+    nothing further to it)."""
     resp = connected_roboflow.post(
         "/api/v1/integrations/roboflow",
         json={"api_key": "good-key", "default_labeler_email": "reviewer@example.com"},
@@ -1221,7 +1224,7 @@ def test_roboflow_export_annotating_creates_review_job_when_labeler_email_set(
     assert resp.status_code == 202, resp.text
     body = resp.json()
     assert body["status"] == "COMPLETED"
-    assert body["error"] is None
+    assert body["error"] == "1 new image uploaded."
 
     assert captured == [
         {
@@ -1261,8 +1264,9 @@ def test_roboflow_export_dataset_target_never_creates_annotation_job(
         json={"workspace": "my-workspace", "project": "cones", "upload_target": "DATASET"},
     )
     assert resp.status_code == 202, resp.text
-    assert resp.json()["status"] == "COMPLETED"
-    assert resp.json()["error"] is None
+    body = resp.json()
+    assert body["status"] == "COMPLETED"
+    assert body["error"] == "1 new image uploaded."
     assert created == []
 
 
@@ -1376,7 +1380,7 @@ def test_upload_one_image_retries_transient_5xx_then_succeeds(monkeypatch) -> No
             if calls["n"] < 3:
                 raise _upload_error(500)
 
-    mod._upload_one_image(_Proj(), image_path="a.jpg")
+    mod._upload_one_image(_Proj(), has_annotation=False, image_path="a.jpg")
 
     assert calls["n"] == 3
     assert slept == [1.0, 2.0]  # backoff between attempts 1->2 and 2->3
@@ -1394,7 +1398,7 @@ def test_upload_one_image_gives_up_after_max_attempts(monkeypatch) -> None:
             raise _upload_error(503)
 
     with pytest.raises(ImageUploadError):
-        mod._upload_one_image(_Proj(), image_path="a.jpg")
+        mod._upload_one_image(_Proj(), has_annotation=False, image_path="a.jpg")
 
 
 def test_upload_one_image_does_not_retry_4xx(monkeypatch) -> None:
@@ -1412,7 +1416,7 @@ def test_upload_one_image_does_not_retry_4xx(monkeypatch) -> None:
             raise _upload_error(400)
 
     with pytest.raises(ImageUploadError):
-        mod._upload_one_image(_Proj(), image_path="a.jpg")
+        mod._upload_one_image(_Proj(), has_annotation=False, image_path="a.jpg")
     assert calls["n"] == 1
 
 
@@ -1435,7 +1439,7 @@ def test_upload_one_image_retries_bare_connection_error(monkeypatch) -> None:
             if calls["n"] < 3:
                 raise mod.requests.ConnectionError("connection reset")
 
-    mod._upload_one_image(_Proj(), image_path="a.jpg")
+    mod._upload_one_image(_Proj(), has_annotation=False, image_path="a.jpg")
 
     assert calls["n"] == 3
     assert slept == [1.0, 2.0]
@@ -1621,13 +1625,15 @@ def test_push_version_progress_counts_successes_not_attempts(real_db_session, mo
     monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {}))
 
     seen: list[tuple[int, int, int]] = []
-    uploaded, failed, _, _ = mod.push_version_to_roboflow(
+    result = mod.push_version_to_roboflow(
         real_db_session,
         version_id=_uuid.uuid4(),
         workspace="ws",
         project_slug="proj",
         progress_cb=lambda cur, total, fail: seen.append((cur, total, fail)),
     )
+    uploaded = result.new_images + result.annotations_updated + result.unchanged
+    failed = result.failed
 
     assert (uploaded, failed) == (3, 3)
     assert seen[0] == (0, 6, 0)  # primed once the count is known
@@ -1681,9 +1687,11 @@ def test_push_version_uploads_run_concurrently(real_db_session, monkeypatch) -> 
 
     monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {}))
 
-    uploaded, failed, _, _ = mod.push_version_to_roboflow(
+    result = mod.push_version_to_roboflow(
         real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
     )
+    uploaded = result.new_images + result.annotations_updated + result.unchanged
+    failed = result.failed
 
     assert (uploaded, failed) == (8, 0)
     assert active["peak"] > 1
@@ -1747,15 +1755,15 @@ def test_push_version_fail_fast_bounded_overshoot_under_concurrency(real_db_sess
     assert len(attempted) < 20
 
 
-def test_push_version_all_duplicates_skips_batch_lookup_with_clear_note(real_db_session, monkeypatch) -> None:
-    """Roboflow silently no-ops an upload whose file content already exists
-    in the project — it returns `{"duplicate": true}` instead of raising, so
-    the SDK call "succeeds" but no image lands in the newly-named batch.
-    Previously this fell through to `_assign_annotating_review_job`, which
-    then searched for a batch that was never created and told the user
-    their images were "sitting in Unassigned" — misleading, since nothing
-    new was uploaded at all. When every upload comes back as a duplicate,
-    the export must skip the pointless batch lookup and say so plainly."""
+def test_push_version_all_duplicates_updates_annotations_not_skipped(real_db_session, monkeypatch) -> None:
+    """Roboflow reports every upload as a duplicate (byte-identical image
+    already in the project — this app's own normal
+    import-then-annotate-then-push workflow). That must NOT read as
+    nothing happened: each duplicate's annotation is still written (via
+    the SDK's own image-id-from-duplicate-response + save_annotation, now
+    with overwrite=True so it isn't silently rejected), counted as
+    `annotations_updated`, and the note says so plainly — no batch lookup,
+    since nothing new landed to file a review job for."""
     import uuid as _uuid
 
     from app.services.integrations import roboflow_export as mod
@@ -1766,15 +1774,18 @@ def test_push_version_all_duplicates_skips_batch_lookup_with_clear_note(real_db_
             (root / "labels" / split).mkdir(parents=True)
         for i in range(3):
             (root / "images" / "train" / f"img{i}.jpg").write_bytes(_jpeg_bytes())
+            (root / "labels" / "train" / f"img{i}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
         (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
         return root / "data.yaml"
 
     monkeypatch.setattr(mod, "write_yolo_dataset", _fake_write_yolo_dataset)
 
     get_batches_calls = []
+    upload_calls = []
 
     class _Proj:
         def upload(self, **kwargs):
+            upload_calls.append(kwargs)
             return [{"image": {"id": "existing-image-id", "success": False, "duplicate": True}}]
 
         def get_batches(self):
@@ -1791,23 +1802,27 @@ def test_push_version_all_duplicates_skips_batch_lookup_with_clear_note(real_db_
 
     monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com"}))
 
-    uploaded, failed, failures, note = mod.push_version_to_roboflow(
+    result = mod.push_version_to_roboflow(
         real_db_session, version_id=_uuid.uuid4(), workspace="ws", project_slug="proj"
     )
 
-    assert (uploaded, failed) == (3, 0)
+    assert (result.new_images, result.annotations_updated, result.unchanged, result.failed) == (0, 3, 0, 0)
     assert not get_batches_calls  # never searched for a batch that was never created
-    assert note is not None
-    assert "duplicate" in note.lower()
-    assert "couldn't find batch" not in note.lower()
+    assert result.note is not None
+    assert "3 existing image" in result.note
+    assert "updated" in result.note
+    assert "couldn't find batch" not in result.note.lower()
+    # the actual bug this whole plan exists to fix: overwrite must be requested
+    assert all(kwargs.get("annotation_overwrite") is True for kwargs in upload_calls)
 
 
-def test_push_version_mixed_new_and_duplicate_uploads_still_files_review_job(
+def test_push_version_mixed_new_and_duplicate_still_files_review_job_and_reports_both(
     real_db_session, monkeypatch
 ) -> None:
     """At least one genuinely new upload means the batch really was created
-    on Roboflow — the review job must still be filed for it normally, not
-    short-circuited into the all-duplicate note."""
+    on Roboflow — the review job must still be filed for it normally, and
+    the note must mention both the new upload and the updated duplicate,
+    not stay silent just because the review job itself succeeded."""
     import uuid as _uuid
 
     from app.services.integrations import roboflow_export as mod
@@ -1818,6 +1833,7 @@ def test_push_version_mixed_new_and_duplicate_uploads_still_files_review_job(
             (root / "labels" / split).mkdir(parents=True)
         for i in range(2):
             (root / "images" / "train" / f"img{i}.jpg").write_bytes(_jpeg_bytes())
+            (root / "labels" / "train" / f"img{i}.txt").write_text("0 0.5 0.5 0.2 0.2\n", encoding="utf-8")
         (root / "data.yaml").write_text("names: ['cone']\n", encoding="utf-8")
         return root / "data.yaml"
 
@@ -1848,7 +1864,7 @@ def test_push_version_mixed_new_and_duplicate_uploads_still_files_review_job(
 
     monkeypatch.setattr(mod, "get_client", lambda db: (_RF(), {"default_labeler_email": "a@b.com"}))
 
-    uploaded, failed, failures, note = mod.push_version_to_roboflow(
+    result = mod.push_version_to_roboflow(
         real_db_session,
         version_id=_uuid.uuid4(),
         workspace="ws",
@@ -1856,8 +1872,10 @@ def test_push_version_mixed_new_and_duplicate_uploads_still_files_review_job(
         custom_batch_name="autolabelflow",
     )
 
-    assert (uploaded, failed) == (2, 0)
-    assert note is None  # review job filed cleanly — nothing to surface
+    assert (result.new_images, result.annotations_updated, result.failed) == (1, 1, 0)
+    assert result.note is not None
+    assert "1 new image" in result.note
+    assert "1 existing image" in result.note
 
 
 def test_roboflow_export_all_uploads_fail_marks_job_failed(

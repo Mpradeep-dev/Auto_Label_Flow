@@ -19,8 +19,9 @@ import tempfile
 import time
 import uuid
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from enum import Enum
 from pathlib import Path
-from typing import Callable
+from typing import Callable, NamedTuple
 
 import requests
 from sqlalchemy.orm import Session
@@ -32,6 +33,36 @@ from app.services.dataset.export_yolo import ExportError, write_yolo_dataset
 from app.services.integrations.roboflow_connect import get_client
 
 logger = logging.getLogger(__name__)
+
+
+class _PushOutcome(Enum):
+    """What happened to one pushed image. `ANNOTATION_UPDATED` covers both
+    a Roboflow-detected duplicate whose annotation got written via the
+    fallback `Project.upload()` path, and (Task 5) an image routed
+    directly through `Project.save_annotation()` because we already knew
+    its Roboflow id. `UNCHANGED` is a duplicate (or known-id image) with no
+    local annotation to push at all — nothing to do, not a failure."""
+
+    NEW_IMAGE = "new_image_uploaded"
+    ANNOTATION_UPDATED = "annotation_updated"
+    UNCHANGED = "unchanged"
+
+
+class PushResult(NamedTuple):
+    """Return value of `push_version_to_roboflow`. Replaces the old
+    `(uploaded, failed, failures, note)` 4-tuple's `uploaded` (which
+    conflated genuinely new images with Roboflow-detected duplicates) —
+    "duplicate" is expected, not a failure, for this app's own
+    import-then-annotate-then-push workflow, so it must never read as
+    "nothing happened" when annotations still landed."""
+
+    new_images: int
+    annotations_updated: int
+    unchanged: int
+    failed: int
+    failures: list[str]
+    note: str | None
+
 
 # Roboflow's own convention names the validation split "valid"; our export
 # (and YOLO's) calls it "val" — map at the upload boundary only, everything
@@ -138,6 +169,41 @@ def _fail_fast_message(statuses: list[int | None], failures: list[str]) -> str:
     )
 
 
+def _plural(n: int, noun: str) -> str:
+    return f"{n} {noun}" if n == 1 else f"{n} {noun}s"
+
+
+def _build_export_note(
+    *, new_images: int, annotations_updated: int, unchanged: int, review_job_note: str | None
+) -> str | None:
+    """Human-readable summary surfaced as `job.error` (an informational
+    note, never a failure — see `run_roboflow_export`'s comment on that
+    field). Always non-`None` once at least one image succeeded, so the UI
+    shows what actually happened instead of staying silent on a fully
+    "clean" push — replaces the old behavior where a successful push with
+    no review-job problems reported nothing at all. `review_job_note` is
+    whatever `_assign_annotating_review_job` returned for the new-image
+    batch (its own failure note, or `None`)."""
+    succeeded = new_images + annotations_updated + unchanged
+    if succeeded == 0:
+        return review_job_note
+
+    parts = []
+    if new_images:
+        parts.append(f"{_plural(new_images, 'new image')} uploaded")
+    if annotations_updated:
+        parts.append(f"{_plural(annotations_updated, 'existing image')} updated")
+    if unchanged:
+        parts.append(f"{_plural(unchanged, 'existing image')} unchanged (no local annotation to push)")
+    summary = ", ".join(parts) + "."
+
+    if new_images == 0:
+        summary += " No new batch or review job was created — nothing new landed on Roboflow."
+    elif review_job_note:
+        summary += f" {review_job_note}"
+    return summary
+
+
 def _assign_annotating_review_job(project, *, batch_name: str, labeler_email: str | None) -> str | None:
     """Uploading with `is_prediction=True` only gets a pushed image as far
     as Roboflow's "Unassigned" column — moving it into "Annotating" is a
@@ -206,20 +272,28 @@ def _is_duplicate_upload(result) -> bool:
     return bool(image.get("duplicate"))
 
 
-def _upload_one_image(project, **upload_kwargs) -> bool:
+def _upload_one_image(project, *, has_annotation: bool, **upload_kwargs) -> _PushOutcome:
     """`project.upload(**upload_kwargs)` with a bounded retry on a transient
     5xx/429 (classified via `status_code`) or a bare connection/timeout
     error (no `status_code` at all — `getattr(exc, "status_code", None)`
     used to fall through to `None`, which isn't in `_UPLOAD_RETRY_STATUSES`,
     so a plain network blip was never retried and immediately failed the
     image). Re-raises the last error once attempts are exhausted, and
-    immediately for any non-transient HTTP status. Returns whether Roboflow
-    reported this image as a pre-existing duplicate rather than a new
-    upload — see `_is_duplicate_upload`."""
+    immediately for any non-transient HTTP status.
+
+    Returns `NEW_IMAGE` for a genuinely new upload, `ANNOTATION_UPDATED`
+    when Roboflow reports a pre-existing duplicate AND there was a local
+    annotation to push (the SDK's own `single_upload` already resolves the
+    duplicate's image id and calls `save_annotation` for it — see
+    `_upload_kwargs`'s `annotation_overwrite=True`, without which that
+    write silently no-ops on Roboflow's 409), or `UNCHANGED` for a
+    duplicate with nothing local to push at all."""
     for attempt in range(1, _UPLOAD_MAX_ATTEMPTS + 1):
         try:
             result = project.upload(**upload_kwargs)
-            return _is_duplicate_upload(result)
+            if _is_duplicate_upload(result):
+                return _PushOutcome.ANNOTATION_UPDATED if has_annotation else _PushOutcome.UNCHANGED
+            return _PushOutcome.NEW_IMAGE
         except Exception as exc:  # noqa: BLE001 - re-raised below, classified by status
             status = getattr(exc, "status_code", None)
             transient = status in _UPLOAD_RETRY_STATUSES or (
@@ -247,8 +321,9 @@ def push_version_to_roboflow(
     upload_target: str = RoboflowUploadTarget.ANNOTATING.value,
     progress_cb: Callable[[int, int, int], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
-) -> tuple[int, int, list[str], str | None]:
-    """Returns (uploaded_count, failed_count, failure_messages, annotation_job_note).
+) -> PushResult:
+    """Returns a `PushResult` — new-image / annotation-updated / unchanged /
+    failed counts, the failure messages, and a human-readable summary note.
 
     `upload_target` picks which column of Roboflow's Annotate board a
     pushed image with a local annotation lands in — `UNANNOTATED` strips
@@ -262,13 +337,13 @@ def push_version_to_roboflow(
     pushed batch into Roboflow's "Annotating" column via a second API call
     once uploads finish — see `_assign_annotating_review_job` — which needs
     a default labeler email configured (Settings -> Roboflow); its failure
-    (or that email being unset) is reported back as `annotation_job_note`
+    (or that email being unset) is folded into the returned `PushResult.note`
     but never fails the export, since the images themselves already
     uploaded fine.
 
-    `progress_cb(uploaded, total, failed)`, if given, is called once with
-    `uploaded=0` as soon as the image count is known (materialization
-    finished), then once per image after its upload attempt. `uploaded`
+    `progress_cb(succeeded, total, failed)`, if given, is called once with
+    `succeeded=0` as soon as the image count is known (materialization
+    finished), then once per image after its upload attempt. `succeeded`
     counts only images that actually reached Roboflow — a run where every
     image fails never advances it, so the UI shows "0 uploaded, N failed"
     rather than a bar creeping forward on work that didn't land.
@@ -276,7 +351,7 @@ def push_version_to_roboflow(
     whatever's already uploaded to Roboflow stays uploaded, same as a
     cancel partway through any other batch job here."""
     if should_cancel is not None and should_cancel():
-        return 0, 0, [], None
+        return PushResult(0, 0, 0, 0, [], None)
 
     rf, config = get_client(db)
     project = rf.workspace(workspace).project(project_slug)
@@ -361,11 +436,21 @@ def push_version_to_roboflow(
                 # into the ground-truth behavior explicitly, when the
                 # caller wants to skip that review step.
                 is_prediction=upload_target != RoboflowUploadTarget.DATASET.value,
+                # Without this, Roboflow's 409 "already annotated" response
+                # to a duplicate image's annotation write is a silent
+                # no-op (see `_upload_one_image`'s docstring) — every
+                # re-push of an already-imported, already-annotated image
+                # would otherwise never actually update anything on
+                # Roboflow. Harmless for a genuinely new image (nothing
+                # to overwrite yet).
+                annotation_overwrite=True,
             )
 
-        uploaded = 0
+        new_images = 0
+        annotations_updated = 0
+        unchanged = 0
+        succeeded = 0
         failed = 0
-        duplicates = 0
         failures: list[str] = []
         seen_statuses: list[int | None] = []
         fail_fast_error: RoboflowExportError | None = None
@@ -392,7 +477,10 @@ def push_version_to_roboflow(
                         split, image_path = next(pending_iter)
                     except StopIteration:
                         return
-                    future = pool.submit(_upload_one_image, project, **_upload_kwargs(split, image_path))
+                    kwargs = _upload_kwargs(split, image_path)
+                    future = pool.submit(
+                        _upload_one_image, project, has_annotation=kwargs["annotation_path"] is not None, **kwargs
+                    )
                     in_flight[future] = image_path
 
             _top_up()
@@ -401,10 +489,14 @@ def push_version_to_roboflow(
                 for future in done:
                     image_path = in_flight.pop(future)
                     try:
-                        is_duplicate = future.result()
-                        uploaded += 1
-                        if is_duplicate:
-                            duplicates += 1
+                        outcome = future.result()
+                        succeeded += 1
+                        if outcome is _PushOutcome.NEW_IMAGE:
+                            new_images += 1
+                        elif outcome is _PushOutcome.ANNOTATION_UPDATED:
+                            annotations_updated += 1
+                        else:
+                            unchanged += 1
                     except Exception as exc:  # a single bad image shouldn't abort the whole push
                         failed += 1
                         seen_statuses.append(getattr(exc, "status_code", None))
@@ -420,12 +512,12 @@ def push_version_to_roboflow(
                     # row understating how many images were actually
                     # attempted.
                     if progress_cb is not None:
-                        progress_cb(uploaded, total, failed)
+                        progress_cb(succeeded, total, failed)
                     # Systemic failure: nothing has landed and the first N
                     # images all failed. Retrying the rest for hours won't
                     # help — stop with a message that names the likely cause
                     # (`run_roboflow_export` puts it on the job row).
-                    if fail_fast_error is None and uploaded == 0 and failed >= _FAIL_FAST_AFTER:
+                    if fail_fast_error is None and succeeded == 0 and failed >= _FAIL_FAST_AFTER:
                         fail_fast_error = RoboflowExportError(_fail_fast_message(seen_statuses, failures))
                 if fail_fast_error is not None or _cancelled():
                     for future in in_flight:
@@ -437,27 +529,30 @@ def push_version_to_roboflow(
             raise fail_fast_error
 
     logger.info(
-        "Roboflow export finished: %d uploaded, %d failed (batch=%r)", uploaded, failed, batch_name
+        "Roboflow export finished: %d new, %d annotations updated, %d unchanged, %d failed (batch=%r)",
+        new_images,
+        annotations_updated,
+        unchanged,
+        failed,
+        batch_name,
     )
 
-    annotation_job_note: str | None = None
-    new_uploads = uploaded - duplicates
-    if uploaded > 0 and new_uploads == 0:
-        # Every "successful" upload was actually Roboflow reporting the
-        # image's content already exists in this project — no batch was
-        # ever created under `batch_name` for this push, so searching for
-        # one (`_assign_annotating_review_job`) would only produce the
-        # misleading "couldn't find batch ... sitting in Unassigned"
-        # message when in fact nothing new landed anywhere.
-        annotation_job_note = (
-            f"All {duplicates} image(s) were skipped as duplicates already present in this "
-            "Roboflow project (Roboflow doesn't re-add an image whose file content exactly "
-            "matches one already there) — no new images were added, so no batch or review job "
-            "was created."
-        )
-    elif upload_target == RoboflowUploadTarget.ANNOTATING.value and uploaded > 0:
-        annotation_job_note = _assign_annotating_review_job(
+    review_job_note: str | None = None
+    if upload_target == RoboflowUploadTarget.ANNOTATING.value and new_images > 0:
+        # Only ever called when something new actually needs moving out of
+        # Unassigned — a duplicate/known-id annotation update never joins
+        # the batch this looks up, so there'd be nothing to find/move for
+        # an all-existing-images push (see `_build_export_note` for how
+        # that case is reported instead).
+        review_job_note = _assign_annotating_review_job(
             project, batch_name=batch_name, labeler_email=config.get("default_labeler_email")
         )
 
-    return uploaded, failed, failures, annotation_job_note
+    note = _build_export_note(
+        new_images=new_images,
+        annotations_updated=annotations_updated,
+        unchanged=unchanged,
+        review_job_note=review_job_note,
+    )
+
+    return PushResult(new_images, annotations_updated, unchanged, failed, failures, note)
