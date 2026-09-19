@@ -2853,6 +2853,32 @@ def test_move_to_annotating_reports_images_not_found_in_any_batch(monkeypatch) -
     assert "1" in note and "could not be located" in note
 
 
+def test_move_to_annotating_reports_batch_lookup_failure_non_fatally(monkeypatch) -> None:
+    """If discovering which batch the updated images belong to blows up
+    (Roboflow unreachable, API error, etc.) the export must not crash —
+    the annotations already landed either way. `_discover_batch_membership`
+    calls `project.get_batches()` first, so raising there is the simplest
+    way to force that failure without needing to fake `rf_search_page`
+    too."""
+    from app.services.integrations import roboflow_export as mod
+
+    class _Proj:
+        def get_batches(self):
+            raise RuntimeError("Roboflow unreachable")
+
+    note = mod._move_to_annotating(
+        _Proj(),
+        "fake-key",
+        batch_name="my-batch",
+        labeler_email="a@b.com",
+        new_images_uploaded=False,
+        updated_roboflow_ids=["img-1"],
+    )
+
+    assert note is not None
+    assert "Roboflow unreachable" in note
+
+
 def test_move_to_annotating_no_work_returns_none(monkeypatch) -> None:
     """Neither new images nor updated ones — nothing to do, no API calls,
     no note."""
