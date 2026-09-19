@@ -354,6 +354,46 @@ def test_roboflow_import_job_raw_pull_when_no_version(
     assert any(c["name"] == "cone" for c in project["class_config"])
 
 
+def test_roboflow_raw_pull_import_persists_roboflow_image_id(
+    connected_roboflow: TestClient, monkeypatch, unique_name: str
+) -> None:
+    """The raw-pull path already fetches each item's Roboflow id
+    (`_rf_image_details(..., item["id"])`) — it must now also store it, so
+    export can route these images through `save_annotation()` directly
+    instead of re-uploading them (Task 5)."""
+    import app.services.integrations.roboflow_import as roboflow_import_module
+
+    monkeypatch.setattr(roboflow_import_module.requests, "get", _fake_get)
+    monkeypatch.setattr(roboflow_import_module.requests, "post", _fake_search_post)
+
+    project_id = connected_roboflow.post("/api/v1/projects", json={"name": unique_name}).json()["id"]
+
+    resp = connected_roboflow.post(
+        f"/api/v1/projects/{project_id}/import/roboflow",
+        json={"workspace": "my-workspace", "project": "ground"},
+    )
+    assert resp.status_code == 202, resp.text
+    job = resp.json()
+    assert job["status"] == "COMPLETED"
+
+    dataset_id = job["result_dataset_id"]
+    images = connected_roboflow.get(f"/api/v1/datasets/{dataset_id}/images").json()["items"]
+    assert len(images) == 2
+
+    from app.db.session import SessionLocal
+    from app.models.image import Image
+
+    db = SessionLocal()
+    try:
+        rows = db.query(Image).filter(Image.dataset_id == dataset_id).all()
+        ids = {r.roboflow_image_id for r in rows}
+        assert ids == {"raw-img-1", "raw-img-2"}
+        assert all(r.roboflow_workspace == "my-workspace" for r in rows)
+        assert all(r.roboflow_project_slug == "ground" for r in rows)
+    finally:
+        db.close()
+
+
 def test_roboflow_import_job_raw_pull_unannotated_only(
     connected_roboflow: TestClient, monkeypatch, unique_name: str
 ) -> None:

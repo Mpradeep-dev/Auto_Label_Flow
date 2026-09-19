@@ -675,6 +675,7 @@ def import_roboflow_raw_project(
             "width": width,
             "height": height,
             "annotation": details.get("annotation") or {},
+            "roboflow_image_id": item["id"],
         }
 
     processed = 0
@@ -693,6 +694,9 @@ def import_roboflow_raw_project(
                 width=result["width"],
                 height=result["height"],
                 source_type=ImageSourceType.UPLOAD,
+                roboflow_image_id=result["roboflow_image_id"],
+                roboflow_workspace=workspace,
+                roboflow_project_slug=project_slug,
             )
             db.add(image)
             db.flush()
