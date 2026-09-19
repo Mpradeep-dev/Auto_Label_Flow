@@ -35,7 +35,11 @@ logger = logging.getLogger(__name__)
 #   5: roboflow_jobs.batch_name (export: user-chosen upload batch label)
 #   6: roboflow_jobs.upload_target (export: which Annotate-board column to
 #      push into — unannotated/annotating/dataset)
-SCHEMA_VERSION = 6
+#   7: images.roboflow_image_id/roboflow_workspace/roboflow_project_slug
+#      (export: track the pushed Roboflow image identity) and
+#      roboflow_jobs.new_images_count/annotations_updated_count (export:
+#      per-outcome push counters)
+SCHEMA_VERSION = 7
 
 
 def init_sqlite_schema(engine: Engine) -> None:
@@ -86,6 +90,17 @@ def _upgrade(conn, from_version: int) -> None:  # noqa: ANN001
     if from_version < 6:
         _add_column_if_missing(
             conn, "roboflow_jobs", "upload_target", "VARCHAR(20) NOT NULL DEFAULT 'ANNOTATING'"
+        )
+
+    if from_version < 7:
+        _add_column_if_missing(conn, "images", "roboflow_image_id", "VARCHAR(200)")
+        _add_column_if_missing(conn, "images", "roboflow_workspace", "VARCHAR(200)")
+        _add_column_if_missing(conn, "images", "roboflow_project_slug", "VARCHAR(200)")
+        _add_column_if_missing(
+            conn, "roboflow_jobs", "new_images_count", "INTEGER NOT NULL DEFAULT 0"
+        )
+        _add_column_if_missing(
+            conn, "roboflow_jobs", "annotations_updated_count", "INTEGER NOT NULL DEFAULT 0"
         )
 
 

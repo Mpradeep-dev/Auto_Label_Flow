@@ -121,7 +121,15 @@ export function RoboflowJobProgress({
           expired Roboflow plan).
         </p>
       )}
-      {progress.error && <p className="mt-1 text-xs text-accent-ink">{progress.error}</p>}
+      {progress.error && (
+        <p
+          className={`mt-1 text-xs ${
+            progress.status === "FAILED" || failed > 0 ? "text-accent-ink" : "text-ink/60"
+          }`}
+        >
+          {progress.error}
+        </p>
+      )}
     </div>
   );
 }

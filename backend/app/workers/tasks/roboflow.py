@@ -138,7 +138,7 @@ def run_roboflow_export(self, job_id: str) -> None:
 
     writer = ThrottledProgressWriter(job_id, total=0)
     try:
-        uploaded, failed, failures, annotation_job_note = push_version_to_roboflow(
+        result = push_version_to_roboflow(
             db,
             version_id=job.dataset_version_id,
             workspace=job.workspace,
@@ -148,37 +148,39 @@ def run_roboflow_export(self, job_id: str) -> None:
             progress_cb=_make_progress_cb(job, db, writer),
             should_cancel=lambda: is_cancel_requested(job_id),
         )
-        job.uploaded_count = uploaded
-        job.failed_count = failed
-        job.failures = failures
+        job.new_images_count = result.new_images
+        job.annotations_updated_count = result.annotations_updated
+        job.uploaded_count = result.new_images + result.annotations_updated + result.unchanged
+        job.failed_count = result.failed
+        job.failures = result.failures
         if is_cancel_requested(job_id):
             job.status = RoboflowJobStatus.CANCELLED
             db.commit()
             writer.finish(status="CANCELLED")
-        elif uploaded == 0 and failed > 0:
+        elif job.uploaded_count == 0 and result.failed > 0:
             # Every image failed, but the version was smaller than the
             # service's fail-fast threshold so it returned instead of
             # raising. Still a failed export, not a COMPLETED one that
             # silently pushed nothing.
             job.status = RoboflowJobStatus.FAILED
             job.error = (
-                f"All {failed} image(s) failed to upload to Roboflow — nothing was pushed. "
-                f"First error: {failures[0]}"
-                if failures
-                else f"All {failed} image(s) failed to upload to Roboflow — nothing was pushed."
+                f"All {result.failed} image(s) failed to upload to Roboflow — nothing was pushed. "
+                f"First error: {result.failures[0]}"
+                if result.failures
+                else f"All {result.failed} image(s) failed to upload to Roboflow — nothing was pushed."
             )[:_MAX_ERROR_LEN]
             db.commit()
             writer.finish(status="FAILED", error=job.error)
         else:
             job.status = RoboflowJobStatus.COMPLETED
-            # Informational only (e.g. "uploaded fine, but couldn't
-            # auto-create the Annotating review job") — never flips status
-            # away from COMPLETED, the images themselves are already on
-            # Roboflow either way.
-            if annotation_job_note:
-                job.error = annotation_job_note[:_MAX_ERROR_LEN]
+            # Informational only (e.g. "3 new images uploaded, 7 existing
+            # images updated" or "couldn't auto-create the Annotating
+            # review job") — never flips status away from COMPLETED, the
+            # images themselves are already on Roboflow either way.
+            if result.note:
+                job.error = result.note[:_MAX_ERROR_LEN]
             db.commit()
-            writer.finish(error=annotation_job_note)
+            writer.finish(error=result.note)
     except RoboflowExportError as exc:
         # Expected terminal failure (quota / plan / key / Roboflow down) —
         # the message is already written for the user. Record it and stop;
